@@ -1,0 +1,37 @@
+# 基础依赖
+# requests>=2.28.0
+pandas>=1.5.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# 网络爬虫相关
+urllib3>=1.26.0
+feedparser>=6.0.11
+
+# 数据处理
+# numpy>=1.21.0
+
+# 环境变量管理
+python-dotenv>=0.19.0
+
+# 日志和调试
+colorama>=0.4.5
+
+langchain
+pandas
+openpyxl  # 为了支持风险因子的.xlsx文件
+lightrag-hku[api]
+
+networkx==3.3
+numpy==1.26.4
+requests==2.32.3
+igraph
+leidenalg
+scipy
+
+
+# 可选：如果需要使用代理
+# requests[socks]>=2.28.0
+
+fastapi
+uvicorn
