@@ -38,8 +38,8 @@
       <div>
         <span>算法：</span>
         <select v-model="trainParams.algo_type">
-          <option value="naive_bayes">朴素贝叶斯</option>
-          <option value="bayesian_network">贝叶斯网络</option>
+          <option value="naive_bayes">PMWNB</option>
+          <option value="bayesian_network">PMWNB+</option>
         </select>
 
         <span>离散方式：</span>
@@ -48,9 +48,15 @@
           <option value="equal_freq">等频离散</option>
         </select>
 
-        <button @click="handleTrain">一键训练</button>
+        <button @click="handleTrain" :disabled="training">
+          <span v-if="training" class="btn-spinner"></span>
+          {{ training ? '训练中...' : '一键训练' }}
+        </button>
       </div>
       <!-- 训练出来的准确率结果，新增召回率展示 -->
+      <div v-if="training" class="result" style="text-align:center;">
+        <p>⏳ 模型训练中，请耐心等待...</p>
+      </div>
       <div v-if="trainResult" class="result">
         <h4>训练完成指标</h4>
         <p>准确率：{{ trainResult.accuracy }}</p>
@@ -132,6 +138,7 @@ watch(
 );
 
 const trainFinished = ref(false);
+const training = ref(false);
 const thresholdHigh = ref(0.75);
 const thresholdMid = ref(0.45);
 const thresholdLow = ref(0.2);
@@ -159,11 +166,13 @@ const handleDatasetChange = () => {
 };
 
 const handleTrain = async () => {
+  if (!selectDataset.value) {
+    ElMessage.warning('请先选择数据集！');
+    return;
+  }
+  training.value = true;
+  trainResult.value = null;
   try {
-    if (!selectDataset.value) {
-      ElMessage.warning('请先选择数据集！');
-      return;
-    }
     const res = await trainModel(trainParams.value);
     if (!res?.data) {
       ElMessage.warning('训练接口返回数据为空，请重试');
@@ -180,6 +189,8 @@ const handleTrain = async () => {
       err.response?.data?.detail ? JSON.stringify(err.response.data.detail) : '训练请求失败：' + err.message
     );
     console.error('完整训练报错信息：', err);
+  } finally {
+    training.value = false;
   }
 };
 
@@ -324,5 +335,24 @@ button {
 }
 .record-btns button:last-child {
   background: #e64340;
+}
+/* 训练加载动画 */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 </style>

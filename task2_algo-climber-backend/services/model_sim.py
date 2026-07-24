@@ -1,64 +1,138 @@
-import time
+"""
+services/model_sim.py — PMWNB 贝叶斯模型服务（对接 Java PMWNB HTTP 服务）
+
+Java PMWNB 服务默认运行在 http://127.0.0.1:12313
+数据集路径映射到 data/ 目录下的 CSV 文件
+"""
 import os
+import requests
 
-# 数据集根路径
-DATA_ROOT = "./data"
+# Java PMWNB 服务地址
+PMWNB_SERVICE_URL = os.getenv("PMWNB_SERVICE_URL", "http://127.0.0.1:12313")
 
-# 1. 获取全部数据集列表接口逻辑
+# 数据集根路径（相对于后端项目根目录）
+BASE_ROOT = os.path.dirname(os.path.dirname(__file__))
+DATA_ROOT = os.path.join(BASE_ROOT, "data")
+
+# 数据集路径映射（与 pmwnb_demo.py 中的 DATASET_PATH_MAP 一致）
+DATASET_PATH_MAP = {
+    "net_attack_2024": os.path.join(DATA_ROOT, "nf_unsw", "sample_demo.csv"),
+    "power_outage":    os.path.join(DATA_ROOT, "power_data", "sample_demo.csv"),
+    "carrier_deck":    os.path.join(DATA_ROOT, "carrier_sim", "sample_demo.csv"),
+}
+
+# 模型保存目录
+TRAINED_MODEL_DIR = os.path.join(BASE_ROOT, "trained_models")
+os.makedirs(TRAINED_MODEL_DIR, exist_ok=True)
+
+# ===================== 接口函数（供 server.py 调用） =====================
+
 def get_dataset_list():
-    dataset_dirs = os.listdir(DATA_ROOT)
-    res = []
-    for d in dataset_dirs:
-        path = os.path.join(DATA_ROOT, d)
-        if os.path.isdir(path):
-            desc_map = {
-                "nf_unsw": "网络安全NF-UNSW入侵流量数据集",
-                "power_data": "电力系统设备故障数据集",
-                "carrier_sim": "航母舰面作业碰撞仿真数据集"
-            }
-            res.append({
-                "dataset_name": d,
-                "path": path,
-                "description": desc_map.get(d, "自定义数据集")
-            })
-    return res
-
-# 2. 模拟贝叶斯模型训练
-def train_bayes_sim(dataset_name: str, algo_type: str, discrete_method: str):
-    time.sleep(2)
-    mock_metrics = {
-        "recall_minority": 0.93,
-        "g_mean": 0.91,
-        "f1": 0.92,
-        "accuracy": 0.95
-    }
-    return {
-        "status": "训练完成",
-        "dataset": dataset_name,
-        "algorithm": algo_type,
-        "discrete_method": discrete_method,
-        "train_cost_time": "2.0s",
-        "evaluation_metrics": mock_metrics
-    }
-
-# 3. 模拟贝叶斯单条数据风险推理
-def infer_bayes_sim(input_data: dict):
-    feature_weight_list = [
-        {"feature": "流量长度", "weight": 0.38},
-        {"feature": "连接时长", "weight": 0.32},
-        {"feature": "访问频次", "weight": 0.18},
-        {"feature": "目标端口", "weight": 0.12}
+    """1. 获取全部数据集列表"""
+    return [
+        {"dataset_name": "net_attack_2024", "description": "网络入侵流量数据集"},
+        {"dataset_name": "power_outage",    "description": "电力停电风险数据集"},
+        {"dataset_name": "carrier_deck",    "description": "航母舰面调度数据集"},
     ]
-    reason_text = """
-1. 使用MDLP有监督离散化处理原始监测特征，构建基础概率视图；
-2. 基于随机树与SPODE生成潜在软概率视图，形成加权矩阵；
-3. 通过矩阵加权贝叶斯计算后验风险概率，判定本条数据为高危风险；
-4. 高权重特征是流量长度、连接时长，为本条风险主要诱因。
-    """.strip()
+
+
+def train_bayes_sim(dataset_name: str, algo_type: str, discrete_method: str) -> dict:
+    """
+    2. 调用 Java PMWNB 服务进行模型训练
+    返回格式: {"accuracy": ..., "f1": ..., "recall": ..., "train_time_s": ...}
+    """
+    csv_path = DATASET_PATH_MAP.get(dataset_name)
+    if not csv_path or not os.path.exists(csv_path):
+        raise FileNotFoundError(f"数据集文件不存在: {csv_path}")
+
+    model_save_path = os.path.join(TRAINED_MODEL_DIR, f"pmwnb_{dataset_name}.model")
+
+    try:
+        resp = requests.post(
+            f"{PMWNB_SERVICE_URL}/train",
+            json={
+                "dataset_path": csv_path,
+                "model_save_path": model_save_path,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            f"无法连接到 PMWNB 服务 ({PMWNB_SERVICE_URL})，请先启动 Java 服务：\n"
+            f"  java -jar target/pmwnb-service-1.0.0.jar 12313"
+        )
+
+    if not result.get("success"):
+        raise RuntimeError(f"PMWNB 训练失败: {result.get('error', '未知错误')}")
+
+    metrics = result["metrics"]
     return {
-        "risk_level": "高危",
-        "risk_type": "DoS拒绝服务攻击",
-        "risk_probability": 0.96,
-        "feature_weight": feature_weight_list,
-        "infer_explain": reason_text
+        "accuracy":         metrics["accuracy"],
+        "f1":               metrics["f1"],
+        "recall":           metrics["recall"],
+        "train_time_s":     metrics["train_time_s"],
+        "status":           "训练完成",
+        "dataset":          metrics.get("dataset", dataset_name),
+        "algorithm":        algo_type,
+        "discrete_method":  discrete_method,
+        "num_instances":    metrics.get("num_instances", 0),
+        "evaluation_metrics": {
+            "recall_minority": metrics["recall"],
+            "g_mean":          round((metrics["accuracy"] * metrics["recall"]) ** 0.5, 4),
+            "f1":              metrics["f1"],
+            "accuracy":        metrics["accuracy"],
+        },
     }
+
+
+def infer_bayes_sim(input_data: dict) -> dict:
+    """
+    3. 调用 Java PMWNB 服务进行单条流量风险推理
+    返回格式: {"risk_level": ..., "risk_probability": ..., ...}
+    """
+    flow_length = float(input_data.get("flowLength", 0))
+    duration    = float(input_data.get("duration", 0))
+    access_freq = float(input_data.get("accessFreq", 0))
+
+    try:
+        resp = requests.post(
+            f"{PMWNB_SERVICE_URL}/predict",
+            json={
+                "flowLength": flow_length,
+                "duration":   duration,
+                "accessFreq": access_freq,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            f"无法连接到 PMWNB 服务 ({PMWNB_SERVICE_URL})，请先启动 Java 服务"
+        )
+
+    if not result.get("success"):
+        raise RuntimeError(f"PMWNB 推理失败: {result.get('error', '未知错误')}")
+
+    data = result["data"]
+    return {
+        "risk_level":       data["risk_level"],
+        "risk_type":        data.get("risk_type", "矩阵加权贝叶斯PMWNB推理"),
+        "risk_probability": data["risk_probability"],
+        "feature_weight":   data.get("feature_weight", []),
+        "infer_explain":    data.get("infer_explain", "PMWNB 双视图矩阵加权贝叶斯推理"),
+        "all_probabilities": data.get("all_probabilities", []),
+    }
+
+
+# ===================== 健康检查 =====================
+
+def check_service_health() -> bool:
+    """检查 Java PMWNB 服务是否正常运行"""
+    try:
+        resp = requests.get(f"{PMWNB_SERVICE_URL}/health", timeout=3)
+        return resp.status_code == 200 and resp.json().get("status") == "ok"
+    except Exception:
+        return False
