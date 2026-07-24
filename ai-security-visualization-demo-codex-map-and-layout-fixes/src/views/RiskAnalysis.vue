@@ -38,8 +38,9 @@
       <div>
         <span>算法：</span>
         <select v-model="trainParams.algo_type">
-          <option value="naive_bayes">PMWNB</option>
-          <option value="bayesian_network">PMWNB+</option>
+          <option value="PMWNB">PMWNB（矩阵加权贝叶斯）</option>
+          <option value="naive_bayes">朴素贝叶斯</option>
+          <option value="bayesian_network">贝叶斯网络</option>
         </select>
 
         <span>离散方式：</span>
@@ -98,9 +99,9 @@
       <div class="record-list" v-if="expRecordList.length > 0">
         <div class="record-item" v-for="record in expRecordList" :key="record.id">
           <div class="record-info">
-            <span>训练时间：{{ record.train_time }}</span>
-            <span>数据集：{{ record.dataset_name }}</span>
-            <span>算法：{{ record.algo_type }}</span>
+            <span>训练耗时：{{ record.train_time || record.train_time_s }}s</span>
+            <span>数据集：{{ dsLabel[record.dataset_name] || record.dataset_name }}</span>
+            <span>算法：{{ algoLabel[record.algo_type] || record.algo_type }}</span>
             <span>准确率：{{ record.accuracy }} | F1：{{ record.f1 }} | 召回率：{{ record.recall }}</span>
           </div>
           <div class="record-btns">
@@ -146,7 +147,7 @@ const datasetList = ref([]);
 const selectDataset = ref('');
 const trainParams = ref({
   dataset_name: '',
-  algo_type: 'bayesian_network',
+  algo_type: 'PMWNB',
   discrete_method: 'equal_width',
 });
 const trainResult = ref(null);
@@ -157,6 +158,18 @@ const inputData = ref({
 });
 const inferResult = ref(null);
 const expRecordList = ref([]);
+
+// 中英文名称映射（供历史记录显示）
+const dsLabel = {
+  'net_attack_2024': '网络入侵流量数据集',
+  'power_outage': '电力停电风险数据集',
+  'carrier_deck': '航母舰面调度数据集',
+};
+const algoLabel = {
+  'PMWNB': 'PMWNB矩阵加权贝叶斯',
+  'naive_bayes': '朴素贝叶斯',
+  'bayesian_network': '贝叶斯网络',
+};
 
 // 所有函数全部放在onMount外面
 const handleDatasetChange = () => {
