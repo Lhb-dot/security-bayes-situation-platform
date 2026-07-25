@@ -147,7 +147,6 @@ npm run dev
 #### 方式1：直接安装依赖运行
 ```bash
 pip install -r requirements.txt
-pip install scikit-learn joblib
 ```
 
 #### 方式2：虚拟环境运行
@@ -155,7 +154,6 @@ pip install scikit-learn joblib
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-pip install scikit-learn joblib
 ```
 
 Windows CMD 解决中文乱码：
