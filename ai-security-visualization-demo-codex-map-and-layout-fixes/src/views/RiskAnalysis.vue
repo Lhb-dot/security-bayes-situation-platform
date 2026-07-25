@@ -56,7 +56,7 @@
       </div>
       <!-- 训练出来的准确率结果，新增召回率展示 -->
       <div v-if="training" class="result" style="text-align:center;">
-        <p>⏳ 模型训练中，请耐心等待...</p>
+        <p>⏳ 模型训练中，已训练 {{ trainingElapsed }} 秒...</p>
       </div>
       <div v-if="trainResult" class="result">
         <h4>训练完成指标</h4>
@@ -140,6 +140,8 @@ watch(
 
 const trainFinished = ref(false);
 const training = ref(false);
+const trainingElapsed = ref(0);
+let trainingTimer = null;
 const thresholdHigh = ref(0.75);
 const thresholdMid = ref(0.45);
 const thresholdLow = ref(0.2);
@@ -185,6 +187,8 @@ const handleTrain = async () => {
   }
   training.value = true;
   trainResult.value = null;
+  trainingElapsed.value = 0;
+  trainingTimer = setInterval(() => { trainingElapsed.value += 1; }, 1000);
   try {
     const res = await trainModel(trainParams.value);
     if (!res?.data) {
@@ -203,6 +207,7 @@ const handleTrain = async () => {
     );
     console.error('完整训练报错信息：', err);
   } finally {
+    clearInterval(trainingTimer);
     training.value = false;
   }
 };
