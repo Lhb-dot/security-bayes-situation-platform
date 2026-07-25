@@ -1,8 +1,8 @@
 from models.pmwnb_demo import (
-    get_dataset_list_sim, save_threshold_sim, train_model_sim,
-    risk_infer_sim, get_all_exp, del_exp_by_id
+    save_threshold_sim, get_all_exp, del_exp_by_id
 )
-from services.model_sim import get_dataset_list, train_bayes_sim, infer_bayes_sim
+import models.pmwnb_demo as pmwnb_demo
+from services.model_sim import get_dataset_list, train_bayes_sim, infer_bayes_sim, check_service_health
 import json
 import os
 import re
@@ -56,47 +56,64 @@ async def get_map_json():
         raise HTTPException(status_code=404, detail="地图数据文件缺失")
     return FileResponse(map_file, media_type="application/json")
 
-# 矩阵加权贝叶斯模拟接口
+# ===================== 大创项目：PMWNB 矩阵加权贝叶斯接口 =====================
+
 @app.get("/api/model/dataset-list")
 async def get_ds():
-    return {"code":200, "data": get_dataset_list_sim()}
+    return {"code": 200, "data": get_dataset_list()}
+
 
 @app.post("/api/model/save-threshold")
-async def save_thr(high:float, mid:float, low:float):
+async def save_thr(high: float, mid: float, low: float):
     ok = save_threshold_sim(high, mid, low)
     if not ok:
         raise HTTPException(status_code=400, detail="阈值规则错误，必须满足 高>中>低")
-    return {"code":200, "msg":"全局告警阈值保存成功"}
+    return {"code": 200, "msg": "全局告警阈值保存成功"}
+
 
 @app.post("/api/model/train")
-async def train(dataset_name:str, algo_type:str, discrete_method:str):
+def api_train_bayes_model(dataset_name: str, algo_type: str = "", discrete_method: str = ""):
     global train_global_status
-    train_result = train_model_sim(dataset_name, algo_type, discrete_method)
+    train_result = train_bayes_sim(dataset_name, algo_type, discrete_method)
     train_global_status["is_trained"] = True
     train_global_status["current_dataset"] = dataset_name
-    return {
-        "code": 200,
-        "msg": f"{dataset_name} 模型训练完成",
-        "data": train_result
-    }
+
+    # 写入实验记录（供前端历史记录展示）
+    pmwnb_demo.exp_records.append({
+        "id": pmwnb_demo.record_id,
+        "dataset_name": dataset_name,
+        "algo_type": algo_type or "PMWNB",
+        "discrete_method": discrete_method or "EWD+MDLP",
+        "accuracy": train_result["accuracy"],
+        "f1": train_result["f1"],
+        "recall": train_result["recall"],
+        "train_time_s": train_result["train_time_s"],
+        "train_time": train_result["train_time_s"],
+    })
+    pmwnb_demo.record_id += 1
+
+    return {"code": 200, "msg": f"{dataset_name} PMWNB训练完成", "data": train_result}
+
 
 @app.post("/api/model/infer")
-async def infer(flowLength:float, duration:float, accessFreq:float):
+def api_bayes_infer(flowLength: float, duration: float, accessFreq: float):
     global train_global_status
-    # 后端强制拦截：未训练禁止预测
     if not train_global_status["is_trained"]:
         raise HTTPException(status_code=400, detail="禁止预测：请先选择数据集执行模型训练")
-    risk_data = risk_infer_sim(flowLength, duration, accessFreq)
-    return {"code": 200, "data": risk_data}
+    input_data = {"flowLength": flowLength, "duration": duration, "accessFreq": accessFreq}
+    infer_result = infer_bayes_sim(input_data)
+    return {"code": 200, "msg": "AI研判完成", "data": infer_result}
+
 
 @app.get("/api/model/exp-records")
 async def get_exp():
-    return {"code":200, "data": get_all_exp()}
+    return {"code": 200, "data": get_all_exp()}
+
 
 @app.delete("/api/model/exp/{record_id}")
-async def del_exp(record_id:int):
+async def del_exp(record_id: int):
     del_exp_by_id(record_id)
-    return {"code":200, "msg":"实验记录删除完成"}
+    return {"code": 200, "msg": "实验记录删除完成"}
 # ==================================================================
 
 @app.get("/china-map.json")
@@ -1414,23 +1431,6 @@ async def events_network_page():
 
 
 
-
-# ===================== 大创项目新增接口：数据集管理 =====================
-@app.get("/api/dataset/list")
-def api_get_all_dataset():
-    return {"code": 200, "msg": "获取数据集成功", "data": get_dataset_list()}
-
-# ===================== 大创项目新增接口：贝叶斯模型训练 =====================
-@app.post("/api/model/train")
-def api_train_bayes_model(dataset_name: str, algo_type: str, discrete_method: str):
-    train_result = train_bayes_sim(dataset_name, algo_type, discrete_method)
-    return {"code": 200, "msg": "模拟训练完成", "data": train_result}
-
-# ===================== 大创项目新增接口：贝叶斯实时风险推理 =====================
-@app.post("/api/model/infer")
-def api_bayes_infer(input_data: dict):
-    infer_result = infer_bayes_sim(input_data)
-    return {"code": 200, "msg": "AI研判完成", "data": infer_result}
 
 app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 

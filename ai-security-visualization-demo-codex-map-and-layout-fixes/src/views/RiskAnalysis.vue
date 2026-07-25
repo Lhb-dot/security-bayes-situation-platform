@@ -38,6 +38,7 @@
       <div>
         <span>算法：</span>
         <select v-model="trainParams.algo_type">
+          <option value="PMWNB">PMWNB（矩阵加权贝叶斯）</option>
           <option value="naive_bayes">朴素贝叶斯</option>
           <option value="bayesian_network">贝叶斯网络</option>
         </select>
@@ -48,9 +49,15 @@
           <option value="equal_freq">等频离散</option>
         </select>
 
-        <button @click="handleTrain">一键训练</button>
+        <button @click="handleTrain" :disabled="training">
+          <span v-if="training" class="btn-spinner"></span>
+          {{ training ? '训练中...' : '一键训练' }}
+        </button>
       </div>
       <!-- 训练出来的准确率结果，新增召回率展示 -->
+      <div v-if="training" class="result" style="text-align:center;">
+        <p>⏳ 模型训练中，请耐心等待...</p>
+      </div>
       <div v-if="trainResult" class="result">
         <h4>训练完成指标</h4>
         <p>准确率：{{ trainResult.accuracy }}</p>
@@ -92,9 +99,9 @@
       <div class="record-list" v-if="expRecordList.length > 0">
         <div class="record-item" v-for="record in expRecordList" :key="record.id">
           <div class="record-info">
-            <span>训练时间：{{ record.train_time }}</span>
-            <span>数据集：{{ record.dataset_name }}</span>
-            <span>算法：{{ record.algo_type }}</span>
+            <span>训练耗时：{{ record.train_time || record.train_time_s }}s</span>
+            <span>数据集：{{ dsLabel[record.dataset_name] || record.dataset_name }}</span>
+            <span>算法：{{ algoLabel[record.algo_type] || record.algo_type }}</span>
             <span>准确率：{{ record.accuracy }} | F1：{{ record.f1 }} | 召回率：{{ record.recall }}</span>
           </div>
           <div class="record-btns">
@@ -132,6 +139,7 @@ watch(
 );
 
 const trainFinished = ref(false);
+const training = ref(false);
 const thresholdHigh = ref(0.75);
 const thresholdMid = ref(0.45);
 const thresholdLow = ref(0.2);
@@ -139,7 +147,7 @@ const datasetList = ref([]);
 const selectDataset = ref('');
 const trainParams = ref({
   dataset_name: '',
-  algo_type: 'bayesian_network',
+  algo_type: 'PMWNB',
   discrete_method: 'equal_width',
 });
 const trainResult = ref(null);
@@ -151,6 +159,18 @@ const inputData = ref({
 const inferResult = ref(null);
 const expRecordList = ref([]);
 
+// 中英文名称映射（供历史记录显示）
+const dsLabel = {
+  'net_attack_2024': '网络入侵流量数据集',
+  'power_outage': '电力停电风险数据集',
+  'carrier_deck': '航母舰面调度数据集',
+};
+const algoLabel = {
+  'PMWNB': 'PMWNB矩阵加权贝叶斯',
+  'naive_bayes': '朴素贝叶斯',
+  'bayesian_network': '贝叶斯网络',
+};
+
 // 所有函数全部放在onMount外面
 const handleDatasetChange = () => {
   trainParams.value.dataset_name = selectDataset.value;
@@ -159,11 +179,13 @@ const handleDatasetChange = () => {
 };
 
 const handleTrain = async () => {
+  if (!selectDataset.value) {
+    ElMessage.warning('请先选择数据集！');
+    return;
+  }
+  training.value = true;
+  trainResult.value = null;
   try {
-    if (!selectDataset.value) {
-      ElMessage.warning('请先选择数据集！');
-      return;
-    }
     const res = await trainModel(trainParams.value);
     if (!res?.data) {
       ElMessage.warning('训练接口返回数据为空，请重试');
@@ -180,6 +202,8 @@ const handleTrain = async () => {
       err.response?.data?.detail ? JSON.stringify(err.response.data.detail) : '训练请求失败：' + err.message
     );
     console.error('完整训练报错信息：', err);
+  } finally {
+    training.value = false;
   }
 };
 
@@ -324,5 +348,24 @@ button {
 }
 .record-btns button:last-child {
   background: #e64340;
+}
+/* 训练加载动画 */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 </style>
