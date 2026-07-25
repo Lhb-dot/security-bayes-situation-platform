@@ -3,7 +3,7 @@ import axios from 'axios';
 // 创建Axios实例，统一后端基础地址、超时、请求头
 const service = axios.create({
   baseURL: 'http://127.0.0.1:12312', // 后端本地服务地址
-  timeout: 10000, // 超时时间 10s
+  timeout: 0, // 不设超时上限
   headers: {
     'Content-Type': 'application/json',
   },
