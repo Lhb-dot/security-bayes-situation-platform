@@ -116,3 +116,117 @@ export interface DashboardSnapshot {
     world: ThreatMapData;
   };
 }
+
+// ===================== 多场景架构新增类型（不修改以上已有类型） =====================
+
+/** 三大场景标识 */
+export type ScenarioId = 'network_security' | 'power_system' | 'flightdeck_operation';
+
+/** 场景定义 */
+export interface Scenario {
+  scenario_id: ScenarioId;
+  name: string;
+  description: string;
+  risk_level: 'critical' | 'high' | 'medium' | 'low';
+  risk_score: number;
+  event_count: number;
+  high_risk_count: number;
+  dataset_count: number;
+  model_count: number;
+  status: 'active' | 'inactive';
+}
+
+/** 场景详情（含态势指标） */
+export interface ScenarioDetail {
+  scenario: Scenario;
+  metrics: MetricItem[];
+  trend_data: TrendPoint[];
+  risk_distribution: TypeDistribution[];
+  recent_events: RiskEvent[];
+}
+
+/** 全局态势总览 */
+export interface GlobalOverview {
+  global_risk_score: number;
+  global_risk_level: 'critical' | 'high' | 'medium' | 'low';
+  scenario_count: number;
+  high_risk_count: number;
+  active_model_count: number;
+  scenarios: Scenario[];
+  global_trend: TrendPoint[];
+}
+
+/** 数据集字段定义 */
+export interface DatasetField {
+  field_name: string;
+  field_type: string;
+  description: string;
+  sample_value: string;
+  nullable: boolean;
+}
+
+/** 数据集 */
+export interface Dataset {
+  dataset_id: string;
+  name: string;
+  description: string;
+  scenario_id: ScenarioId;
+  record_count: number;
+  field_count: number;
+  fields: DatasetField[];
+  created_at: string;
+  data_format: 'csv' | 'arff' | 'json';
+}
+
+/** 模型版本记录 */
+export interface ModelVersion {
+  model_id: string;
+  scenario_id: ScenarioId;
+  dataset_name: string;
+  algo_type: string;
+  discrete_method: string;
+  accuracy: number;
+  f1: number;
+  recall: number;
+  g_mean: number;
+  train_time_s: number;
+  created_at: string;
+}
+
+/** 风险事件（统一封装，适配三场景） */
+export interface RiskEvent {
+  event_id: string;
+  scenario_id: ScenarioId;
+  event_type: string;
+  risk_level: 'critical' | 'high' | 'medium' | 'low';
+  risk_probability: number;
+  title: string;
+  description: string;
+  source: string;
+  timestamp: string;
+  status: 'pending' | 'processing' | 'resolved';
+  raw_features: Record<string, unknown>;
+}
+
+/** 态势分析数据 */
+export interface SituationData {
+  scenario_id: ScenarioId;
+  time_range: string;
+  score_history: HistoryPoint[];
+  event_distribution: TypeDistribution[];
+  risk_trend: TrendPoint[];
+  metrics: MetricItem[];
+}
+
+/** 报告定义 */
+export interface Report {
+  report_id: string;
+  title: string;
+  scenario_id: ScenarioId;
+  scenario_name: string;
+  summary: string;
+  created_at: string;
+  format: 'markdown' | 'html' | 'pdf';
+  status: 'generating' | 'completed' | 'failed';
+  file_url?: string;
+}

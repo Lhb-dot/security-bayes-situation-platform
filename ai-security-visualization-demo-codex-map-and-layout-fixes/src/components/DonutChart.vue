@@ -2,9 +2,12 @@
 import { computed } from 'vue';
 import type { TypeDistribution } from '../types/security';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   items: TypeDistribution[];
-}>();
+  title?: string;
+}>(), {
+  title: '攻击类型',
+});
 
 const gradient = computed(() => {
   let cursor = 0;
@@ -24,7 +27,7 @@ const gradient = computed(() => {
     <div class="donut-chart" :style="{ background: `conic-gradient(${gradient})` }">
       <div class="donut-chart__inner">
         <strong>{{ items.length }}</strong>
-        <span>攻击类型</span>
+        <span>{{ title }}</span>
       </div>
     </div>
     <div class="donut-legend">

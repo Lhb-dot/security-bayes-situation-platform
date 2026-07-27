@@ -8,7 +8,7 @@ import RiskAnalysis from '@/views/RiskAnalysis.vue';
 const routes = [
   {
     path: '/',
-    redirect: '/dashboard',
+    redirect: '/overview',
   },
   {
     path: '/dashboard',
@@ -25,6 +25,52 @@ const routes = [
     path: '/risk',
     name: 'AI模型训练预测',
     component: RiskAnalysis,
+  },
+  // ===================== 多场景架构新增路由 =====================
+  {
+    path: '/overview',
+    name: '全局总览',
+    component: () => import('@/views/OverviewView.vue'),
+  },
+  {
+    path: '/scenarios',
+    name: '场景中心',
+    component: () => import('@/views/ScenarioCenter.vue'),
+  },
+  {
+    path: '/scenarios/:scenarioId/dashboard',
+    name: '场景大屏',
+    component: () => import('@/views/ScenarioDashboard.vue'),
+  },
+  {
+    path: '/datasets',
+    name: '数据集中心',
+    component: () => import('@/views/DatasetCenter.vue'),
+  },
+  {
+    path: '/models',
+    name: 'ModelCenter',
+    component: () => import('@/views/ModelCenter.vue'),
+  },
+  {
+    path: '/inference',
+    name: 'RiskInference',
+    component: () => import('@/views/RiskInference.vue'),
+  },
+  {
+    path: '/situation',
+    name: 'SituationAnalysis',
+    component: () => import('@/views/SituationAnalysis.vue'),
+  },
+  {
+    path: '/reports',
+    name: 'ReportCenter',
+    component: () => import('@/views/ReportCenter.vue'),
+  },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('@/views/Settings.vue'),
   },
 ];
 

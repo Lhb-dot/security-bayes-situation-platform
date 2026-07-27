@@ -49,7 +49,6 @@ onMounted(async () => {
       attackTypes: res.data.attack_type,
       sourceMap: res.data.map_points,
       topSourceIps: res.data.top_ip_rank,
-      model_metric: res.data.model_metric,
     };
   } catch (err) {
     console.error('获取贝叶斯态势数据失败，使用默认模拟数据', err);
@@ -161,7 +160,7 @@ onMounted(async () => {
           <h3>攻击协议分布</h3>
         </div>
       </div>
-      <DonutChart :items="snapshot.protocolDistribution" />
+      <DonutChart :items="snapshot.protocolDistribution" title="协议类型" />
     </section>
 
     <section class="card dashboard-span-4">
