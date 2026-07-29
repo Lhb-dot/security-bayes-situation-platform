@@ -160,6 +160,7 @@ export interface GlobalOverview {
 export interface DatasetField {
   field_name: string;
   field_type: string;
+  field_role: '输入特征' | '分类标签';
   description: string;
   sample_value: string;
   nullable: boolean;
@@ -193,19 +194,20 @@ export interface ModelVersion {
   created_at: string;
 }
 
-/** 风险事件（统一封装，适配三场景） */
+/** 风险事件（统一封装，适配三场景 — 符合需求 5.2 最小字段结构） */
 export interface RiskEvent {
   event_id: string;
   scenario_id: ScenarioId;
-  event_type: string;
-  risk_level: 'critical' | 'high' | 'medium' | 'low';
-  risk_probability: number;
-  title: string;
-  description: string;
-  source: string;
-  timestamp: string;
-  status: 'pending' | 'processing' | 'resolved';
+  dataset_id: string;
+  model_version_id: string;
+  original_label: string;
+  risk_type: string;
+  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
+  risk_score: number;
+  occurred_at: string;
+  status: '待处置' | '处理中' | '已处置';
   raw_features: Record<string, unknown>;
+  description: string;
 }
 
 /** 态势分析数据 */

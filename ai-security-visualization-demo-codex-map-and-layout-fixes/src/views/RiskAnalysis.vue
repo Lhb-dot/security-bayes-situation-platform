@@ -2,7 +2,7 @@
   <div class="container" style="padding-top: 0px">
     <h2>贝叶斯AI风险模型训练与预测</h2>
 
-    <!-- 新增：全局风险阈值配置（配置管理组核心功能） -->
+    <!-- 新增：全局风险阈值配置 -->
     <div class="box config-box">
       <h3>0. 风险判定阈值配置</h3>
       <div class="threshold-form">
@@ -20,6 +20,25 @@
         </div>
         <button @click="saveThresholdConfig" style="margin-bottom: 9px">保存全局阈值</button>
       </div>
+    </div>
+
+    <!-- 0a. 选择场景（第一阶段P0需求：训练前必须绑定场景） -->
+    <div class="box">
+      <h3>0a. 选择业务场景</h3>
+      <div class="scenario-selector-box">
+        <span
+          v-for="sc in scenarioOptions"
+          :key="sc.value"
+          class="scenario-tab"
+          :class="{ 'scenario-tab--active': selectedScenarioForTraining === sc.value }"
+          @click="selectedScenarioForTraining = sc.value"
+        >
+          {{ sc.label }}
+        </span>
+      </div>
+      <p v-if="selectedScenarioForTraining" class="scenario-hint">
+        当前已绑定场景：<strong>{{ scenarioLabel[selectedScenarioForTraining] }}</strong>
+      </p>
     </div>
 
     <!-- 1. 选择数据集 -->
@@ -60,9 +79,10 @@
       </div>
       <div v-if="trainResult" class="result">
         <h4>训练完成指标</h4>
-        <p>准确率：{{ trainResult.accuracy }}</p>
+        <p>准确率（Accuracy）：{{ trainResult.accuracy }}</p>
+        <p>召回率（Recall）：{{ trainResult.recall }}</p>
         <p>F1分数：{{ trainResult.f1 }}</p>
-        <p>召回率：{{ trainResult.recall }}</p>
+        <p>G-mean：{{ trainResult.g_mean ?? 'N/A' }}</p>
         <p>训练耗时：{{ trainResult.train_time_s }} 秒</p>
       </div>
     </div>
@@ -147,6 +167,17 @@ const thresholdMid = ref(0.45);
 const thresholdLow = ref(0.2);
 const datasetList = ref([]);
 const selectDataset = ref('');
+const selectedScenarioForTraining = ref('');
+const scenarioOptions = [
+  { value: 'network_security', label: '网络安全' },
+  { value: 'power_system', label: '电力系统' },
+  { value: 'flightdeck_operation', label: '航母甲板' },
+];
+const scenarioLabel = {
+  network_security: '网络安全态势感知',
+  power_system: '电力系统风险态势感知',
+  flightdeck_operation: '航母甲板保障作业态势感知',
+};
 const trainParams = ref({
   dataset_name: '',
   algo_type: 'PMWNB',
@@ -321,6 +352,43 @@ button {
   border-radius: 4px;
   cursor: pointer;
 }
+/* 场景选择器样式 */
+.scenario-selector-box {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(8, 17, 31, 0.5);
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  width: fit-content;
+}
+.scenario-tab {
+  padding: 6px 16px;
+  border-radius: 999px;
+  color: rgba(220, 234, 255, 0.7);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  user-select: none;
+}
+.scenario-tab:hover {
+  background: rgba(91, 166, 255, 0.1);
+  color: #fff;
+}
+.scenario-tab--active {
+  background: rgba(91, 166, 255, 0.18);
+  color: #fff;
+  font-weight: 500;
+}
+.scenario-hint {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.6);
+}
+.scenario-hint strong {
+  color: #9ad6ff;
+}
+
 /* 阈值表单样式 */
 .threshold-form {
   display: flex;

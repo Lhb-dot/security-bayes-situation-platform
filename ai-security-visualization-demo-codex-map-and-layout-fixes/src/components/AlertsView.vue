@@ -1,109 +1,121 @@
 <script setup lang="ts">
 /**
- * AlertsView - 告警列表页（带场景/风险等级/状态筛选）
+ * AlertsView - 风险事件列表页（使用 RiskEvent 统一结构）
  *
- * 支持前端过滤筛选，AI风险研判跳转
+ * P0 功能：展示跨场景风险事件，支持场景/风险等级/状态筛选
+ * 数据来源：getRiskEvents() 跨场景聚合
  */
-import { computed, ref } from 'vue';
-import type { AlertRecord, ScenarioId } from '../types/security';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import type { RiskEvent, ScenarioId } from '../types/security';
+import { getRiskEvents } from '@/services/mockApi';
 
-// 初始化路由实例
-const router = useRouter();
-
-const props = defineProps<{
-  alerts: AlertRecord[];
-}>();
-
-defineEmits<{
-  openAlert: [id: string];
-}>();
+/** 风险事件列表 */
+const events = ref<RiskEvent[]>([]);
+const loading = ref(true);
+const error = ref('');
 
 /** 筛选条件 */
 const selectedScenario = ref<ScenarioId | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
 const selectedStatus = ref<string>('all');
 
-/** 场景/等级/状态扩展类型（mock数据含scenario_id额外字段） */
-interface AlertFilter extends AlertRecord {
-  scenario_id?: ScenarioId;
-}
-
-/** 筛选后的告警列表 */
-const filteredAlerts = computed(() => {
-  let result = props.alerts as AlertFilter[];
-  if (selectedScenario.value !== 'all') {
-    result = result.filter((a) => a.scenario_id === selectedScenario.value);
-  }
-  if (selectedRiskLevel.value !== 'all') {
-    result = result.filter((a) => a.riskLevel === selectedRiskLevel.value);
-  }
-  if (selectedStatus.value !== 'all') {
-    result = result.filter((a) => a.status === selectedStatus.value);
-  }
-  return result;
-});
-
-/** 风险等级选项 */
-const riskLevelOptions = [
-  { value: 'all', label: '全部等级' },
-  { value: 'CRITICAL', label: '严重' },
-  { value: 'HIGH', label: '高危' },
-  { value: 'MEDIUM', label: '中危' },
-];
-
-/** 状态选项 */
-const statusOptions = [
-  { value: 'all', label: '全部状态' },
-  { value: '待研判', label: '待研判' },
-  { value: '处理中', label: '处理中' },
-  { value: '已隔离', label: '已隔离' },
-];
+/** 场景名称映射 */
+const scenarioLabel: Record<string, string> = {
+  network_security: '网络安全',
+  power_system: '电力系统',
+  flightdeck_operation: '航母甲板',
+};
 
 /** 场景选项 */
 const scenarioOptions: { value: ScenarioId | 'all'; label: string }[] = [
   { value: 'all', label: '全部场景' },
   { value: 'network_security', label: '网络安全' },
   { value: 'power_system', label: '电力系统' },
-  { value: 'flightdeck_operation', label: '航母甲板' },
 ];
 
-/**
- * 告警列表页AI风险研判跳转
- * 通过Vue Router编程式导航携带本条告警三个归一化流量特征，目标页面自动回填推理
- * @param alertItem 当前点击单条告警对象
- */
-const jumpBayesAnalyze = (alertItem: AlertRecord) => {
-  router.push({
-    path: '/risk',
-    query: {
-      fl: alertItem.flowLength,
-      du: alertItem.duration,
-      af: alertItem.accessFreq
-    }
-  });
+/** 风险等级选项 */
+const riskLevelOptions = [
+  { value: 'all', label: '全部等级' },
+  { value: 'HIGH', label: '高危' },
+  { value: 'MEDIUM', label: '中危' },
+  { value: 'LOW', label: '低危' },
+];
+
+/** 状态选项 */
+const statusOptions = [
+  { value: 'all', label: '全部状态' },
+  { value: '待处置', label: '待处置' },
+  { value: '处理中', label: '处理中' },
+  { value: '已处置', label: '已处置' },
+];
+
+/** 筛选后的风险事件 */
+const filteredEvents = computed(() => {
+  let result = events.value;
+  if (selectedScenario.value !== 'all') {
+    result = result.filter((e) => e.scenario_id === selectedScenario.value);
+  }
+  if (selectedRiskLevel.value !== 'all') {
+    result = result.filter((e) => e.risk_level === selectedRiskLevel.value);
+  }
+  if (selectedStatus.value !== 'all') {
+    result = result.filter((e) => e.status === selectedStatus.value);
+  }
+  return result;
+});
+
+/** 加载数据 */
+const loadEvents = async () => {
+  loading.value = true;
+  error.value = '';
+  try {
+    events.value = await getRiskEvents();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '风险事件加载失败';
+  } finally {
+    loading.value = false;
+  }
 };
+
+/** 风险等级标签映射 */
+const riskLevelMap: Record<string, { label: string; type: string }> = {
+  HIGH: { label: '高危', type: 'danger' },
+  MEDIUM: { label: '中危', type: 'warning' },
+  LOW: { label: '低危', type: 'info' },
+};
+
+/** 状态标签映射 */
+const statusMap: Record<string, string> = {
+  '待处置': '待处置',
+  '处理中': '处理中',
+  '已处置': '已处置',
+};
+
+onMounted(() => {
+  loadEvents();
+});
 </script>
 
 <template>
-  <section class="card alerts-page">
-    <div class="section-heading">
+  <div class="risk-events-page">
+    <div class="risk-events-page__header">
       <div>
-        <p class="eyebrow">Alert Center</p>
-        <h2>告警详情页</h2>
+        <p class="eyebrow">Risk Events</p>
+        <h2>风险事件列表</h2>
+        <p class="risk-events-page__desc">跨场景统一风险事件展示，支持多维度筛选过滤</p>
       </div>
-      <span class="section-tag">{{ filteredAlerts.length }} 条告警</span>
+      <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
     </div>
 
     <!-- 筛选栏 -->
-    <div class="alerts-filters">
-      <div class="alerts-filters__group">
-        <label class="alerts-filters__label">场景</label>
-        <div class="alerts-filters__tabs">
+    <div class="risk-events-filters">
+      <div class="risk-events-filters__group">
+        <label class="risk-events-filters__label">场景</label>
+        <div class="risk-events-filters__tabs">
           <button
             v-for="opt in scenarioOptions"
             :key="opt.value"
-            class="alerts-filters__tab"
+            class="risk-events-filters__tab"
             :class="{ 'is-active': selectedScenario === opt.value }"
             @click="selectedScenario = opt.value"
           >
@@ -112,13 +124,13 @@ const jumpBayesAnalyze = (alertItem: AlertRecord) => {
         </div>
       </div>
 
-      <div class="alerts-filters__group">
-        <label class="alerts-filters__label">风险等级</label>
-        <div class="alerts-filters__tabs">
+      <div class="risk-events-filters__group">
+        <label class="risk-events-filters__label">风险等级</label>
+        <div class="risk-events-filters__tabs">
           <button
             v-for="opt in riskLevelOptions"
             :key="opt.value"
-            class="alerts-filters__tab"
+            class="risk-events-filters__tab"
             :class="{ 'is-active': selectedRiskLevel === opt.value }"
             @click="selectedRiskLevel = opt.value"
           >
@@ -127,13 +139,13 @@ const jumpBayesAnalyze = (alertItem: AlertRecord) => {
         </div>
       </div>
 
-      <div class="alerts-filters__group">
-        <label class="alerts-filters__label">状态</label>
-        <div class="alerts-filters__tabs">
+      <div class="risk-events-filters__group">
+        <label class="risk-events-filters__label">处置状态</label>
+        <div class="risk-events-filters__tabs">
           <button
             v-for="opt in statusOptions"
             :key="opt.value"
-            class="alerts-filters__tab"
+            class="risk-events-filters__tab"
             :class="{ 'is-active': selectedStatus === opt.value }"
             @click="selectedStatus = opt.value"
           >
@@ -143,64 +155,136 @@ const jumpBayesAnalyze = (alertItem: AlertRecord) => {
       </div>
     </div>
 
-    <div class="alerts-table">
-      <div class="alerts-table__head">
-        <span>告警标题</span>
-        <span>攻击类型</span>
-        <span>攻击源 IP</span>
-        <span>受攻击主机</span>
-        <span>风险等级</span>
-        <span>时间</span>
-        <span>AI操作</span>
-      </div>
-      <div v-for="alert in filteredAlerts" :key="alert.id" class="alerts-table__row" @click="$emit('openAlert', alert.id)">
-        <span>{{ alert.title }}</span>
-        <span>{{ alert.attackType }}</span>
-        <span>{{ alert.sourceIp }}</span>
-        <span>{{ alert.targetHost }}</span>
-        <span
-          ><i :class="['risk-badge', `risk-${alert.riskLevel.toLowerCase()}`]">{{ alert.riskLevel }}</i></span
-        >
-        <span>{{ alert.timestamp }}</span>
-        <button class="ai-btn" @click.stop="jumpBayesAnalyze(alert)">AI风险研判</button>
-      </div>
+    <!-- 加载状态 -->
+    <section v-if="loading" class="state-card">
+      <div class="loader"></div>
+      <p>正在加载风险事件...</p>
+    </section>
+
+    <!-- 错误状态 -->
+    <section v-else-if="error" class="state-card state-card--error">
+      <p>{{ error }}</p>
+      <button class="ghost-button" @click="loadEvents">重试</button>
+    </section>
+
+    <!-- 空数据提示 -->
+    <section v-else-if="filteredEvents.length === 0" class="state-card">
+      <p>暂无匹配的风险事件</p>
+    </section>
+
+    <!-- 事件列表 -->
+    <div v-else class="risk-events-table-wrap">
+      <el-table
+        :data="filteredEvents"
+        stripe
+        style="width: 100%"
+        row-class-name="event-table-row"
+      >
+        <el-table-column prop="event_id" label="事件编号" width="200" show-overflow-tooltip />
+
+        <el-table-column label="所属场景" width="110" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <span class="event-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="风险类型" width="160" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <span class="event-table__risk-type">{{ row.risk_type }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="风险等级" width="90" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <el-tag
+              size="small"
+              :type="riskLevelMap[row.risk_level]?.type ?? 'info'"
+              effect="dark"
+            >
+              {{ riskLevelMap[row.risk_level]?.label ?? row.risk_level }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="风险概率" width="100" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <span class="event-table__score">{{ (row.risk_score * 100).toFixed(1) }}%</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="原始标签" width="100" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <span class="event-table__orig-label">{{ row.original_label }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="description" label="风险说明" min-width="220" show-overflow-tooltip />
+
+        <el-table-column prop="occurred_at" label="发生时间" width="160" align="center" />
+
+        <el-table-column label="处置状态" width="100" align="center">
+          <template #default="{ row }: { row: RiskEvent }">
+            <span
+              class="event-table__status"
+              :class="`ev-status--${row.status}`"
+            >
+              {{ statusMap[row.status] ?? row.status }}
+            </span>
+          </template>
+        </el-table-column>
+      </el-table>
     </div>
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.ai-btn {
-  background: #407acc;
-  color: #fff;
-  border: none;
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
+.risk-events-page {
+  position: relative;
+  z-index: 1;
 }
 
-/* 筛选栏 */
-.alerts-filters {
+.risk-events-page__header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  padding: 16px 0;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.08);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
   margin-bottom: 16px;
 }
 
-.alerts-filters__group {
+.risk-events-page__header h2 {
+  margin: 0 0 8px;
+  font-size: 1.6rem;
+}
+
+.risk-events-page__desc {
+  margin: 0;
+  color: rgba(220, 234, 255, 0.7);
+  font-size: 0.95rem;
+}
+
+/* 筛选栏 */
+.risk-events-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08);
+}
+
+.risk-events-filters__group {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.alerts-filters__label {
+.risk-events-filters__label {
   font-size: 0.82rem;
   color: rgba(220, 234, 255, 0.6);
   white-space: nowrap;
 }
 
-.alerts-filters__tabs {
+.risk-events-filters__tabs {
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -209,7 +293,7 @@ const jumpBayesAnalyze = (alertItem: AlertRecord) => {
   border: 1px solid rgba(125, 201, 255, 0.12);
 }
 
-.alerts-filters__tab {
+.risk-events-filters__tab {
   border: 0;
   padding: 5px 12px;
   border-radius: 999px;
@@ -221,14 +305,110 @@ const jumpBayesAnalyze = (alertItem: AlertRecord) => {
   white-space: nowrap;
 }
 
-.alerts-filters__tab:hover {
+.risk-events-filters__tab:hover {
   background: rgba(91, 166, 255, 0.1);
   color: #fff;
 }
 
-.alerts-filters__tab.is-active {
+.risk-events-filters__tab.is-active {
   background: rgba(91, 166, 255, 0.18);
   color: #fff;
   font-weight: 500;
+}
+
+/* 表格外层 */
+.risk-events-table-wrap {
+  border: 1px solid rgba(125, 201, 255, 0.16);
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(11, 22, 40, 0.6);
+}
+
+.event-table-row {
+  background: transparent !important;
+}
+
+.event-table__scenario-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: rgba(91, 166, 255, 0.14);
+  color: #9ad6ff;
+}
+
+.event-table__risk-type {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #d9e8ff;
+}
+
+.event-table__score {
+  font-weight: 600;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-table__orig-label {
+  font-size: 0.82rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(220, 234, 255, 0.06);
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.event-table__status {
+  font-size: 0.82rem;
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+
+.ev-status--待处置 {
+  background: rgba(255, 177, 107, 0.12);
+  color: #ffc37d;
+}
+
+.ev-status--处理中 {
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+}
+
+.ev-status--已处置 {
+  background: rgba(83, 229, 200, 0.12);
+  color: #53e5c8;
+}
+</style>
+
+<style>
+.risk-events-page .el-table,
+.risk-events-page .el-table__inner-wrapper,
+.risk-events-page .el-table__body-wrapper,
+.risk-events-page .el-table__header-wrapper {
+  background-color: transparent !important;
+}
+
+.risk-events-page .el-table th.el-table__cell {
+  background-color: rgba(91, 166, 255, 0.08) !important;
+  color: #9ad6ff !important;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.12) !important;
+}
+
+.risk-events-page .el-table td.el-table__cell {
+  background-color: transparent !important;
+  color: #d9e8ff !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.06) !important;
+}
+
+.risk-events-page .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: rgba(255, 255, 255, 0.02) !important;
+}
+
+.risk-events-page .el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(91, 166, 255, 0.06) !important;
+}
+
+.risk-events-page .el-table__empty-text {
+  color: rgba(220, 234, 255, 0.4) !important;
 }
 </style>

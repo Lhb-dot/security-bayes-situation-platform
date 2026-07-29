@@ -5,7 +5,7 @@
  * 全平台数据集统一管理
  * 支持按场景筛选、数据集列表展示、数据集字段预览
  */
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
 import { getDatasetList, getDatasetFields } from '@/services/mockApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
@@ -41,6 +41,9 @@ const fieldDialogVisible = ref(false);
 const fieldDialogTitle = ref('');
 const fieldDialogFields = ref<DatasetField[]>([]);
 const fieldDialogLoading = ref(false);
+
+/** 是否选中航母甲板（辅助模板判断，绕过类型收窄） */
+const isFlightdeckSelected = computed(() => selectedScenario.value === ('flightdeck_operation' as ScenarioId | 'all'));
 
 // ===================== 数据加载 =====================
 const loadDatasets = async () => {
@@ -130,13 +133,23 @@ onMounted(() => {
       <button class="ghost-button" @click="loadDatasets">重试</button>
     </section>
 
+    <!-- 航母甲板场景提示 -->
+    <section v-if="isFlightdeckSelected" class="state-card">
+      <div class="flightdeck-placeholder">
+        <span class="flightdeck-placeholder__icon">🚢</span>
+        <h3>暂未接入数据集</h3>
+        <p>航母甲板保障作业场景在第一阶段仅预留接口，尚未配置实际数据集。</p>
+        <p class="flightdeck-placeholder__hint">待正式数据集接入后，将在此展示数据集列表。</p>
+      </div>
+    </section>
+
     <!-- 数据集表格 -->
     <div v-else class="dataset-center__table-wrap">
       <el-table
         :data="filteredDatasets"
         stripe
         style="width: 100%"
-        empty-text="暂无数据集"
+        :empty-text="selectedScenario === 'flightdeck_operation' ? '' : '暂无数据集'"
         row-class-name="dataset-table-row"
       >
         <el-table-column
@@ -218,11 +231,21 @@ onMounted(() => {
         empty-text="该数据集暂无字段信息"
       >
         <el-table-column prop="field_name" label="字段名" min-width="140" />
-        <el-table-column prop="field_type" label="数据类型" width="100" align="center">
+        <el-table-column prop="field_type" label="数据类型" width="90" align="center">
           <template #default="{ row }: { row: DatasetField }">
             <el-tag size="small" effect="plain">
               {{ row.field_type }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="field_role" label="字段角色" width="100" align="center">
+          <template #default="{ row }: { row: DatasetField }">
+            <span
+              class="field-role-badge"
+              :class="row.field_role === '分类标签' ? 'field-role-label' : 'field-role-input'"
+            >
+              {{ row.field_role }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="nullable" label="允许为空" width="80" align="center">
@@ -354,6 +377,50 @@ onMounted(() => {
   color: rgba(220, 234, 255, 0.65);
 }
 
+/* 航母甲板暂未接入提示 */
+.flightdeck-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.flightdeck-placeholder__icon {
+  font-size: 3.5rem;
+  margin-bottom: 8px;
+}
+
+.flightdeck-placeholder h3 {
+  margin: 0;
+  font-size: 1.3rem;
+  color: #e8f1ff;
+}
+
+.flightdeck-placeholder p {
+  margin: 0;
+  color: rgba(220, 234, 255, 0.7);
+  font-size: 0.95rem;
+  max-width: 420px;
+}
+
+.flightdeck-placeholder__hint {
+  font-size: 0.85rem !important;
+  color: rgba(220, 234, 255, 0.45) !important;
+  font-style: italic;
+}
+
+/* 字段角色标签 */
+.field-role-input {
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+}
+
+.field-role-label {
+  background: rgba(83, 229, 200, 0.12);
+  color: #53e5c8;
+}
+
 /* 文本颜色 */
 .text-warning {
   color: #ffc37d;
@@ -450,5 +517,14 @@ onMounted(() => {
   --el-tag-bg-color: rgba(83, 229, 200, 0.08) !important;
   --el-tag-border-color: rgba(83, 229, 200, 0.2) !important;
   --el-tag-text-color: #53e5c8 !important;
+}
+
+/* 字段角色标签样式 */
+.field-role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 </style>

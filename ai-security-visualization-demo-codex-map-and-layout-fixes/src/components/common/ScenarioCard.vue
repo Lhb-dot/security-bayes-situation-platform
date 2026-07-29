@@ -82,12 +82,18 @@ const eventIcon = '⚡';
           风险评分：<strong>{{ scenario.risk_score }}</strong>
         </span>
         <span class="scenario-card__status" :class="`scenario-card__status--${scenario.status}`">
-          {{ scenario.status === 'active' ? '运行中' : '已停用' }}
+          {{ scenario.status === 'active' ? '已接入' : '暂未接入' }}
         </span>
       </div>
-      <button class="scenario-card__enter-btn" @click.stop="$emit('click', scenario.scenario_id)">
-        进入场景
-        <span class="scenario-card__arrow">→</span>
+      <button
+        class="scenario-card__enter-btn"
+        :class="{ 'scenario-card__enter-btn--disabled': scenario.status !== 'active' }"
+        :disabled="scenario.status !== 'active'"
+        :title="scenario.status !== 'active' ? '该场景暂未接入，无法进入' : ''"
+        @click.stop="scenario.status === 'active' && $emit('click', scenario.scenario_id)"
+      >
+        {{ scenario.status === 'active' ? '进入场景' : '暂不可用' }}
+        <span v-if="scenario.status === 'active'" class="scenario-card__arrow">→</span>
       </button>
     </div>
   </div>
@@ -263,6 +269,14 @@ const eventIcon = '⚡';
 .scenario-card__enter-btn:hover {
   transform: translateX(2px);
   box-shadow: 0 8px 24px rgba(83, 229, 200, 0.35);
+}
+
+.scenario-card__enter-btn--disabled {
+  background: rgba(220, 234, 255, 0.1) !important;
+  color: rgba(220, 234, 255, 0.35) !important;
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  transform: none !important;
 }
 
 .scenario-card__arrow {

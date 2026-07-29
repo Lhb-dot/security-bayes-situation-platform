@@ -29,8 +29,8 @@ const eventRanking = computed<RankingItem[]>(() => {
   if (!detail.value) return [];
   return detail.value.recent_events
     .map((ev) => ({
-      name: ev.title ?? ev.event_type ?? '未知事件',
-      score: Math.round((ev.risk_probability ?? 0.5) * 100),
+      name: ev.risk_type ?? ev.description?.slice(0, 20) ?? '未知事件',
+      score: Math.round((ev.risk_score ?? 0.5) * 100),
     }))
     .sort((a, b) => b.score - a.score);
 });
@@ -157,17 +157,17 @@ onMounted(() => {
               class="sd-events__item"
             >
               <div class="sd-events__left">
-                <RiskLevelTag :level="ev.risk_level" size="small" />
+                <RiskLevelTag :level="ev.risk_level.toLowerCase() as any" size="small" />
                 <div>
-                  <strong>{{ ev.title ?? ev.event_type }}</strong>
+                  <strong>{{ ev.risk_type }}</strong>
                   <p>{{ ev.description ?? '' }}</p>
                 </div>
               </div>
               <div class="sd-events__right">
                 <span class="sd-events__prob">
-                  风险概率：{{ Math.round((ev.risk_probability ?? 0) * 100) }}%
+                  风险概率：{{ Math.round((ev.risk_score ?? 0) * 100) }}%
                 </span>
-                <span class="sd-events__time">{{ ev.timestamp ?? '' }}</span>
+                <span class="sd-events__time">{{ ev.occurred_at ?? '' }}</span>
               </div>
             </div>
           </div>
