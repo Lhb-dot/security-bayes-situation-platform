@@ -196,13 +196,12 @@ onMounted(() => {
 
         <el-table-column label="风险等级" width="90" align="center">
           <template #default="{ row }: { row: RiskEvent }">
-            <el-tag
-              size="small"
-              :type="riskLevelMap[row.risk_level]?.type ?? 'info'"
-              effect="dark"
+            <span
+              class="ev-level-badge"
+              :class="`ev-level--${row.risk_level}`"
             >
               {{ riskLevelMap[row.risk_level]?.label ?? row.risk_level }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
 
@@ -254,11 +253,12 @@ onMounted(() => {
 .risk-events-page__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .risk-events-page__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -318,10 +318,10 @@ onMounted(() => {
 
 /* 表格外层 */
 .risk-events-table-wrap {
-  border: 1px solid rgba(125, 201, 255, 0.16);
+  border: 1px solid rgba(125, 201, 255, 0.10);
   border-radius: 18px;
   overflow: hidden;
-  background: rgba(11, 22, 40, 0.6);
+  background: rgba(8, 18, 34, 0.7);
 }
 
 .event-table-row {
@@ -333,19 +333,19 @@ onMounted(() => {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 0.8rem;
-  background: rgba(91, 166, 255, 0.14);
-  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.10);
+  color: rgba(155, 195, 240, 0.8);
 }
 
 .event-table__risk-type {
   font-size: 0.85rem;
   font-weight: 500;
-  color: #d9e8ff;
+  color: rgba(175, 198, 230, 0.8);
 }
 
 .event-table__score {
   font-weight: 600;
-  color: #9ad6ff;
+  color: rgba(155, 195, 240, 0.85);
   font-variant-numeric: tabular-nums;
 }
 
@@ -353,10 +353,35 @@ onMounted(() => {
   font-size: 0.82rem;
   padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(220, 234, 255, 0.06);
-  color: rgba(220, 234, 255, 0.7);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(175, 198, 230, 0.6);
 }
 
+/* 风险等级徽章 */
+.ev-level-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.ev-level--HIGH {
+  background: rgba(255, 123, 114, 0.12);
+  color: #e88982;
+}
+
+.ev-level--MEDIUM {
+  background: rgba(91, 166, 255, 0.12);
+  color: rgba(155, 195, 240, 0.9);
+}
+
+.ev-level--LOW {
+  background: rgba(83, 229, 200, 0.10);
+  color: rgba(83, 229, 200, 0.75);
+}
+
+/* 处置状态 */
 .event-table__status {
   font-size: 0.82rem;
   padding: 2px 10px;
@@ -364,18 +389,18 @@ onMounted(() => {
 }
 
 .ev-status--待处置 {
-  background: rgba(255, 177, 107, 0.12);
-  color: #ffc37d;
+  background: rgba(255, 177, 107, 0.08);
+  color: rgba(230, 180, 110, 0.7);
 }
 
 .ev-status--处理中 {
-  background: rgba(91, 166, 255, 0.12);
-  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.08);
+  color: rgba(155, 195, 240, 0.7);
 }
 
 .ev-status--已处置 {
-  background: rgba(83, 229, 200, 0.12);
-  color: #53e5c8;
+  background: rgba(83, 229, 200, 0.08);
+  color: rgba(83, 229, 200, 0.65);
 }
 </style>
 
@@ -388,27 +413,27 @@ onMounted(() => {
 }
 
 .risk-events-page .el-table th.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.08) !important;
-  color: #9ad6ff !important;
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
   font-weight: 600;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
 }
 
 .risk-events-page .el-table td.el-table__cell {
-  background-color: transparent !important;
-  color: #d9e8ff !important;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.06) !important;
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
 
 .risk-events-page .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: rgba(255, 255, 255, 0.02) !important;
+  background-color: rgba(10, 24, 44, 0.85) !important;
 }
 
 .risk-events-page .el-table__body tr:hover > td.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.06) !important;
+  background-color: rgba(20, 44, 72, 0.9) !important;
 }
 
 .risk-events-page .el-table__empty-text {
-  color: rgba(220, 234, 255, 0.4) !important;
+  color: rgba(155, 185, 225, 0.3) !important;
 }
 </style>

@@ -174,9 +174,12 @@ onMounted(() => {
 
         <el-table-column prop="data_format" label="格式" width="80" align="center">
           <template #default="{ row }: { row: Dataset }">
-            <el-tag size="small" effect="dark" :type="row.data_format === 'json' ? 'warning' : 'info'">
+            <span
+              class="format-badge"
+              :class="`format-badge--${row.data_format}`"
+            >
               {{ FORMAT_LABEL[row.data_format] ?? row.data_format.toUpperCase() }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
 
@@ -233,9 +236,12 @@ onMounted(() => {
         <el-table-column prop="field_name" label="字段名" min-width="140" />
         <el-table-column prop="field_type" label="数据类型" width="90" align="center">
           <template #default="{ row }: { row: DatasetField }">
-            <el-tag size="small" effect="plain">
+            <span
+              class="type-badge"
+              :class="row.field_type === '数值型' || row.field_type === 'float' || row.field_type === 'int' ? 'type-badge--numeric' : 'type-badge--string'"
+            >
               {{ row.field_type }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="field_role" label="字段角色" width="100" align="center">
@@ -250,7 +256,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column prop="nullable" label="允许为空" width="80" align="center">
           <template #default="{ row }: { row: DatasetField }">
-            <span :class="row.nullable ? 'text-warning' : 'text-success'">
+            <span :class="row.nullable ? 'text-muted' : 'text-active'">
               {{ row.nullable ? '是' : '否' }}
             </span>
           </template>
@@ -279,11 +285,12 @@ onMounted(() => {
 .dataset-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .dataset-center__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -308,10 +315,10 @@ onMounted(() => {
 
 /* 表格外层容器 */
 .dataset-center__table-wrap {
-  border: 1px solid rgba(125, 201, 255, 0.16);
+  border: 1px solid rgba(125, 201, 255, 0.10);
   border-radius: 18px;
   overflow: hidden;
-  background: rgba(11, 22, 40, 0.6);
+  background: rgba(8, 18, 34, 0.7);
 }
 
 /* 表格行样式覆盖 Element Plus 暗色主题 */
@@ -329,13 +336,13 @@ onMounted(() => {
 
 .dataset-table__name {
   font-weight: 600;
-  color: #e8f1ff;
+  color: #c8deff;
   font-size: 0.95rem;
 }
 
 .dataset-table__desc {
   font-size: 0.8rem;
-  color: rgba(220, 234, 255, 0.55);
+  color: rgba(180, 200, 235, 0.5);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -347,15 +354,15 @@ onMounted(() => {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 0.8rem;
-  background: rgba(91, 166, 255, 0.14);
-  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.10);
+  color: rgba(155, 195, 240, 0.8);
 }
 
 /* 数字列 */
 .dataset-table__number {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  color: #e8f1ff;
+  color: #b8ceef;
 }
 
 /* 时间列 */
@@ -421,12 +428,56 @@ onMounted(() => {
   color: #53e5c8;
 }
 
-/* 文本颜色 */
-.text-warning {
-  color: #ffc37d;
+/* 格式徽章 */
+.format-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
-.text-success {
+.format-badge--arff {
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+}
+
+.format-badge--csv {
+  background: rgba(83, 229, 200, 0.10);
+  color: #6fe8d0;
+}
+
+.format-badge--json {
+  background: rgba(154, 128, 255, 0.12);
+  color: #b8a8ff;
+}
+
+/* 类型徽章（弹窗） */
+.type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.type-badge--numeric {
+  background: rgba(91, 166, 255, 0.10);
+  color: #7dbfff;
+}
+
+.type-badge--string {
+  background: rgba(220, 234, 255, 0.06);
+  color: rgba(220, 234, 255, 0.7);
+}
+
+/* 文本颜色 */
+.text-muted {
+  color: rgba(220, 234, 255, 0.45);
+}
+
+.text-active {
   color: #53e5c8;
 }
 </style>
@@ -441,28 +492,28 @@ onMounted(() => {
 }
 
 .dataset-center .el-table th.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.08) !important;
-  color: #9ad6ff !important;
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
   font-weight: 600;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
 }
 
 .dataset-center .el-table td.el-table__cell {
-  background-color: transparent !important;
-  color: #d9e8ff !important;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.06) !important;
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
 
 .dataset-center .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: rgba(255, 255, 255, 0.02) !important;
+  background-color: rgba(10, 24, 44, 0.85) !important;
 }
 
 .dataset-center .el-table__body tr:hover > td.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.06) !important;
+  background-color: rgba(20, 44, 72, 0.9) !important;
 }
 
 .dataset-center .el-table__empty-text {
-  color: rgba(220, 234, 255, 0.4) !important;
+  color: rgba(180, 200, 235, 0.3) !important;
 }
 
 /* Element Plus 弹窗暗色样式 */
@@ -500,31 +551,4 @@ onMounted(() => {
   --el-button-hover-text-color: #bae3ff !important;
 }
 
-/* Element Plus 标签暗色 */
-.dataset-center .el-tag--info {
-  --el-tag-bg-color: rgba(91, 166, 255, 0.12) !important;
-  --el-tag-border-color: rgba(91, 166, 255, 0.25) !important;
-  --el-tag-text-color: #9ad6ff !important;
-}
-
-.dataset-center .el-tag--warning {
-  --el-tag-bg-color: rgba(255, 177, 107, 0.12) !important;
-  --el-tag-border-color: rgba(255, 177, 107, 0.25) !important;
-  --el-tag-text-color: #ffc37d !important;
-}
-
-.dataset-center .el-tag--plain {
-  --el-tag-bg-color: rgba(83, 229, 200, 0.08) !important;
-  --el-tag-border-color: rgba(83, 229, 200, 0.2) !important;
-  --el-tag-text-color: #53e5c8 !important;
-}
-
-/* 字段角色标签样式 */
-.field-role-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
 </style>
