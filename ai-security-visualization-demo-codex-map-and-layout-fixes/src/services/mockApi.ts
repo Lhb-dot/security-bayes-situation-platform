@@ -754,3 +754,31 @@ export const getInferenceResult = async (_input: Record<string, unknown>): Promi
     recommendation: sample(['立即隔离源地址', '加强访问控制', '持续监控', '无需处理'] as const),
     model_used: `PMWNB-${sample(['v2.1', 'v2.3', 'v3.0'])}`,
   });
+
+/** 模型训练结果 */
+export interface TrainResult {
+  accuracy: number;
+  recall: number;
+  f1: number;
+  g_mean: number;
+  train_time_s: number;
+  algo_type: string;
+  discrete_method: string;
+}
+
+/** 执行模型训练 — 接收场景/数据集/算法参数 */
+export const trainModel = async (params: {
+  scenario_id: ScenarioId;
+  dataset_id: string;
+  algo_type: string;
+  discrete_method: string;
+}): Promise<TrainResult> =>
+  simulateLatency({
+    accuracy: Number((Math.random() * 0.12 + 0.85).toFixed(4)),
+    recall: Number((Math.random() * 0.15 + 0.78).toFixed(4)),
+    f1: Number((Math.random() * 0.12 + 0.80).toFixed(4)),
+    g_mean: Number((Math.random() * 0.12 + 0.79).toFixed(4)),
+    train_time_s: Number((Math.random() * 8 + 2).toFixed(1)),
+    algo_type: params.algo_type,
+    discrete_method: params.discrete_method,
+  });

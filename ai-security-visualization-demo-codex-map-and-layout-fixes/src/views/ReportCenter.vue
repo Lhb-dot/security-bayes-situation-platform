@@ -113,9 +113,12 @@ onMounted(() => {
 
         <el-table-column label="格式" width="100" align="center">
           <template #default="{ row }: { row: Report }">
-            <el-tag size="small" effect="dark" :type="row.format === 'pdf' ? 'danger' : row.format === 'html' ? 'warning' : 'info'">
+            <span
+              class="report-table__format-badge"
+              :class="`format-badge--${row.format}`"
+            >
               {{ formatLabel[row.format] ?? row.format.toUpperCase() }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
 
@@ -172,10 +175,10 @@ onMounted(() => {
 }
 
 .report-center__table-wrap {
-  border: 1px solid rgba(125, 201, 255, 0.16);
+  border: 1px solid rgba(125, 201, 255, 0.10);
   border-radius: 18px;
   overflow: hidden;
-  background: rgba(11, 22, 40, 0.6);
+  background: rgba(8, 18, 34, 0.7);
 }
 
 .report-table-row {
@@ -233,6 +236,31 @@ onMounted(() => {
   color: #ff8c84;
 }
 
+/* 格式徽章 */
+.report-table__format-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.format-badge--pdf {
+  background: rgba(255, 123, 114, 0.12);
+  color: #e88982;
+}
+
+.format-badge--html {
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+}
+
+.format-badge--markdown {
+  background: rgba(83, 229, 200, 0.10);
+  color: #6fe8d0;
+}
+
 .report-table__actions {
   display: flex;
   gap: 4px;
@@ -249,28 +277,28 @@ onMounted(() => {
 }
 
 .report-center .el-table th.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.08) !important;
-  color: #9ad6ff !important;
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
   font-weight: 600;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
 }
 
 .report-center .el-table td.el-table__cell {
-  background-color: transparent !important;
-  color: #d9e8ff !important;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.06) !important;
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
 
 .report-center .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: rgba(255, 255, 255, 0.02) !important;
+  background-color: rgba(10, 24, 44, 0.85) !important;
 }
 
 .report-center .el-table__body tr:hover > td.el-table__cell {
-  background-color: rgba(91, 166, 255, 0.06) !important;
+  background-color: rgba(20, 44, 72, 0.9) !important;
 }
 
 .report-center .el-table__empty-text {
-  color: rgba(220, 234, 255, 0.4) !important;
+  color: rgba(155, 185, 225, 0.3) !important;
 }
 
 .report-center .el-button--primary.is-plain {

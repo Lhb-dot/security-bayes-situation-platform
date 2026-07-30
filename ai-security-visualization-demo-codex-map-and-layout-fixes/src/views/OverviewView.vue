@@ -7,8 +7,8 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import type { GlobalOverview, AlertRecord, TypeDistribution } from '@/types/security';
-import { getGlobalOverview, getAlerts } from '@/services/mockApi';
+import type { GlobalOverview, RiskEvent, TypeDistribution } from '@/types/security';
+import { getGlobalOverview, getRiskEvents } from '@/services/mockApi';
 import ScenarioCard from '@/components/common/ScenarioCard.vue';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import DonutChart from '@/components/DonutChart.vue';
@@ -19,9 +19,9 @@ const router = useRouter();
 /** 概览数据 */
 const overview = ref<GlobalOverview | null>(null);
 /** 高风险事件列表 */
-const highRiskAlerts = ref<AlertRecord[]>([]);
-/** 全部告警（用于分布统计） */
-const allAlerts = ref<AlertRecord[]>([]);
+const highRiskEvents = ref<RiskEvent[]>([]);
+/** 全部风险事件（用于分布统计） */
+const allEvents = ref<RiskEvent[]>([]);
 /** 加载状态 */
 const loading = ref(true);
 /** 错误信息 */
@@ -29,16 +29,16 @@ const error = ref('');
 
 /** 风险等级分布（用于DonutChart） */
 const riskDistribution = computed<TypeDistribution[]>(() => {
-  const counts: Record<string, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0 };
-  allAlerts.value.forEach((a) => {
-    if (counts[a.riskLevel] !== undefined) counts[a.riskLevel]++;
+  const counts: Record<string, number> = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+  allEvents.value.forEach((e) => {
+    if (counts[e.risk_level] !== undefined) counts[e.risk_level]++;
   });
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   if (total === 0) return [];
   return [
-    { label: '严重', value: Math.round((counts.CRITICAL / total) * 100), color: '#ff7b72' },
-    { label: '高危', value: Math.round((counts.HIGH / total) * 100), color: '#ffd166' },
-    { label: '中危', value: Math.round((counts.MEDIUM / total) * 100), color: '#9ad6ff' },
+    { label: '高危', value: Math.round((counts.HIGH / total) * 100), color: '#ff7b72' },
+    { label: '中危', value: Math.round((counts.MEDIUM / total) * 100), color: '#ffd166' },
+    { label: '低危', value: Math.round((counts.LOW / total) * 100), color: '#9ad6ff' },
   ];
 });
 
@@ -47,15 +47,15 @@ const loadData = async () => {
   loading.value = true;
   error.value = '';
   try {
-    const [ov, alerts] = await Promise.all([
+    const [ov, events] = await Promise.all([
       getGlobalOverview(),
-      getAlerts(),
+      getRiskEvents(),
     ]);
     overview.value = ov;
-    allAlerts.value = alerts;
-    // 筛选高危/严重级别事件，最多取 5 条
-    highRiskAlerts.value = alerts
-      .filter((a) => a.riskLevel === 'CRITICAL' || a.riskLevel === 'HIGH')
+    allEvents.value = events;
+    // 筛选高风险事件，最多取 5 条
+    highRiskEvents.value = events
+      .filter((e) => e.risk_level === 'HIGH')
       .slice(0, 5);
   } catch (err) {
     error.value = err instanceof Error ? err.message : '全局数据加载失败';
@@ -69,11 +69,18 @@ const goScenarioDashboard = (scenarioId: string) => {
   router.push({ path: `/scenarios/${scenarioId}/dashboard` });
 };
 
+/** 场景名称映射 */
+const scenarioLabel: Record<string, string> = {
+  network_security: '网络安全',
+  power_system: '电力系统',
+  flightdeck_operation: '航母甲板',
+};
+
 /** 告警等级 -> Tag 文案 */
-const alertLevelLabel: Record<string, string> = {
-  CRITICAL: '严重',
+const riskLevelLabel: Record<string, string> = {
   HIGH: '高危',
   MEDIUM: '中危',
+  LOW: '低危',
 };
 
 onMounted(() => {
@@ -183,29 +190,29 @@ onMounted(() => {
               <p class="eyebrow">High Risk Events</p>
               <h3>最近高风险事件</h3>
             </div>
-            <span class="section-tag">{{ highRiskAlerts.length }} 条</span>
+            <span class="section-tag">{{ highRiskEvents.length }} 条</span>
           </div>
           <div class="ov-events">
             <div
-              v-for="alert in highRiskAlerts"
-              :key="alert.id"
+              v-for="ev in highRiskEvents"
+              :key="ev.event_id"
               class="ov-events__item"
             >
               <div class="ov-events__left">
                 <span
                   class="risk-badge"
-                  :class="`risk-${alert.riskLevel.toLowerCase()}`"
+                  :class="`risk-${ev.risk_level.toLowerCase()}`"
                 >
-                  {{ alertLevelLabel[alert.riskLevel] ?? alert.riskLevel }}
+                  {{ riskLevelLabel[ev.risk_level] ?? ev.risk_level }}
                 </span>
                 <div>
-                  <strong>{{ alert.title }}</strong>
-                  <p>{{ alert.sourceIp }} → {{ alert.targetHost }}</p>
+                  <strong>{{ ev.description || ev.risk_type }}</strong>
+                  <p>{{ scenarioLabel[ev.scenario_id] ?? ev.scenario_id }} · {{ ev.event_id }}</p>
                 </div>
               </div>
               <div class="ov-events__right">
-                <span class="ov-events__type">{{ alert.attackType }}</span>
-                <span class="ov-events__time">{{ alert.timestamp }}</span>
+                <span class="ov-events__type">{{ ev.risk_type }}</span>
+                <span class="ov-events__time">{{ ev.occurred_at }}</span>
               </div>
             </div>
           </div>
