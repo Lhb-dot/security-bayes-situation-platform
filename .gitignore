@@ -1,0 +1,35 @@
+# ==================== Node / Frontend ====================
+node_modules/
+dist/
+.vite/
+.vite-temp/
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ==================== Environment ====================
+.env
+.env.local
+.env.*.local
+
+# ==================== Models & Data ====================
+*.pkl
+*.model
+data/
+logs/
+*.log
+
+# ==================== IDE ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==================== OS ====================
+.DS_Store
+Thumbs.db
