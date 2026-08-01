@@ -2,8 +2,8 @@ $ErrorActionPreference = "SilentlyContinue"
 $Host.UI.RawUI.WindowTitle = "Security Platform"
 
 $root    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backend = "$root\task2_algo-climber-backend"
-$frontend= "$root\ai-security-visualization-demo-codex-map-and-layout-fixes"
+$backend = "$root\backend"
+$frontend= "$root\frontend"
 $jar     = "$backend\lib\pmwnb-service.jar"
 
 $javaPid = $null; $pyPid = $null; $vuePid = $null
@@ -44,13 +44,13 @@ else     { Write-Host ":12313  FAIL" -ForegroundColor Red }
 
 # ---- Python FastAPI ----
 Write-Host "  FastAPI       " -NoNewline
-$p = Start-Process -FilePath "python" -ArgumentList "server.py" `
+$p = Start-Process -FilePath "python" -ArgumentList "-m","app.main" `
     -WorkingDirectory $backend -WindowStyle Hidden -PassThru
 if ($p) { $pyPid = $p.Id }
 $ok = $false
 $t = (Get-Date).AddSeconds(20)
 while ((Get-Date) -lt $t) {
-    try { if (Invoke-RestMethod "http://127.0.0.1:12312/api/opinion/tasks" -TimeoutSec 2) { $ok=$true; break } } catch {}
+    try { if (Invoke-RestMethod "http://127.0.0.1:12312/api/model/dataset-list" -TimeoutSec 2) { $ok=$true; break } } catch {}
     Start-Sleep 1
 }
 if ($ok) { Write-Host ":12312  OK" -ForegroundColor Green }
