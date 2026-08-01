@@ -199,18 +199,19 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* 全局网格布局，加宽右侧栏（新增） */
+/* 全局网格布局：12 列栅格，与 style.css 的 span 12/8/4 语义匹配 */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1.4fr;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-auto-rows: auto;
   gap: 20px;
   width: 100%;
 }
 
-/* 右侧图表分组父容器 */
+/* 右侧图表分组父容器（占 4 列 × 3 行，内部上下均分） */
 .right-chart-group {
   grid-row: span 3;
+  grid-column: span 4;
   display: flex;
   flex-direction: column;
   gap: 24px;

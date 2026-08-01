@@ -709,9 +709,9 @@ export interface ModelVersionRecord {
   updated_at: string;
 }
 
-/** 生成模型版本列表 */
+/** 生成模型版本列表 — 跳过无数据集的场景（航母甲板第一阶段无模型） */
 const generateModelVersions = (): ModelVersionRecord[] =>
-  SCENARIO_META.flatMap((meta) =>
+  SCENARIO_META.filter((meta) => meta.datasets.length > 0).flatMap((meta) =>
     Array.from({ length: random(2, 4) }, (_, i) => ({
       model_id: `MOD-${meta.id}-${String(i + 1).padStart(3, '0')}`,
       scenario_id: meta.id,

@@ -330,7 +330,7 @@ const isNewRoutePage = computed(() => {
       <div class="loader"></div>
       <p>正在生成威胁感知数据与可视化面板...</p>
     </section>
-    <section v-else class="state-card state-card--error">
+    <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
       <button class="ghost-button" @click="loadData">重试</button>
     </section>
