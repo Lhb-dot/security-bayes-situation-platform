@@ -112,6 +112,10 @@ router.beforeEach((to) => {
   if (!user) {
     return { path: '/login', query: { redirect: to.fullPath } };
   }
+  // 旧版大屏/告警使用的是全平台演示数据，普通用户应使用 v2 页面查看本人数据。
+  if (user.role === 'USER' && (to.path === '/dashboard' || to.path === '/alerts' || to.path.startsWith('/alerts/'))) {
+    return '/overview';
+  }
   return true;
 });
 

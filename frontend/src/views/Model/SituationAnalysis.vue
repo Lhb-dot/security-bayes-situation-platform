@@ -16,7 +16,6 @@ import DonutChart from '@/components/DonutChart.vue';
 const SCENARIOS: { id: ScenarioId; label: string }[] = [
   { id: 'network_security', label: '网络安全' },
   { id: 'power_system', label: '电力系统' },
-  { id: 'flightdeck_operation', label: '航母甲板' },
 ];
 
 /** 时间范围选项 */
@@ -97,7 +96,7 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Situation Analysis</p>
         <h2>态势分析</h2>
-        <p class="situation-page__desc">多维度风险趋势分析</p>
+        <p class="situation-page__desc">多维度风险趋势分析（航母甲板作业场景暂未接入数据集）</p>
       </div>
     </div>
 

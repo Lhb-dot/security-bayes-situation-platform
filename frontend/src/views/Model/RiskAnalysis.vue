@@ -9,8 +9,8 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { ScenarioId, Dataset, AlgorithmDefinition, ModelVersionRecord, UserAccount } from '@/types/security';
-import { getDatasetList, getAlgorithms, trainModel, getCurrentUser } from '@/services/mockApi';
+import type { ScenarioId, Dataset, DatasetVersion, AlgorithmDefinition, ModelVersionRecord, UserAccount } from '@/types/security';
+import { getDatasetList, getDatasetVersions, getAlgorithms, trainModel, getCurrentUser } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -37,6 +37,7 @@ const selectedScenario = ref<ScenarioId | ''>('');
 const datasetList = ref<Dataset[]>([]);
 const selectedDatasetId = ref<string>('');
 const selectedDatasetVersion = ref('');
+const datasetVersions = ref<DatasetVersion[]>([]);
 const algorithms = ref<AlgorithmDefinition[]>([]);
 const selectedAlgoId = ref('');
 const training = ref(false);
@@ -55,6 +56,7 @@ const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id ===
 watch(selectedScenario, async (scenario) => {
   selectedDatasetId.value = '';
   selectedDatasetVersion.value = '';
+  datasetVersions.value = [];
   trainResult.value = null;
   if (!scenario) {
     datasetList.value = [];
@@ -67,6 +69,18 @@ watch(selectedScenario, async (scenario) => {
     datasetList.value = [];
   } finally {
     loadingDatasets.value = false;
+  }
+});
+
+watch(selectedDatasetId, async (datasetId) => {
+  selectedDatasetVersion.value = '';
+  datasetVersions.value = [];
+  if (!datasetId) return;
+  try {
+    datasetVersions.value = (await getDatasetVersions(datasetId)).filter((version) => version.enabled);
+    selectedDatasetVersion.value = datasetVersions.value.at(-1)?.dataset_version ?? '';
+  } catch {
+    ElMessage.error('数据集版本加载失败');
   }
 });
 
@@ -88,7 +102,7 @@ const handleTrain = async () => {
     ElMessage.warning('请先选择业务场景');
     return;
   }
-  if (!selectedDatasetId.value) {
+  if (!selectedDatasetId.value || !selectedDatasetVersion.value) {
     ElMessage.warning('请先选择数据集版本');
     return;
   }
@@ -176,12 +190,11 @@ onMounted(async () => {
 
         <!-- 数据集版本 -->
         <div class="form-group">
-          <label class="form-label">数据集（版本）</label>
+          <label class="form-label">数据集</label>
           <select
             v-model="selectedDatasetId"
             class="form-select"
             :disabled="!selectedScenario || loadingDatasets"
-            @change="selectedDatasetVersion = datasetList.find(d => d.dataset_id === selectedDatasetId)?.dataset_version ?? ''"
           >
             <option value="" disabled>-- 请选择数据集 --</option>
             <option
@@ -189,10 +202,20 @@ onMounted(async () => {
               :key="ds.dataset_id"
               :value="ds.dataset_id"
             >
-              {{ ds.name }}（v{{ ds.dataset_version }} · {{ ds.field_count }} 字段 · {{ ds.record_count }} 样本）{{ ds.enabled ? '' : '【已停用】' }}
+              {{ ds.name }}（{{ ds.field_count }} 字段 · {{ ds.record_count }} 样本）{{ ds.enabled ? '' : '【已停用】' }}
             </option>
           </select>
-          <p class="form-hint form-hint--muted">仅展示当前场景下的数据集版本；已停用版本不能用于训练</p>
+          <p class="form-hint form-hint--muted">仅展示当前场景下的数据集；已停用版本不能用于训练</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">训练数据集版本</label>
+          <select v-model="selectedDatasetVersion" class="form-select" :disabled="!selectedDatasetId">
+            <option value="" disabled>-- 请选择版本 --</option>
+            <option v-for="version in datasetVersions" :key="version.dataset_version_id" :value="version.dataset_version">
+              {{ version.dataset_version }}（{{ version.field_count }} 字段 · {{ version.record_count }} 样本）
+            </option>
+          </select>
         </div>
 
         <!-- 算法（需求 6.6.1 五种算法注册） -->
@@ -256,7 +279,7 @@ onMounted(async () => {
         <!-- 训练按钮 -->
         <button
           class="train-btn"
-          :disabled="training || !selectedDatasetId || !selectedAlgoId"
+          :disabled="training || !selectedDatasetId || !selectedDatasetVersion || !selectedAlgoId"
           @click="handleTrain"
         >
           <span v-if="training" class="btn-spinner"></span>

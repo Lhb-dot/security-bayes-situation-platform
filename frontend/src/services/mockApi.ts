@@ -562,7 +562,10 @@ export const changeOwnPassword = async (oldPassword: string, newPassword: string
 
 /** 用户列表（不含密码） */
 export const getUserList = async (): Promise<UserAccount[]> =>
-  simulateLatency(userRecords.map(({ password: _pw, ...rest }) => rest));
+  simulateLatency((() => {
+    requireAdmin();
+    return userRecords.map(({ password: _pw, ...rest }) => rest);
+  })());
 
 /** 管理员创建普通用户账号（需求 6.2） */
 export const createUser = async (params: {
@@ -723,14 +726,17 @@ export const getDatasetList = async (scenarioId?: ScenarioId): Promise<Dataset[]
 };
 
 /** 获取数据集字段详情（当前启用版本的固定字段） */
-export const getDatasetFields = async (datasetId: string): Promise<DatasetField[]> => {
-  const v = latestDatasetVersion(datasetId);
+export const getDatasetFields = async (datasetId: string, datasetVersion?: string): Promise<DatasetField[]> => {
+  requireLogin();
+  const v = datasetVersion
+    ? datasetVersions.find((item) => item.dataset_id === datasetId && item.dataset_version === datasetVersion)
+    : latestDatasetVersion(datasetId);
   return simulateLatency(v?.fields ?? []);
 };
 
 /** 获取数据集全部版本（管理员查看） */
 export const getDatasetVersions = async (datasetId?: string): Promise<DatasetVersion[]> => {
-  requireLogin();
+  requireAdmin();
   const list = datasetId ? datasetVersions.filter((v) => v.dataset_id === datasetId) : [...datasetVersions];
   return simulateLatency(list);
 };
@@ -746,10 +752,11 @@ export const uploadDataset = async (params: {
 }): Promise<DatasetVersion> => {
   requireAdmin();
   if (datasetVersions.some((v) => v.dataset_id === params.dataset_id)) throw new Error('该数据集编码已存在');
-  if (!params.fields.some((f) => f.field_role === '分类标签')) throw new Error('必须指定一个分类标签字段');
-  if (params.fields.some((f) => f.field_name === 'class' && f.field_role === '输入特征')) {
-    /* 字段名不允许重名 */
-  }
+  if (!params.fields.length) throw new Error('至少需要一个字段');
+  if (params.fields.some((f) => !f.field_name.trim())) throw new Error('字段名不能为空');
+  if (new Set(params.fields.map((f) => f.field_name)).size !== params.fields.length) throw new Error('字段名不能重复');
+  if (params.fields.some((f) => !['int', 'float', 'string'].includes(f.field_type))) throw new Error('字段类型不合法');
+  if (params.fields.filter((f) => f.field_role === '分类标签').length !== 1) throw new Error('必须且只能指定一个分类标签字段');
   const version: DatasetVersion = {
     dataset_version_id: `${params.dataset_id}@v1`,
     dataset_id: params.dataset_id,
@@ -775,7 +782,9 @@ export const createDatasetVersion = async (datasetId: string, fields: DatasetFie
   const operator = requireAdmin();
   const old = latestDatasetVersion(datasetId);
   if (!old) throw new Error('数据集不存在');
-  if (!fields.some((f) => f.field_role === '分类标签')) throw new Error('必须指定一个分类标签字段');
+  if (!fields.length || fields.some((f) => !f.field_name.trim())) throw new Error('字段结构不完整');
+  if (new Set(fields.map((f) => f.field_name)).size !== fields.length) throw new Error('字段名不能重复');
+  if (fields.filter((f) => f.field_role === '分类标签').length !== 1) throw new Error('必须且只能指定一个分类标签字段');
   const nextNum = Number(old.dataset_version.replace('v', '')) + 1;
   const version: DatasetVersion = {
     ...old,
@@ -1011,7 +1020,9 @@ export const trainModel = async (params: {
   training_parameters: Record<string, unknown>;
 }): Promise<ModelVersionRecord & { train_time_s: number }> => {
   const operator = requireAdmin();
-  const v = latestDatasetVersion(params.dataset_id);
+  const v = datasetVersions.find((item) =>
+    item.dataset_id === params.dataset_id && item.dataset_version === params.dataset_version
+  );
   if (!v) throw new Error('数据集不存在');
   if (v.scenario_id !== params.scenario_id) throw new Error('数据集与场景不匹配，禁止跨场景训练');
   if (!v.enabled) throw new Error('该数据集版本已停用，不能用于新训练');
@@ -1188,9 +1199,10 @@ const initInferenceAndEvents = (): void => {
 };
 
 /** 过滤风险事件：普通用户强制按本人过滤，管理员查全平台（需求 5.2 访问控制 / 6.8） */
-const filterRiskEvents = (user: UserAccount, scenarioId?: ScenarioId): RiskEvent[] => {
+const filterRiskEvents = (user: UserAccount, scenarioId?: ScenarioId, userId?: string): RiskEvent[] => {
   let list = [...riskEvents];
   if (user.role === 'USER') list = list.filter((e) => e.created_by_user_id === user.user_id);
+  else if (userId) list = list.filter((e) => e.created_by_user_id === userId);
   if (scenarioId) list = list.filter((e) => e.scenario_id === scenarioId);
   return list.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
 };
@@ -1549,7 +1561,7 @@ export const generateReport = async (params: {
   const user = requireLogin();
   if (user.role === 'USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
   const meta = SCENARIO_META.find((s) => s.id === params.scenario_id);
-  const events = filterRiskEvents(user, params.scenario_id);
+  const events = filterRiskEvents(user, params.scenario_id, params.scope === 'user' ? params.target_user_id : undefined);
   const scopeLabel = params.scope === 'all' ? '全平台' : params.scope === 'user' ? `用户 ${params.target_user_id}` : '本人';
   return simulateLatency({
     report_id: `RPT-${params.scenario_id}-${String(random(100, 999))}`,

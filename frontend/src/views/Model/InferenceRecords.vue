@@ -47,9 +47,9 @@ const openFeatures = (r: InferenceRecord) => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  const [us, algos] = await Promise.all([getUserList(), getAlgorithms()]);
-  users.value = us;
+  const algos = await getAlgorithms();
   algorithms.value = algos;
+  if (isAdmin.value) users.value = await getUserList();
   await loadRecords();
 });
 </script>

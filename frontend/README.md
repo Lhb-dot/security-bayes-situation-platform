@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + TypeScript + Vite + Element Plus** 构建的多场景贝叶斯分类态势感知平台前端，面向**网络安全、电力系统、航母甲板保障作业**三个业务场景，严格对齐需求文档《用户分级v2.md》（v2.0）的 P0/P1 功能。
 
-> 当前版本数据由本地 Mock 层驱动（`src/services/mockApi.ts`），函数签名与真实后端接口一致，后续替换为真实后端时页面层无需修改。用户登录、角色鉴权、数据范围隔离等 P0 逻辑均已在 Mock 层完整模拟。
+> 当前版本数据由本地 Mock 层驱动（`src/services/mockApi.ts`）。用户登录、角色鉴权、数据范围隔离、数据集/模型版本绑定等 P0 规则已在 Mock 层模拟；正式交付时仍须由后端实现同等鉴权与持久化。
 
 ---
 
@@ -63,13 +63,13 @@
 |:-----|:-----|:-----|:-----|
 | `/login` | 用户登录 | 登录入口，含演示账号快捷登录 | 公开 |
 | `/overview` | 全局总览 | 跨场景风险指标聚合、趋势、风险事件列表（按角色过滤） | 登录 |
-| `/dashboard` | 首页大屏 | 态势感知大屏：攻击趋势、类型分布、Top 源、攻击轨迹动画 | 登录 |
+| `/dashboard` | 旧版首页大屏 | 全平台演示大屏：攻击趋势、类型分布、Top 源、攻击轨迹动画 | 仅 ADMIN |
 | `/scenarios` | 场景中心 | 场景卡片列表，含接入状态标识 | 登录 |
 | `/scenarios/:id/dashboard` | 场景大屏 | 单场景专属看板（按角色统计） | 登录 |
 | `/datasets` | 数据集中心 | 按场景筛选数据集、字段预览、版本管理（管理员上传/停用/删除） | 登录 |
 | `/inference` | 风险研判 | 已发布模型列表 → 默认推荐 → 动态字段 → 单条推理 | 登录 |
 | `/inference-records` | 推理记录 | 本人/全部推理记录，输入特征查看 | 登录 |
-| `/alerts` | 风险事件 | 统一 RiskEvent 列表（按角色过滤） | 登录 |
+| `/alerts` | 旧版告警中心 | 旧版全平台演示告警列表；v2 风险事件请在总览/场景页面查看 | 仅 ADMIN |
 | `/risk` | 模型训练 | 管理员训练页：算法参数配置 → 训练生成 DRAFT | 仅 ADMIN |
 | `/models` | 模型中心 | 模型生命周期管理：发布/下线/默认推荐 + 版本对比 | 登录（操作仅 ADMIN） |
 | `/situation` | 态势分析 | 多维度风险趋势分析（个人/全局） | 登录 |
@@ -181,13 +181,13 @@ interface ModelVersionRecord {
 | `login / logout / getCurrentUser` | `UserAccount` | 会话管理（localStorage 持久化） |
 | `getUserList / createUser / resetUserPassword / setUserStatus / changeOwnPassword` | 用户管理 | 管理员账号管理 + 本人改密 |
 | `getDatasetList(scenario?)` | `Dataset[]` | 数据集列表（普通用户仅见已发布模型相关且启用版本） |
-| `getDatasetVersions / uploadDataset / disableDatasetVersion / deleteDatasetVersion` | `DatasetVersion[]` | 数据集版本管理（需求 2.3） |
+| `getDatasetVersions / uploadDataset / disableDatasetVersion / deleteDatasetVersion` | `DatasetVersion[]` | 数据集版本管理（仅管理员；训练按指定版本绑定，需求 2.3） |
 | `getAlgorithms` | `AlgorithmDefinition[]` | 五种注册算法 |
 | `getThresholds / saveThreshold / getThresholdChangeLogs` | 阈值配置 | 按场景阈值 + 变更记录（需求 5.4.1） |
-| `trainModel(params)` | `ModelVersionRecord` | 训练 → 生成 DRAFT 模型版本 |
+| `trainModel(params)` | `ModelVersionRecord` | 按 `dataset_id + dataset_version` 训练 → 生成 DRAFT 模型版本 |
 | `getModelVersions(scenario?, dataset?)` | `ModelVersionRecord[]` | 模型列表（普通用户仅 PUBLISHED） |
 | `publishModel / offlineModel / rePublishModel / setDefaultModel` | — | 模型生命周期操作（需求 6.7） |
-| `executeInference(params)` | `InferenceResult` | 单条推理 → 生成推理记录 + 风险类生成 RiskEvent |
+| `executeInference(params)` | `InferenceResult` | 按模型绑定的数据集版本校验字段并推理 → 生成推理记录 + 风险类生成 RiskEvent |
 | `getInferenceRecords(scenario?, userId?)` | `InferenceRecord[]` | 推理记录（按角色/用户过滤） |
 | `getRiskEvents(scenario?)` | `RiskEvent[]` | 风险事件（按角色过滤） |
 | `getScenarioList / getScenarioDetail / getGlobalOverview / getSituationData` | 态势数据 | 个人/全局态势（按角色统计） |
@@ -351,6 +351,11 @@ vue-tsc -b && vite build
 ```
 
 当前版本通过 `vue-tsc -b && vite build` 全量类型检查 + 构建，**零类型错误**。
+
+## 更新记录
+
+- [前端更新（8.5前端修补）.md](前端更新（8.5前端修补）.md)：用户分级 v2 审查后的权限隔离、数据集版本绑定、推理字段版本、报告统计与航母场景提示修补。
+- [前端更新（8.4对齐用户分级）.md](前端更新（8.4对齐用户分级）.md)：v2 P0/P1 功能的初始实现记录。
 
 ---
 

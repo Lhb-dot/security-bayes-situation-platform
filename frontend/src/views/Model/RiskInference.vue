@@ -6,9 +6,9 @@
  * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
  * → 执行单条样本推理 → 风险类结果转换为统一 RiskEvent
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord, AlgorithmDefinition } from '@/types/security';
-import { getDatasetList, getModelVersions, getDatasetFields, executeInference } from '@/services/mockApi';
+import { getDatasetList, getModelVersions, getDatasetFields, executeInference, getAlgorithms } from '@/services/mockApi';
 import type { InferenceResult } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
@@ -95,7 +95,7 @@ watch(selectedModelId, async (modelId) => {
   const model = publishedModels.value.find((m) => m.model_version_id === modelId);
   if (!model) return;
   try {
-    const allFields = await getDatasetFields(model.dataset_id);
+    const allFields = await getDatasetFields(model.dataset_id, model.dataset_version);
     inputFields.value = allFields.filter((f) => f.field_role === '输入特征');
     const init: Record<string, string | number> = {};
     for (const f of inputFields.value) {
@@ -138,6 +138,10 @@ const handleInfer = async () => {
     inferring.value = false;
   }
 };
+
+onMounted(async () => {
+  algorithms.value = await getAlgorithms();
+});
 </script>
 
 <template>

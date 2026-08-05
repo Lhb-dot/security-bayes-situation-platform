@@ -111,7 +111,7 @@ const loadUsers = async () => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  await loadUsers();
+  if (isAdmin()) await loadUsers();
 });
 </script>
 

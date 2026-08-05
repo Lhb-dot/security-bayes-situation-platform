@@ -248,6 +248,7 @@ const isNewRoutePage = computed(() => {
       <div class="topbar__actions">
         <nav class="nav-tabs">
           <button
+            v-if="isAdmin"
             class="nav-tabs__item"
             :class="{ 'is-active': isDashboardPage }"
             @click="goDashboard"
@@ -276,6 +277,7 @@ const isNewRoutePage = computed(() => {
             数据集中心
           </button>
           <button
+            v-if="isAdmin"
             class="nav-tabs__item"
             :class="{ 'is-active': isAlertsListPage || isAlertDetailPage }"
             @click="goAlertsList"
