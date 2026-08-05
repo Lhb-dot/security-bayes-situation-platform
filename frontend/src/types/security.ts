@@ -164,6 +164,8 @@ export interface DatasetField {
   description: string;
   sample_value: string;
   nullable: boolean;
+  /** 枚举字段值域（需求 3.1.5：枚举字段必须按当前数据集定义的值域进行校验） */
+  enum_values?: string[];
 }
 
 /** 数据集 */
@@ -177,9 +179,33 @@ export interface Dataset {
   fields: DatasetField[];
   created_at: string;
   data_format: 'csv' | 'arff' | 'json';
+  // ========== v2.0：数据集版本与状态（需求 2.3） ==========
+  dataset_version: string;   // 最新版本号，如 v1
+  uploaded_by: string;       // 上传人账号
+  uploaded_at: string;       // 上传时间
+  enabled: boolean;          // 启用状态
+  referenced: boolean;       // 是否已被模型版本引用（引用后只能停用，不能物理删除）
 }
 
-/** 模型版本记录 */
+/** 数据集版本（需求 2.3.4） */
+export interface DatasetVersion {
+  dataset_version_id: string;   // 版本唯一编号
+  dataset_id: string;           // 所属数据集编码
+  dataset_version: string;      // 版本号，如 v1
+  name: string;
+  scenario_id: ScenarioId;
+  data_format: Dataset['data_format'];
+  file_path: string;
+  record_count: number;
+  field_count: number;
+  fields: DatasetField[];
+  uploaded_by: string;
+  uploaded_at: string;
+  enabled: boolean;             // 启用状态（停用后不得用于新训练）
+  referenced: boolean;          // 是否被模型版本引用
+}
+
+/** 模型版本记录（需求 6.7.1 最小信息） */
 export interface ModelVersion {
   model_id: string;
   scenario_id: ScenarioId;
@@ -194,11 +220,46 @@ export interface ModelVersion {
   created_at: string;
 }
 
-/** 风险事件（统一封装，适配三场景 — 符合需求 5.2 最小字段结构） */
-export interface RiskEvent {
-  event_id: string;
+/** 模型生命周期状态（需求 6.7.2） */
+export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE';
+
+/** 模型评估指标（需求 6.4 统一计算规范） */
+export interface EvaluationMetrics {
+  accuracy: number;
+  recall: number;
+  precision: number;
+  specificity: number;
+  f1: number;
+  g_mean: number;
+}
+
+/** 模型版本（v2.0 生命周期模型，需求 6.7.1） */
+export interface ModelVersionRecord {
+  model_version_id: string;
   scenario_id: ScenarioId;
   dataset_id: string;
+  dataset_version: string;
+  algorithm_id: string;
+  training_parameters: Record<string, unknown>;
+  evaluation_metrics: EvaluationMetrics;
+  train_time_s: number;
+  trained_by: string;          // 发起训练的管理员账号
+  trained_at: string;
+  status: ModelStatus;
+  published_by?: string;       // 发布操作管理员
+  published_at?: string;
+  is_default: boolean;         // 是否为"场景＋数据集"默认推荐模型
+}
+
+/** 风险事件（统一封装，适配三场景 — 符合需求 5.2 最小字段结构，v2.0 补齐必填字段） */
+export interface RiskEvent {
+  event_id: string;
+  inference_record_id: string;      // 来源推理记录编号（需求 5.2）
+  created_by_user_id: string;       // 发起推理的账号编号（用于访问控制）
+  scenario_id: ScenarioId;
+  dataset_id: string;
+  dataset_version: string;          // 来源数据集版本
+  algorithm_id: string;             // 来源算法
   model_version_id: string;
   original_label: string;
   risk_type: string;
@@ -231,4 +292,89 @@ export interface Report {
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';
   file_url?: string;
+}
+
+// ===================== v2.0 用户与权限（需求 6.5） =====================
+
+/** 角色：第一阶段只设 ADMIN 与 USER 两种 */
+export type UserRole = 'ADMIN' | 'USER';
+
+/** 用户账号 */
+export interface UserAccount {
+  user_id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  status: 'active' | 'disabled';
+  created_at: string;
+  created_by: string;
+  last_login_at?: string;
+}
+
+// ===================== v2.0 算法注册（需求 6.6） =====================
+
+/** 算法公开训练参数定义 */
+export interface AlgorithmParamDef {
+  param_name: string;                                     // 参数名
+  label: string;                                          // 显示名称
+  type: 'number' | 'string' | 'boolean' | 'select';
+  default_value: number | string | boolean;
+  min?: number;                                           // number 类型范围
+  max?: number;
+  step?: number;
+  options?: { value: string; label: string }[];           // select 类型可选项
+  description: string;
+}
+
+/** 算法注册定义（需求 6.6.2 算法接入规则） */
+export interface AlgorithmDefinition {
+  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB
+  display_name: string;
+  available: boolean;                                     // 可用状态
+  input_constraints: string;                              // 支持的输入类型或数据约束
+  description: string;
+  params: AlgorithmParamDef[];                            // 公开训练参数定义
+}
+
+// ===================== v2.0 推理记录（需求 6.2 / 6.8） =====================
+
+/** 推理记录 */
+export interface InferenceRecord {
+  inference_record_id: string;
+  user_id: string;                                        // 发起推理的账号（访问控制用）
+  scenario_id: ScenarioId;
+  dataset_id: string;
+  dataset_version: string;
+  algorithm_id: string;
+  model_version_id: string;
+  input_features: Record<string, unknown>;
+  original_label: string;                                 // 数据集原始预测标签
+  risk_type: string;                                      // 风险类为映射后的统一类型，正常类为空
+  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';                  // 正常类为 LOW 占位
+  risk_score: number;                                     // 模型对风险类的输出概率
+  is_risk: boolean;                                       // 是否为风险类
+  occurred_at: string;
+}
+
+// ===================== v2.0 风险阈值配置（需求 5.4.1） =====================
+
+/** 按场景风险阈值配置 */
+export interface ThresholdConfig {
+  scenario_id: ScenarioId;
+  medium_threshold: number;
+  high_threshold: number;
+  updated_by: string;                                     // 最后修改管理员
+  updated_at: string;
+}
+
+/** 阈值变更记录（需求 5.4.1.5） */
+export interface ThresholdChangeLog {
+  log_id: string;
+  scenario_id: ScenarioId;
+  operator_id: string;                                    // 管理员账号ID
+  changed_at: string;
+  old_medium_threshold: number;
+  old_high_threshold: number;
+  new_medium_threshold: number;
+  new_high_threshold: number;
 }

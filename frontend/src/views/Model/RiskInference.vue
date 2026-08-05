@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * RiskInference - 风险研判页面（动态输入字段版）
+ * RiskInference - 风险研判（普通用户模型使用闭环，需求 6.3.2 / 6.7.4 / 6.7.5）
  *
- * 左侧：选择场景 → 选择数据集 → 根据数据集固定字段生成输入项
- * 右侧：推理结果展示
+ * 选择场景 → 选择数据集 → 展示该范围已发布模型列表（含评估指标）
+ * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
+ * → 执行单条样本推理 → 风险类结果转换为统一 RiskEvent
  */
-import { ref, watch } from 'vue';
-import type { ScenarioId, Dataset, DatasetField } from '@/types/security';
-import { getDatasetList, getDatasetFields, getInferenceResult } from '@/services/mockApi';
+import { computed, ref, watch } from 'vue';
+import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord, AlgorithmDefinition } from '@/types/security';
+import { getDatasetList, getModelVersions, getDatasetFields, executeInference } from '@/services/mockApi';
 import type { InferenceResult } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
@@ -17,29 +18,32 @@ const scenarioOptions: { value: ScenarioId; label: string }[] = [
   { value: 'power_system', label: '电力系统' },
 ];
 
-/** 当前选中的场景 */
 const selectedScenario = ref<ScenarioId | ''>('');
-
-/** 数据集列表 */
 const datasetList = ref<Dataset[]>([]);
-
-/** 当前选中的数据集ID */
 const selectedDatasetId = ref<string>('');
-
-/** 当前数据集的字段列表（不含标签字段） */
-const inputFields = ref<DatasetField[]>([]);
-
-/** 输入数据（动态 key-value） */
-const inputData = ref<Record<string, string | number>>({});
-
-const inferResult = ref<InferenceResult | null>(null);
-const inferring = ref(false);
-const hasInferred = ref(false);
 const loadingDatasets = ref(false);
 
-/** 场景切换 -> 加载数据集 */
+/** 当前范围的已发布模型（普通用户仅可见 PUBLISHED） */
+const publishedModels = ref<ModelVersionRecord[]>([]);
+const loadingModels = ref(false);
+const selectedModelId = ref('');
+
+const algorithms = ref<AlgorithmDefinition[]>([]);
+const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
+
+const inputFields = ref<DatasetField[]>([]);
+const inputData = ref<Record<string, string | number>>({});
+const inferResult = ref<InferenceResult | null>(null);
+const hasInferred = ref(false);
+const inferring = ref(false);
+
+const selectedModel = computed(() => publishedModels.value.find((m) => m.model_version_id === selectedModelId.value));
+
+// ===================== 场景切换 =====================
 watch(selectedScenario, async (scenario) => {
   selectedDatasetId.value = '';
+  publishedModels.value = [];
+  selectedModelId.value = '';
   inputFields.value = [];
   inputData.value = {};
   inferResult.value = null;
@@ -58,25 +62,44 @@ watch(selectedScenario, async (scenario) => {
   }
 });
 
-/** 数据集切换 -> 加载字段 */
+// ===================== 数据集切换 → 加载已发布模型 =====================
 watch(selectedDatasetId, async (datasetId) => {
-  inputData.value = {};
+  publishedModels.value = [];
+  selectedModelId.value = '';
   inputFields.value = [];
+  inputData.value = {};
   inferResult.value = null;
   hasInferred.value = false;
   if (!datasetId) return;
+  loadingModels.value = true;
   try {
-    const allFields = await getDatasetFields(datasetId);
-    // 只保留输入特征（排除分类标签字段）
+    const all = await getModelVersions(selectedScenario.value || undefined, datasetId);
+    publishedModels.value = all.filter((m) => m.status === 'PUBLISHED');
+    // 自动选中默认推荐模型（需求 6.7.4.3）；无默认时提示手动选择（需求 6.7.4.6）
+    const def = publishedModels.value.find((m) => m.is_default);
+    if (def) {
+      selectedModelId.value = def.model_version_id;
+    }
+  } finally {
+    loadingModels.value = false;
+  }
+});
+
+// ===================== 模型切换 → 加载绑定数据集字段 =====================
+watch(selectedModelId, async (modelId) => {
+  inputFields.value = [];
+  inputData.value = {};
+  inferResult.value = null;
+  hasInferred.value = false;
+  if (!modelId) return;
+  const model = publishedModels.value.find((m) => m.model_version_id === modelId);
+  if (!model) return;
+  try {
+    const allFields = await getDatasetFields(model.dataset_id);
     inputFields.value = allFields.filter((f) => f.field_role === '输入特征');
-    // 初始化输入数据：数值型给默认0，字符串给空
     const init: Record<string, string | number> = {};
     for (const f of inputFields.value) {
-      if (f.field_type === 'string') {
-        init[f.field_name] = '';
-      } else {
-        init[f.field_name] = 0;
-      }
+      init[f.field_name] = f.field_type === 'string' ? '' : 0;
     }
     inputData.value = init;
   } catch {
@@ -84,33 +107,33 @@ watch(selectedDatasetId, async (datasetId) => {
   }
 });
 
-/** 执行推理 */
+// ===================== 执行推理 =====================
 const handleInfer = async () => {
-  if (!selectedScenario.value) {
-    ElMessage.warning('请先选择业务场景');
+  if (!selectedModelId.value) {
+    ElMessage.warning('请先选择一个已发布模型');
     return;
   }
-  if (!selectedDatasetId.value) {
-    ElMessage.warning('请先选择数据集');
-    return;
-  }
-  // 检查必填字段
   for (const f of inputFields.value) {
     if (f.field_type === 'string' && !inputData.value[f.field_name]) {
-      ElMessage.warning(`请输入${f.description || f.field_name}`);
+      ElMessage.warning(`请输入 ${f.description || f.field_name}`);
       return;
     }
   }
-
   inferring.value = true;
   inferResult.value = null;
   hasInferred.value = false;
   try {
-    const result = await getInferenceResult({ ...inputData.value });
+    const result = await executeInference({
+      model_version_id: selectedModelId.value,
+      input_features: { ...inputData.value },
+    });
     inferResult.value = result;
     hasInferred.value = true;
-  } catch {
-    ElMessage.error('推理请求失败');
+    if (result.is_risk) {
+      ElMessage.success(`检测到风险，已生成风险事件 ${result.generated_event_id ?? ''}，可在「推理记录 / 告警中心」查看`);
+    }
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '推理请求失败');
   } finally {
     inferring.value = false;
   }
@@ -123,7 +146,7 @@ const handleInfer = async () => {
       <div>
         <p class="eyebrow">Risk Inference</p>
         <h2>风险研判</h2>
-        <p class="inference-page__desc">选择场景和数据集，使用对应固定字段执行实时风险推理</p>
+        <p class="inference-page__desc">选择已发布模型，按模型绑定数据集字段执行单条样本推理</p>
       </div>
     </div>
 
@@ -164,8 +187,48 @@ const handleInfer = async () => {
           </select>
         </div>
 
+        <!-- 已发布模型列表（需求 6.7.5.3） -->
+        <div v-if="selectedDatasetId" class="form-group">
+          <label class="form-label">已发布模型（默认选中推荐模型，可改选）</label>
+          <div v-if="loadingModels" class="inference-placeholder"><p>正在加载模型...</p></div>
+          <div v-else-if="publishedModels.length === 0" class="no-model-tip">
+            暂无可用模型：该范围下管理员尚未发布模型，请等待管理员发布后重试
+          </div>
+          <div v-else class="model-options">
+            <label
+              v-for="m in publishedModels"
+              :key="m.model_version_id"
+              class="model-option"
+              :class="{ 'is-selected': selectedModelId === m.model_version_id }"
+            >
+              <input
+                v-model="selectedModelId"
+                type="radio"
+                :value="m.model_version_id"
+                class="model-option__radio"
+              />
+              <div class="model-option__body">
+                <div class="model-option__head">
+                  <span class="model-option__id">{{ m.model_version_id }}</span>
+                  <span v-if="m.is_default" class="model-option__default">默认推荐</span>
+                </div>
+                <div class="model-option__algo">{{ algoName(m.algorithm_id) }}</div>
+                <div class="model-option__metrics">
+                  <span>Acc {{ (m.evaluation_metrics.accuracy * 100).toFixed(1) }}%</span>
+                  <span>Rec {{ (m.evaluation_metrics.recall * 100).toFixed(1) }}%</span>
+                  <span>F1 {{ (m.evaluation_metrics.f1 * 100).toFixed(1) }}%</span>
+                  <span>G-mean {{ (m.evaluation_metrics.g_mean * 100).toFixed(1) }}%</span>
+                </div>
+              </div>
+            </label>
+            <p v-if="publishedModels.length > 0 && !selectedModelId" class="no-model-tip">
+              当前范围暂无默认推荐模型，请手动选择一个已发布模型
+            </p>
+          </div>
+        </div>
+
         <!-- 动态输入字段 -->
-        <div v-if="inputFields.length > 0" class="dynamic-fields">
+        <div v-if="selectedModel && inputFields.length > 0" class="dynamic-fields">
           <div class="form-group" v-for="field in inputFields" :key="field.field_name">
             <label class="form-label">
               {{ field.field_name }}
@@ -188,6 +251,14 @@ const handleInfer = async () => {
               class="form-input"
               :placeholder="field.sample_value"
             />
+            <select
+              v-else-if="field.enum_values && field.enum_values.length > 0"
+              v-model="inputData[field.field_name]"
+              class="form-input"
+            >
+              <option value="" disabled>-- 请选择 --</option>
+              <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
+            </select>
             <input
               v-else
               v-model="inputData[field.field_name]"
@@ -207,9 +278,8 @@ const handleInfer = async () => {
           </button>
         </div>
 
-        <!-- 无字段提示 -->
-        <div v-else-if="selectedDatasetId && inputFields.length === 0" class="inference-placeholder">
-          <p>该数据集无可用的输入特征字段</p>
+        <div v-else-if="selectedDatasetId && publishedModels.length === 0" class="inference-placeholder">
+          <p>该范围暂无已发布模型，暂不可执行推理</p>
         </div>
       </section>
 
@@ -224,40 +294,49 @@ const handleInfer = async () => {
 
         <div v-if="!hasInferred" class="inference-placeholder">
           <div class="inference-placeholder__icon">🔍</div>
-          <p>选择数据集并输入特征后点击「执行风险推理」</p>
+          <p>选择已发布模型并输入特征后点击「执行风险推理」</p>
         </div>
 
         <div v-else-if="inferResult" class="inference-result__content">
           <div class="result-item result-item--level">
-            <span class="result-item__label">风险等级</span>
+            <span class="result-item__label">分类结果</span>
             <span
               class="result-item__value result-level-badge"
               :class="`level--${inferResult.risk_level}`"
             >
-              {{ inferResult.risk_level === 'HIGH' ? '高危' : inferResult.risk_level === 'MEDIUM' ? '中危' : '低危' }}
+              {{ inferResult.is_risk ? '风险类' : '正常类' }}
             </span>
           </div>
-
+          <div class="result-item">
+            <span class="result-item__label">风险等级</span>
+            <span class="result-item__value">
+              {{ inferResult.risk_level === 'HIGH' ? '高' : inferResult.risk_level === 'MEDIUM' ? '中' : '低' }}
+            </span>
+          </div>
           <div class="result-item">
             <span class="result-item__label">风险概率</span>
             <span class="result-item__value result-item__value--num">
               {{ (inferResult.risk_probability * 100).toFixed(1) }}%
             </span>
           </div>
-
           <div class="result-item">
             <span class="result-item__label">原始预测标签</span>
             <span class="result-item__value">{{ inferResult.original_label }}</span>
           </div>
-
+          <div class="result-item">
+            <span class="result-item__label">风险类型</span>
+            <span class="result-item__value">{{ inferResult.risk_type || '—' }}</span>
+          </div>
           <div class="result-item">
             <span class="result-item__label">推荐措施</span>
             <span class="result-item__value">{{ inferResult.recommendation }}</span>
           </div>
-
           <div class="result-item">
             <span class="result-item__label">使用模型</span>
             <span class="result-item__value">{{ inferResult.model_used }}</span>
+          </div>
+          <div v-if="inferResult.is_risk" class="event-tip">
+            已生成风险事件：{{ inferResult.generated_event_id }}（状态：待处置）
           </div>
         </div>
       </section>
@@ -392,6 +471,88 @@ select.form-input option {
   color: #e8f1ff;
 }
 
+/* 模型选项列表 */
+.model-options {
+  display: grid;
+  gap: 10px;
+}
+
+.model-option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 201, 255, 0.15);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.model-option:hover {
+  border-color: rgba(91, 166, 255, 0.4);
+}
+
+.model-option.is-selected {
+  border-color: rgba(91, 166, 255, 0.65);
+  background: rgba(91, 166, 255, 0.08);
+}
+
+.model-option__radio {
+  margin-top: 4px;
+  accent-color: #5ba6ff;
+}
+
+.model-option__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.model-option__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-option__id {
+  font-weight: 700;
+  color: #e8f1ff;
+  font-size: 0.92rem;
+}
+
+.model-option__default {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(255, 209, 102, 0.16);
+  color: #ffd166;
+  font-size: 0.74rem;
+}
+
+.model-option__algo {
+  font-size: 0.8rem;
+  color: rgba(154, 214, 255, 0.8);
+}
+
+.model-option__metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  color: rgba(220, 234, 255, 0.55);
+}
+
+.no-model-tip {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 209, 102, 0.08);
+  border: 1px solid rgba(255, 209, 102, 0.22);
+  color: rgba(255, 209, 102, 0.9);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
 .infer-btn {
   padding: 12px 24px;
   border: none;
@@ -422,7 +583,7 @@ select.form-input option {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255,255,255,0.3);
+  border: 2px solid rgba(255, 255, 255, 0.3);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
@@ -486,12 +647,25 @@ select.form-input option {
   color: #53e5c8;
 }
 
+.event-tip {
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(255, 123, 114, 0.08);
+  border: 1px solid rgba(255, 123, 114, 0.22);
+  color: #ff8a83;
+  font-size: 0.85rem;
+}
+
 .inference-placeholder {
   display: grid;
   place-items: center;
   gap: 16px;
-  padding: 60px 0;
+  padding: 40px 0;
   color: rgba(220, 234, 255, 0.4);
+}
+
+.inference-placeholder p {
+  margin: 0;
 }
 
 .inference-placeholder__icon {

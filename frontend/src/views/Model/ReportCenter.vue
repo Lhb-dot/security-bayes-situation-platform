@@ -5,14 +5,18 @@
  * 报告列表：名称、场景、创建时间、状态
  * 操作：查看、下载、重新生成
  */
-import { onMounted, ref } from 'vue';
-import type { Report } from '@/types/security';
-import { getReportList } from '@/services/mockApi';
+import { computed, onMounted, ref } from 'vue';
+import type { Report, ScenarioId, UserAccount } from '@/types/security';
+import { getReportList, generateReport, getCurrentUser, getUserList } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
 const reports = ref<Report[]>([]);
 const loading = ref(true);
 const error = ref('');
+const currentUser = ref<UserAccount | null>(null);
+const users = ref<UserAccount[]>([]);
+
+const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
 const loadReports = async () => {
   loading.value = true;
@@ -30,16 +34,87 @@ const handleView = (report: Report) => {
   ElMessage.info(`查看报告：${report.title}`);
 };
 
+/** 导出报告：生成 Markdown 文本下载（需求 6.2 P1 支持导出） */
 const handleDownload = (report: Report) => {
-  if (report.file_url) {
-    ElMessage.success(`正在下载：${report.title}`);
-  } else {
-    ElMessage.info('该报告暂无下载文件');
+  const content = [
+    `# ${report.title}`,
+    '',
+    `- 场景：${scenarioLabel[report.scenario_id] ?? report.scenario_id}`,
+    `- 生成时间：${report.created_at}`,
+    `- 格式：${formatLabel[report.format] ?? report.format}`,
+    '',
+    '## 摘要',
+    '',
+    report.summary,
+    '',
+    '---',
+    '由多场景贝叶斯分类态势感知系统自动生成',
+  ].join('\n');
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${report.report_id}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  ElMessage.success(`已导出报告：${report.title}`);
+};
+
+/** 重新生成报告（基于当前用户数据范围） */
+const handleRegenerate = async (report: Report) => {
+  try {
+    await generateReport({
+      scenario_id: report.scenario_id,
+      title: report.title,
+      scope: isAdmin.value ? 'all' : 'self',
+    });
+    ElMessage.success(`已重新生成报告：${report.title}`);
+    await loadReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
   }
 };
 
-const handleRegenerate = async (report: Report) => {
-  ElMessage.success(`已重新生成报告：${report.title}`);
+// ===================== 生成报告（需求 6.2 P1） =====================
+const genVisible = ref(false);
+const genForm = ref({
+  title: '',
+  scenario_id: '' as ScenarioId | '',
+  scope: 'self' as 'self' | 'all' | 'user',
+  target_user_id: '',
+});
+
+const openGenerate = () => {
+  genForm.value = { title: '', scenario_id: '', scope: isAdmin.value ? 'all' : 'self', target_user_id: '' };
+  genVisible.value = true;
+};
+
+const submitGenerate = async () => {
+  if (!genForm.value.title.trim()) {
+    ElMessage.warning('请填写报告标题');
+    return;
+  }
+  if (!genForm.value.scenario_id) {
+    ElMessage.warning('请选择报告场景');
+    return;
+  }
+  if (genForm.value.scope === 'user' && !genForm.value.target_user_id) {
+    ElMessage.warning('请选择目标用户');
+    return;
+  }
+  try {
+    const created = await generateReport({
+      scenario_id: genForm.value.scenario_id as ScenarioId,
+      title: genForm.value.title.trim(),
+      scope: genForm.value.scope,
+      target_user_id: genForm.value.target_user_id || undefined,
+    });
+    ElMessage.success(`报告生成成功：${created.report_id}`);
+    genVisible.value = false;
+    await loadReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '生成失败');
+  }
 };
 
 const statusLabel: Record<string, string> = {
@@ -60,8 +135,12 @@ const formatLabel: Record<string, string> = {
   pdf: 'PDF',
 };
 
-onMounted(() => {
-  loadReports();
+onMounted(async () => {
+  currentUser.value = getCurrentUser();
+  if (isAdmin.value) {
+    users.value = await getUserList();
+  }
+  await loadReports();
 });
 </script>
 
@@ -71,8 +150,11 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Report Center</p>
         <h2>报告中心</h2>
-        <p class="report-center__desc">态势报告生成与下载管理</p>
+        <p class="report-center__desc">
+          {{ isAdmin ? '可基于全平台或指定用户数据生成报告并导出' : '仅可基于本人数据生成报告并导出' }}
+        </p>
       </div>
+      <button class="gen-btn" @click="openGenerate">+ 生成报告</button>
     </div>
 
     <!-- 加载状态 -->
@@ -145,6 +227,49 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+    </div>
+
+    <!-- 生成报告弹窗 -->
+    <div v-if="genVisible" class="modal-mask" @click.self="genVisible = false">
+      <div class="modal-card">
+        <div class="modal-card__head">
+          <h3>生成态势报告</h3>
+          <button class="modal-close" @click="genVisible = false">✕</button>
+        </div>
+        <div class="modal-card__body">
+          <div class="gen-field">
+            <label class="gen-field__label">报告标题<span class="required">*</span></label>
+            <input v-model.trim="genForm.title" class="gen-field__input" placeholder="如：网络安全月度态势报告" />
+          </div>
+          <div class="gen-field">
+            <label class="gen-field__label">报告场景<span class="required">*</span></label>
+            <select v-model="genForm.scenario_id" class="gen-field__input">
+              <option value="" disabled>-- 请选择场景 --</option>
+              <option value="network_security">网络安全</option>
+              <option value="power_system">电力系统</option>
+            </select>
+          </div>
+          <div class="gen-field">
+            <label class="gen-field__label">数据范围</label>
+            <select v-model="genForm.scope" class="gen-field__input" :disabled="!isAdmin">
+              <option value="self">本人数据</option>
+              <option v-if="isAdmin" value="all">全平台数据</option>
+              <option v-if="isAdmin" value="user">指定用户数据</option>
+            </select>
+          </div>
+          <div v-if="isAdmin && genForm.scope === 'user'" class="gen-field">
+            <label class="gen-field__label">目标用户<span class="required">*</span></label>
+            <select v-model="genForm.target_user_id" class="gen-field__input">
+              <option value="" disabled>-- 请选择用户 --</option>
+              <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-card__foot">
+          <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
+          <button class="gen-btn" @click="submitGenerate">生成报告</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -265,6 +390,125 @@ onMounted(() => {
   display: flex;
   gap: 4px;
   justify-content: center;
+}
+
+/* 生成按钮 */
+.gen-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.gen-btn:hover {
+  opacity: 0.9;
+}
+
+.gen-btn--ghost {
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
+  border: 1px solid rgba(125, 201, 255, 0.25);
+}
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(3, 8, 16, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-card {
+  width: 460px;
+  max-width: calc(100vw - 40px);
+  border-radius: 14px;
+  border: 1px solid rgba(125, 201, 255, 0.22);
+  background: linear-gradient(160deg, rgba(13, 26, 46, 0.96), rgba(8, 17, 31, 0.98));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
+}
+
+.modal-card__head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.modal-close {
+  border: none;
+  background: transparent;
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.modal-card__body {
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.modal-card__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
+}
+
+.gen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gen-field__label {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.gen-field__label .required {
+  color: #ff7b72;
+  margin-left: 2px;
+}
+
+.gen-field__input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.7);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  outline: none;
+}
+
+.gen-field__input:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.gen-field__input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gen-field__input option {
+  background: #0b1628;
+  color: #e8f1ff;
 }
 </style>
 

@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
+import { getCurrentUser } from '@/services/mockApi';
 
 // 仪表盘大屏
 import DashboardView from '@/views/Dashboard/DashboardView.vue';
@@ -9,6 +10,11 @@ import AlertDetailView from '@/views/Alert/AlertDetailView.vue';
 import RiskAnalysis from '@/views/Model/RiskAnalysis.vue';
 
 const routes = [
+  {
+    path: '/login',
+    name: '登录',
+    component: () => import('@/views/Login.vue'),
+  },
   {
     path: '/',
     redirect: '/overview',
@@ -65,6 +71,11 @@ const routes = [
     component: () => import('@/views/Model/RiskInference.vue'),
   },
   {
+    path: '/inference-records',
+    name: '推理记录',
+    component: () => import('@/views/Model/InferenceRecords.vue'),
+  },
+  {
     path: '/situation',
     name: 'SituationAnalysis',
     component: () => import('@/views/Model/SituationAnalysis.vue'),
@@ -73,6 +84,11 @@ const routes = [
     path: '/reports',
     name: 'ReportCenter',
     component: () => import('@/views/Model/ReportCenter.vue'),
+  },
+  {
+    path: '/users',
+    name: '用户管理',
+    component: () => import('@/views/Model/UserManagement.vue'),
   },
   {
     path: '/settings',
@@ -84,6 +100,19 @@ const routes = [
 const router = createRouter({
   history: createWebHashHistory(),
   routes,
+});
+
+// ===================== 登录守卫（需求 1.1.1：未登录不得访问业务页面） =====================
+router.beforeEach((to) => {
+  const user = getCurrentUser();
+  if (to.path === '/login') {
+    // 已登录访问登录页 → 直接进入全局总览
+    return user ? '/overview' : true;
+  }
+  if (!user) {
+    return { path: '/login', query: { redirect: to.fullPath } };
+  }
+  return true;
 });
 
 export default router;
