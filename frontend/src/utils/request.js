@@ -9,8 +9,13 @@ const service = axios.create({
   },
 });
 
-// 请求拦截器：可后续统一加token、请求头
+// 请求拦截器：统一携带登录凭证（需求 1.1.1 未登录用户不得访问业务接口）
+// 会话 key 与 mockApi 保持一致（SESSION_KEY = 'bayes_session_user_id'）
 service.interceptors.request.use((config) => {
+  const userId = window.localStorage.getItem('bayes_session_user_id');
+  if (userId) {
+    config.headers['X-User-Id'] = userId;
+  }
   return config;
 });
 

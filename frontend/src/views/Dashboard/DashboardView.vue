@@ -49,7 +49,6 @@ onMounted(async () => {
       attackTypes: res.data.attack_type,
       sourceMap: res.data.map_points,
       topSourceIps: res.data.top_ip_rank,
-      model_metric: res.data.model_metric,
     };
   } catch (err) {
     console.error('获取贝叶斯态势数据失败，使用默认模拟数据', err);
@@ -161,7 +160,7 @@ onMounted(async () => {
           <h3>攻击协议分布</h3>
         </div>
       </div>
-      <DonutChart :items="snapshot.protocolDistribution" />
+      <DonutChart :items="snapshot.protocolDistribution" title="协议类型" />
     </section>
 
     <section class="card dashboard-span-4">
@@ -200,18 +199,19 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* 全局网格布局，加宽右侧栏（新增） */
+/* 全局网格布局：12 列栅格，与 style.css 的 span 12/8/4 语义匹配 */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1.4fr;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-auto-rows: auto;
   gap: 20px;
   width: 100%;
 }
 
-/* 右侧图表分组父容器 */
+/* 右侧图表分组父容器（占 4 列 × 3 行，内部上下均分） */
 .right-chart-group {
   grid-row: span 3;
+  grid-column: span 4;
   display: flex;
   flex-direction: column;
   gap: 24px;

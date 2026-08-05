@@ -23,6 +23,11 @@ data/
 logs/
 *.log
 
+# ==================== Project docs (local only) ====================
+.claude/
+requirements-analysis.md
+项目要求.md
+
 # ==================== IDE ====================
 .vscode/
 .idea/
