@@ -1,0 +1,27 @@
+# 开发环境数据库：PostgreSQL 16（唯一数据库）
+# 启动：docker compose up -d
+# 停止：docker compose down（数据保留在卷中，再次 up -d 数据仍在）
+# 清除数据：docker compose down -v
+#
+# 连接串：postgresql+psycopg2://situation:situation_dev_password@127.0.0.1:5432/situation_platform
+# 对应后端配置：backend/app/.env 中的 DATABASE_URL（本地开发可省略，db.py 自带默认值）
+services:
+  db:
+    image: postgres:16
+    container_name: situation-platform-db
+    environment:
+      POSTGRES_DB: situation_platform
+      POSTGRES_USER: situation
+      POSTGRES_PASSWORD: situation_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U situation -d situation_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
