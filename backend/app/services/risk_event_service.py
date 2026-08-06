@@ -1,0 +1,292 @@
+"""风险事件 Service（RiskEvent）—— 风险事件生成、查询与处置。
+
+对应需求文档章节：5.1（统一原则）、5.2（最小字段结构 / 访问控制）、
+5.3（风险类型映射）、5.4（风险等级生成规则）、5.5（raw_features 使用规则）、
+6.8（数据访问与态势统计规则）。
+
+模型：app.models.risk_event.RiskEvent。
+
+关键业务规则：
+1. 风险事件由推理结果生成（正常结果只保存推理记录，不生成事件，需求 4.x）。
+2. 冗余字段（original_label/risk_type/risk_level/risk_score/dataset_version/raw_features）
+   写入时与来源保持一致（需求 5.2 + 数据库设计文档 v2 2.7 冗余说明）。
+3. risk_level 由 risk_score 与场景阈值计算（需求 5.4）：high > medium，均配置在 risk_threshold。
+4. 访问控制（需求 5.2）：普通用户强制按 created_by_user_id 过滤；管理员可查全部。
+5. 历史风险事件不得被无痕删除或自动改写（需求 5.2 访问控制第 4 条）→ 不提供删除。
+"""
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from sqlalchemy import select
+
+from app.models.dataset import Dataset
+from app.models.handling_record import HandlingRecord
+from app.models.inference_record import InferenceRecord
+from app.models.model_version import ModelVersion
+from app.models.risk_event import RiskEvent
+from app.models.risk_threshold import RiskThreshold
+from app.schemas.common import ok
+from app.services.base import ServiceBase, ServiceError, service_call
+from app.services.constants import (
+    DATASET_RISK_TYPES,
+    DEFAULT_HIGH_THRESHOLD,
+    DEFAULT_MEDIUM_THRESHOLD,
+    RISK_EVENT_STATUS_PENDING,
+    RISK_EVENT_STATUS_TRANSITIONS,
+    RISK_LEVEL_HIGH,
+    RISK_LEVEL_LOW,
+    RISK_LEVEL_MEDIUM,
+    RISK_TYPE_FLIGHT_DECK,
+    RISK_TYPE_GEOLOGICAL,
+    RISK_TYPE_NETWORK,
+    RISK_TYPE_POWER,
+    ROLE_ADMIN,
+)
+from app.utils.common import get_logger, paginate, row_to_dict
+
+logger = get_logger("risk_event")
+
+
+class RiskEventService(ServiceBase):
+    """风险事件：生成（内部）/ 查询 / 处置状态流转。"""
+
+    def _get(self, event_id: int) -> RiskEvent:
+        event = self.db.get(RiskEvent, event_id)
+        if event is None:
+            raise ServiceError(404, "风险事件不存在")
+        return event
+
+    @staticmethod
+    def _calc_risk_level(risk_score: float, medium: float, high: float) -> str:
+        """需求 5.4 风险等级生成规则：
+        risk_score >= high → HIGH；medium <= risk_score < high → MEDIUM；risk_score < medium → LOW。
+        """
+        score = float(risk_score)
+        if score >= float(high):
+            return RISK_LEVEL_HIGH
+        if score >= float(medium):
+            return RISK_LEVEL_MEDIUM
+        return RISK_LEVEL_LOW
+
+    def _get_thresholds(self, scenario_id: int):
+        """获取场景阈值（risk_threshold 单值表，每场景一行）。
+
+        需求 5.4.1.6：本文不把未经验证的具体数值写成正式默认阈值；阈值应通过
+        risk_threshold 配置提供。此处缺失时仅用兜底值并记录 warning，提示尽快配置。
+        """
+        threshold = self.db.get(RiskThreshold, scenario_id)
+        if threshold is None:
+            logger.warning(
+                "场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s（需求 5.4.1：请通过 risk_threshold 表配置）",
+                scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
+            )
+            return float(DEFAULT_MEDIUM_THRESHOLD), float(DEFAULT_HIGH_THRESHOLD)
+        return float(threshold.medium_threshold), float(threshold.high_threshold)
+
+    @staticmethod
+    def _build_description(
+        dataset_logical_id: str, prediction_label: str, input_features: Dict
+    ) -> str:
+        """生成风险说明（需求 5.5.6：电力事件结合 IssueType 生成）。"""
+        risk_type = DATASET_RISK_TYPES.get(dataset_logical_id)
+        if risk_type == RISK_TYPE_POWER:
+            issue = (
+                input_features.get("IssueType")
+                if isinstance(input_features, dict)
+                else None
+            )
+            if issue:
+                return f"模型判定该样本形成电力系统风险，问题现象为 {issue}。"
+            return "模型判定该样本形成电力系统风险。"
+        if risk_type == RISK_TYPE_NETWORK:
+            return "模型判定该网络流量样本存在网络安全风险。"
+        if risk_type == RISK_TYPE_GEOLOGICAL:
+            return "模型判定该区域存在地质风险（滑坡）。"
+        if risk_type == RISK_TYPE_FLIGHT_DECK:
+            return "模型判定该作业样本存在碰撞风险。"
+        return f"模型判定样本存在风险（原始标签: {prediction_label}）。"
+
+    # ------------------------------------------------------------------
+    # 生成（由 InferenceRecordService 在推理后调用；需求 5.2/5.3/5.4/5.5）
+    # ------------------------------------------------------------------
+    def create_from_inference(
+        self,
+        current_user,
+        record: InferenceRecord,
+        model: ModelVersion,
+        dataset: Dataset,
+        risk_score: Optional[float],
+    ) -> RiskEvent:
+        """公开入口：根据推理结果生成风险事件（由 InferenceRecordService 调用）。
+
+        - 校验 risk_score 必填（需求 5.2：risk_score 为风险类概率/置信度，必填项）；
+        - 返回 RiskEvent ORM 对象，由调用方回填推理记录的 risk_level；
+        - 异常（ServiceError 等）冒泡到调用方的 @service_call 统一转换。
+        """
+        self.require_login(current_user)
+        if risk_score is None:
+            raise ServiceError(400, "风险类预测必须提供 risk_score")
+        return self._build_risk_event(
+            current_user=current_user,
+            record=record,
+            model=model,
+            dataset=dataset,
+            risk_score=float(risk_score),
+        )
+
+    def _build_risk_event(
+        self,
+        current_user,
+        record: InferenceRecord,
+        model: ModelVersion,
+        dataset: Dataset,
+        risk_score: float,
+    ) -> RiskEvent:
+        """内部方法：按需求 5.2 最小字段结构组装 RiskEvent（冗余字段拷贝自主表）。"""
+        risk_type = DATASET_RISK_TYPES.get(dataset.logical_id)
+        if risk_type is None:
+            raise ServiceError(
+                400,
+                f"数据集 {dataset.logical_id} 未登记风险类型映射（DATASET_RISK_TYPES），无法生成风险事件",
+            )
+        medium, high = self._get_thresholds(dataset.scenario_id)
+        risk_level = self._calc_risk_level(risk_score, medium, high)
+
+        # raw_features：只保存业务推理输入，不重复保存标签字段（需求 5.5.5）
+        raw_features = dict(record.input_features or {})
+        raw_features.pop(dataset.label_field, None)
+
+        event = RiskEvent(
+            inference_record_id=record.id,
+            created_by_user_id=record.user_id,
+            scenario_id=dataset.scenario_id,
+            dataset_id=dataset.id,
+            dataset_version=dataset.version,
+            algorithm_id=model.algorithm_id,
+            model_version_id=model.id,
+            original_label=record.prediction_label,
+            risk_type=risk_type,
+            risk_level=risk_level,
+            risk_score=float(risk_score),
+            # 需求 5.2：occurred_at 取推理完成并确认生成事件的时间——与推理记录保持一致
+            occurred_at=record.executed_at,
+            status=RISK_EVENT_STATUS_PENDING,
+            raw_features=raw_features,
+            description=self._build_description(
+                dataset.logical_id, record.prediction_label, record.input_features
+            ),
+        )
+        self.db.add(event)
+        self.db.flush()  # 获取 event.id，供调用方回填推理记录
+        return event
+
+    # ------------------------------------------------------------------
+    # 查询（需求 5.2 访问控制：USER 按 created_by_user_id 强制过滤；ADMIN 全部）
+    # ------------------------------------------------------------------
+    @service_call
+    def get_list(
+        self,
+        current_user,
+        scenario_id: Optional[int] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 10,
+    ):
+        """风险事件列表。
+
+        普通用户强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条，
+        不得只依赖前端隐藏）；管理员可查全部并按场景/状态过滤。
+        """
+        self.require_login(current_user)
+        stmt = select(RiskEvent)
+        if getattr(current_user, "role", None) != ROLE_ADMIN:
+            stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
+        elif scenario_id is not None:
+            stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
+        if status is not None:
+            stmt = stmt.where(RiskEvent.status == status)
+        stmt = stmt.order_by(RiskEvent.occurred_at.desc())
+        result = paginate(self.db, stmt, page, page_size)
+        result["items"] = [row_to_dict(e) for e in result["items"]]
+        return ok(data=result)
+
+    @service_call
+    def get(self, current_user, event_id: int):
+        """风险事件详情（USER 仅本人事件）。"""
+        self.require_login(current_user)
+        event = self._get(event_id)
+        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        return ok(data=row_to_dict(event))
+
+    # ------------------------------------------------------------------
+    # 处置状态流转（需求 5.2：新事件默认"待处置"，可变为"处理中"或"已处置"）
+    # ------------------------------------------------------------------
+    @service_call
+    def update_status(
+        self,
+        current_user,
+        event_id: int,
+        new_status: str,
+        comment: Optional[str] = None,
+    ):
+        """更新风险事件处置状态，并写入处置记录（handling_record）。
+
+        状态流转：PENDING → PROCESSING → RESOLVED（由 RISK_EVENT_STATUS_TRANSITIONS 约束）。
+        USER 仅能处置本人事件；ADMIN 可处置全部。
+        """
+        self.require_login(current_user)
+        event = self._get(event_id)
+        self.require_owner_or_admin(current_user, event.created_by_user_id)
+
+        allowed = RISK_EVENT_STATUS_TRANSITIONS.get(event.status, ())
+        if new_status not in allowed:
+            raise ServiceError(
+                400, f"风险事件状态不允许从 {event.status} 转换到 {new_status}"
+            )
+
+        status_before = event.status
+        event.status = new_status
+
+        record = HandlingRecord(
+            risk_event_id=event.id,
+            handler_id=current_user.id,
+            action="UPDATE_STATUS",
+            status_before=status_before,
+            status_after=new_status,
+            comment=comment,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.db.add(record)
+        self.commit()
+        return ok(data=row_to_dict(event), message="风险事件状态已更新")
+
+    @service_call
+    def add_comment(self, current_user, event_id: int, comment: str):
+        """给风险事件追加处置说明（写 handling_record，不改状态）。"""
+        self.require_login(current_user)
+        event = self._get(event_id)
+        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        if not comment or not str(comment).strip():
+            raise ServiceError(400, "comment 不能为空")
+        record = HandlingRecord(
+            risk_event_id=event.id,
+            handler_id=current_user.id,
+            action="ADD_COMMENT",
+            status_before=event.status,
+            status_after=event.status,
+            comment=str(comment).strip(),
+            created_at=datetime.now(timezone.utc),
+        )
+        self.db.add(record)
+        self.commit()
+        return ok(message="处置说明已记录")
+
+    # ------------------------------------------------------------------
+    # 删除：禁止（需求 5.2 访问控制第 4 条：历史风险事件不得被无痕删除或自动改写）
+    # ------------------------------------------------------------------
+    @service_call
+    def delete(self, current_user, event_id: int):
+        """风险事件不允许删除（需求 5.2：历史事件必须保持可追溯）。"""
+        self.require_login(current_user)
+        self._get(event_id)
+        raise ServiceError(400, "历史风险事件不允许删除，需保持可追溯")
