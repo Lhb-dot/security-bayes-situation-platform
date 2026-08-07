@@ -8,8 +8,8 @@
  */
 import { computed, ref, watch } from 'vue';
 import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord, AlgorithmDefinition } from '@/types/security';
-import { getDatasetList, getModelVersions, getDatasetFields, executeInference } from '@/services/mockApi';
-import type { InferenceResult } from '@/services/mockApi';
+import { getDatasetList, getModelVersions, getDatasetFields, executeInference } from '@/api/index';
+import type { InferenceResult } from '@/api/index';
 import { ElMessage } from 'element-plus';
 
 /** 场景选项 */

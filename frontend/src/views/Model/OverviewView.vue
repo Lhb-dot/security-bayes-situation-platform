@@ -8,7 +8,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { GlobalOverview, RiskEvent, TypeDistribution } from '@/types/security';
-import { getGlobalOverview, getRiskEvents } from '@/services/mockApi';
+import { getGlobalOverview, getRiskEvents } from '@/api/index';
 import ScenarioCard from '@/components/common/ScenarioCard.vue';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import DonutChart from '@/components/DonutChart.vue';

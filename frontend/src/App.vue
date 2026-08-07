@@ -11,7 +11,7 @@ import AlertsView from './views/Alert/AlertsView.vue';
 import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
-import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData, getCurrentUser, logout } from './services/mockApi';
+import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData, getCurrentUser, logout } from './api/index';
 import type { AlertRecord, DashboardSnapshot, MetricHistory, UserAccount } from './types/security';
 
 // 页面数据

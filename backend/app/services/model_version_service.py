@@ -117,10 +117,8 @@ class ModelVersionService(ServiceBase):
         if algorithm.status != ALGORITHM_STATUS_AVAILABLE:
             raise ServiceError(400, "算法不可用，不能用于训练")
 
-        if not isinstance(training_parameters, dict) or not training_parameters:
-            raise ServiceError(
-                400, "training_parameters 必须是非空 JSON 对象（需完整保存最终生效参数）"
-            )
+        if not isinstance(training_parameters, dict):
+            raise ServiceError(400, "training_parameters 必须是 JSON 对象")
         # 按算法注册的 param_schema 校验必填项、类型与范围（需求 6.6.3.2/6.6.3.4）
         err = validate_params_schema(algorithm.param_schema, training_parameters)
         if err:

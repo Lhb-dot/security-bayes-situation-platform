@@ -8,7 +8,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import type { ScenarioDetail, RankingItem, ScenarioId } from '@/types/security';
-import { getScenarioDetail } from '@/services/mockApi';
+import { getScenarioDetail } from '@/api/index';
 import DonutChart from '@/components/DonutChart.vue';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import RankingList from '@/components/RankingList.vue';

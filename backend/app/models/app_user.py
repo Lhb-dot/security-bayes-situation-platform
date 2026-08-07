@@ -4,10 +4,10 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class AppUser(Base):
@@ -16,7 +16,7 @@ class AppUser(Base):
         UniqueConstraint("username", name="uk_app_user_username"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)

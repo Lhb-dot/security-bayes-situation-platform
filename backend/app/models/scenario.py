@@ -4,10 +4,10 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class Scenario(Base):
@@ -16,7 +16,7 @@ class Scenario(Base):
         UniqueConstraint("code", name="uk_scenario_code"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

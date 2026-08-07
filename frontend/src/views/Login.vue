@@ -7,7 +7,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { login } from '@/services/mockApi';
+import { login } from '@/api/index';
 
 const router = useRouter();
 
@@ -81,13 +81,10 @@ const quickLogin = async (uname: string, pwd: string) => {
       </form>
 
       <div class="login-demo">
-        <p class="login-demo__title">演示账号（密码均为 123456）</p>
+        <p class="login-demo__title">演示账号</p>
         <div class="login-demo__btns">
-          <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
+          <button class="login-demo__btn" @click="quickLogin('admin', 'admin123')">
             管理员 admin
-          </button>
-          <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
-            普通用户 alice
           </button>
         </div>
       </div>

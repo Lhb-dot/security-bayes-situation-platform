@@ -4,19 +4,18 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class SituationSnapshot(Base):
     __tablename__ = "situation_snapshot"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     scenario_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("scenario.id"), nullable=False
+        PkType, ForeignKey("scenario.id"), nullable=False
     )
     snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     total_events: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -25,6 +24,6 @@ class SituationSnapshot(Base):
     low_count: Mapped[int] = mapped_column(Integer, nullable=False)
     pending_count: Mapped[int] = mapped_column(Integer, nullable=False)
     resolved_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    extra_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     scenario: Mapped["Scenario"] = relationship(back_populates="snapshots")

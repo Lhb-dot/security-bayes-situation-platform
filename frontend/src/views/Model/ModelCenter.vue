@@ -16,7 +16,7 @@ import {
   setDefaultModel,
   rePublishModel,
   getCurrentUser,
-} from '@/services/mockApi';
+} from '@/api/index';
 import type { ModelVersionRecord, AlgorithmDefinition, ScenarioId, UserAccount, EvaluationMetrics } from '@/types/security';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 

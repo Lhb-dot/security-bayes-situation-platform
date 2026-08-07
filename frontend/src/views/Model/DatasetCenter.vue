@@ -17,7 +17,7 @@ import {
   disableDatasetVersion,
   deleteDatasetVersion,
   getCurrentUser,
-} from '@/services/mockApi';
+} from '@/api/index';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 
 /** 场景名称映射 */

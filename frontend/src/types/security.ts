@@ -120,7 +120,7 @@ export interface DashboardSnapshot {
 // ===================== 多场景架构新增类型（不修改以上已有类型） =====================
 
 /** 三大场景标识 */
-export type ScenarioId = 'network_security' | 'power_system' | 'flightdeck_operation';
+export type ScenarioId = 'network_security' | 'power_system' | 'geological_risk' | 'flightdeck_operation';
 
 /** 场景定义 */
 export interface Scenario {

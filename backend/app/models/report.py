@@ -4,22 +4,22 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class Report(Base):
     __tablename__ = "report"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     generated_by: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     report_type: Mapped[str] = mapped_column(String(16), nullable=False)
     target_user_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=True
+        PkType, ForeignKey("app_user.id"), nullable=True
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)

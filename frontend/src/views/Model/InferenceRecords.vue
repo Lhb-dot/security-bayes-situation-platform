@@ -11,7 +11,7 @@ import {
   getUserList,
   getCurrentUser,
   getAlgorithms,
-} from '@/services/mockApi';
+} from '@/api/index';
 import type { InferenceRecord, ScenarioId, UserAccount, AlgorithmDefinition } from '@/types/security';
 
 const records = ref<InferenceRecord[]>([]);

@@ -5,10 +5,10 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Numeric
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class RiskThreshold(Base):
@@ -20,12 +20,12 @@ class RiskThreshold(Base):
     )
 
     scenario_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("scenario.id"), primary_key=True
+        PkType, ForeignKey("scenario.id"), primary_key=True
     )
     medium_threshold: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     high_threshold: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     updated_by: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

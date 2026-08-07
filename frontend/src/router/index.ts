@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
-import { getCurrentUser } from '@/services/mockApi';
+import { getCurrentUser, restoreSession } from '@/api/index';
 
 // 仪表盘大屏
 import DashboardView from '@/views/Dashboard/DashboardView.vue';
@@ -103,7 +103,20 @@ const router = createRouter({
 });
 
 // ===================== 登录守卫（需求 1.1.1：未登录不得访问业务页面） =====================
-router.beforeEach((to) => {
+// 标记是否已尝试恢复会话（避免每次路由切换都发请求）
+let sessionRestored = false;
+
+router.beforeEach(async (to) => {
+  // 首次访问时尝试从后端恢复会话
+  if (!sessionRestored) {
+    sessionRestored = true;
+    try {
+      await restoreSession();
+    } catch {
+      // 恢复失败（未登录、网络错误等），清空缓存
+    }
+  }
+
   const user = getCurrentUser();
   if (to.path === '/login') {
     // 已登录访问登录页 → 直接进入全局总览

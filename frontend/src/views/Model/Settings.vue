@@ -14,7 +14,7 @@ import {
   saveThreshold,
   getThresholdChangeLogs,
   getCurrentUser,
-} from '@/services/mockApi';
+} from '@/api/index';
 import type { ThresholdConfig, ThresholdChangeLog, ScenarioId, UserAccount } from '@/types/security';
 
 const thresholds = ref<ThresholdConfig[]>([]);

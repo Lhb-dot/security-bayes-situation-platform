@@ -8,7 +8,7 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { Scenario } from '@/types/security';
-import { getScenarioList } from '@/services/mockApi';
+import { getScenarioList } from '@/api/index';
 import ScenarioCard from '@/components/common/ScenarioCard.vue';
 
 const router = useRouter();

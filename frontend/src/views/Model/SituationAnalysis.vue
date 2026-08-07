@@ -8,7 +8,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import type { SituationData, ScenarioId } from '@/types/security';
-import { getSituationData } from '@/services/mockApi';
+import { getSituationData } from '@/api/index';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import DonutChart from '@/components/DonutChart.vue';
 

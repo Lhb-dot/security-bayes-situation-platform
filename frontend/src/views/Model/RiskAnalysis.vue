@@ -10,7 +10,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { ScenarioId, Dataset, AlgorithmDefinition, ModelVersionRecord, UserAccount } from '@/types/security';
-import { getDatasetList, getAlgorithms, trainModel, getCurrentUser } from '@/services/mockApi';
+import { getDatasetList, getAlgorithms, trainModel, getCurrentUser } from '@/api/index';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();

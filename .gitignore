@@ -38,3 +38,8 @@ requirements-analysis.md
 # ==================== OS ====================
 .DS_Store
 Thumbs.db
+
+
+# 屏蔽sqlite本地数据库文件
+*.db
+*.db-journal

@@ -11,10 +11,12 @@ feedparser>=6.0.11
 # 数据处理
 # numpy>=1.21.0
 
-# 数据库（PostgreSQL 16，对应《数据库设计文档v2》第 6.2 节）
+# 数据库
+# SQLAlchemy（ORM 核心）+ Alembic（数据库迁移）
 sqlalchemy>=2.0
-psycopg2-binary>=2.9
 alembic>=1.13
+# PostgreSQL 驱动（Docker / 部署环境；本地 SQLite 开发无需安装）
+psycopg2-binary>=2.9
 
 # 环境变量管理
 python-dotenv>=0.19.0

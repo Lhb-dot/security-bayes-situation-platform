@@ -4,11 +4,10 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Numeric, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class InferenceRecord(Base):
@@ -17,14 +16,14 @@ class InferenceRecord(Base):
         Index("idx_ir_user_time", "user_id", "executed_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     model_version_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("model_version.id"), nullable=False
+        PkType, ForeignKey("model_version.id"), nullable=False
     )
-    input_features: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    input_features: Mapped[dict] = mapped_column(JSON, nullable=False)
     prediction_label: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_score: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
     risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)

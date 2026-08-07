@@ -4,11 +4,10 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class Dataset(Base):
@@ -17,17 +16,17 @@ class Dataset(Base):
         UniqueConstraint("logical_id", "version", name="uk_dataset_logical_version"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     logical_id: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     scenario_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("scenario.id"), nullable=False
+        PkType, ForeignKey("scenario.id"), nullable=False
     )
     file_path: Mapped[str] = mapped_column(String(255), nullable=False)
-    fields_schema: Mapped[list] = mapped_column(JSONB, nullable=False)
+    fields_schema: Mapped[list] = mapped_column(JSON, nullable=False)
     label_field: Mapped[str] = mapped_column(String(64), nullable=False)
     uploaded_by: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)

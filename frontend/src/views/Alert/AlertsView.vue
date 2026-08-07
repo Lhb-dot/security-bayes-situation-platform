@@ -7,7 +7,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import type { RiskEvent, ScenarioId } from '../../types/security';
-import { getRiskEvents } from '@/services/mockApi';
+import { getRiskEvents } from '@/api/index';
 
 /** 风险事件列表 */
 const events = ref<RiskEvent[]>([]);

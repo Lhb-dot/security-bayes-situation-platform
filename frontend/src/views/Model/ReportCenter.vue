@@ -7,7 +7,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
-import { getReportList, generateReport, getCurrentUser, getUserList } from '@/services/mockApi';
+import { getReportList, generateReport, getCurrentUser, getUserList } from '@/api/index';
 import { ElMessage } from 'element-plus';
 
 const reports = ref<Report[]>([]);

@@ -4,21 +4,21 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class HandlingRecord(Base):
     __tablename__ = "handling_record"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     risk_event_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("risk_event.id"), nullable=False
+        PkType, ForeignKey("risk_event.id"), nullable=False
     )
     handler_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     status_before: Mapped[str | None] = mapped_column(String(16), nullable=True)

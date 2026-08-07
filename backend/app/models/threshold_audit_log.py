@@ -4,21 +4,21 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric
+from sqlalchemy import DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base
+from app.db import Base, PkType
 
 
 class ThresholdAuditLog(Base):
     __tablename__ = "threshold_audit_log"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(PkType, primary_key=True, autoincrement=True)
     scenario_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("scenario.id"), nullable=False
+        PkType, ForeignKey("scenario.id"), nullable=False
     )
     operator_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("app_user.id"), nullable=False
+        PkType, ForeignKey("app_user.id"), nullable=False
     )
     old_medium: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     new_medium: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)

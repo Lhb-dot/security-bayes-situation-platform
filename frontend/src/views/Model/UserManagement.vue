@@ -13,7 +13,7 @@ import {
   resetUserPassword,
   setUserStatus,
   changeOwnPassword,
-} from '@/services/mockApi';
+} from '@/api/index';
 import type { UserAccount, UserRole } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
