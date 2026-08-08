@@ -9,6 +9,7 @@
 - 所有权限校验在后端执行（需求 6.5.2：前端隐藏按钮不能替代权限控制）。
 """
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -16,18 +17,25 @@ from app.models.app_user import AppUser
 from app.services.constants import ROLE_ADMIN, USER_STATUS_ENABLED
 
 
+def _resolve_user(db: Session, x_user_id: str) -> AppUser | None:
+    """按透传标识解析用户：优先按数字 ID，其次按用户名（开发阶段双兼容）。"""
+    if x_user_id.isdigit():
+        return db.get(AppUser, int(x_user_id))
+    return db.scalar(select(AppUser).where(AppUser.username == x_user_id))
+
+
 def get_current_user(
     db: Session = Depends(get_db),
-    x_user_id: int | None = Header(
+    x_user_id: str | None = Header(
         None,
         alias="X-User-Id",
-        description="当前登录用户 ID（开发阶段透传；正式接入登录后替换为令牌解析）",
+        description="当前登录用户（开发阶段透传：数字 ID 或用户名；正式接入登录后替换为令牌解析）",
     ),
 ) -> AppUser:
     """解析当前登录用户（未提供 / 未登录 / 账号被禁用 → 401）。"""
-    if x_user_id is None:
+    if not x_user_id:
         raise HTTPException(status_code=401, detail="未登录或账号不可用")
-    user = db.get(AppUser, x_user_id)
+    user = _resolve_user(db, x_user_id)
     if user is None or user.status != USER_STATUS_ENABLED:
         raise HTTPException(status_code=401, detail="未登录或账号不可用")
     return user

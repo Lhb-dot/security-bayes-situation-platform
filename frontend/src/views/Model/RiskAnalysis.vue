@@ -1,16 +1,23 @@
 <script setup lang="ts">
 /**
- * RiskAnalysis - 模型训练
+ * RiskAnalysis - 模型训练（数据库化版）
  *
  * 需求 6.3.1（管理员闭环）：选择场景 → 数据集版本 → 算法 → 配置训练参数 → 启动训练
  * 需求 6.6：算法代码注册（A2WNB/MAWNB/EMAWNB/DIWNB/PMWNB）+ 动态参数配置表单
+ *   - 场景 / 数据集 / 算法 全部从 /api/v1 数据库渲染，不再使用 mock
+ *   - 训练参数表单由算法注册的 param_schema 动态生成（需求 6.6.3）
  * 需求 6.7.2：训练成功生成 DRAFT 模型版本（待管理员在模型中心审核发布）
  * 需求 6.5.2：仅管理员可训练；普通用户只能使用已发布模型执行推理
+ *
+ * 训练执行策略（后端 /api/v1/model-versions/train）：
+ *   - PMWNB：真实调用 Java 服务（weka 算法）训练，返回真实指标（source=java_pmwnb）
+ *   - 其余算法：算法实现待交付，mock 占位指标（source=mock）
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { ScenarioId, Dataset, AlgorithmDefinition, ModelVersionRecord, UserAccount } from '@/types/security';
-import { getDatasetList, getAlgorithms, trainModel, getCurrentUser } from '@/services/mockApi';
+import type { AlgorithmParamDef, UserAccount } from '@/types/security';
+import { getCurrentUser } from '@/services/mockApi';
+import { getScenarios, getDatasets, getAlgorithms, trainModel } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -19,42 +26,127 @@ const router = useRouter();
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
-/** 场景名称映射 */
-const scenarioLabel: Record<string, string> = {
-  network_security: '网络安全',
-  power_system: '电力系统',
-  flightdeck_operation: '航母甲板',
-};
+// ===================== 场景（数据库） =====================
+interface DbScenario {
+  id: number;
+  code: string;
+  name: string;
+  access_status: string;
+}
+const scenarios = ref<DbScenario[]>([]);
+const scenarioOptions = computed(() =>
+  scenarios.value.filter((s) => s.access_status === 'ACTUAL')
+);
+const selectedScenario = ref<number | ''>('');
 
-/** 场景选项（航母甲板第一阶段不可用于训练） */
-const scenarioOptions: { value: ScenarioId; label: string }[] = [
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-];
-
-// ===================== 状态 =====================
-const selectedScenario = ref<ScenarioId | ''>('');
-const datasetList = ref<Dataset[]>([]);
-const selectedDatasetId = ref<string>('');
-const selectedDatasetVersion = ref('');
-const algorithms = ref<AlgorithmDefinition[]>([]);
-const selectedAlgoId = ref('');
-const training = ref(false);
-const trainResult = ref<ModelVersionRecord | null>(null);
+// ===================== 数据集（数据库） =====================
+interface DbDataset {
+  id: number;
+  logical_id: string;
+  version: number;
+  status: string;
+  file_path: string;
+  fields_schema: unknown[];
+}
+const datasetList = ref<DbDataset[]>([]);
+const selectedDatasetId = ref<number | ''>('');
+const selectedDatasetVersion = ref<number | null>(null);
 const loadingDatasets = ref(false);
 
-/** 当前算法定义 */
-const currentAlgo = computed(() => algorithms.value.find((a) => a.algorithm_id === selectedAlgoId.value));
+// ===================== 算法（数据库 + param_schema 动态表单） =====================
+interface AlgoOption {
+  id: number;
+  code: string;
+  display_name: string;
+  description: string;
+  available: boolean;
+  params: AlgorithmParamDef[];
+}
+const algorithms = ref<AlgoOption[]>([]);
+const selectedAlgoId = ref<number | ''>('');
 
-/** 训练参数表单（动态生成，默认值来自算法注册定义，需求 6.6.3） */
+/** 后端 param_schema（name/type/enum/options）→ 前端 AlgorithmParamDef 渲染模型 */
+const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
+  if (!Array.isArray(schema)) return [];
+  return schema.map((raw) => {
+    const item = (raw ?? {}) as Record<string, unknown>;
+    let type: AlgorithmParamDef['type'];
+    switch (item.type) {
+      case 'int':
+      case 'float':
+        type = 'number';
+        break;
+      case 'bool':
+        type = 'boolean';
+        break;
+      case 'enum':
+        type = 'select';
+        break;
+      default:
+        type = 'string';
+    }
+    return {
+      param_name: String(item.name ?? ''),
+      label: String(item.label ?? item.name ?? ''),
+      type,
+      default_value: (item.default as AlgorithmParamDef['default_value']) ?? '',
+      min: item.min as number | undefined,
+      max: item.max as number | undefined,
+      step: item.step as number | undefined,
+      options: Array.isArray(item.options)
+        ? (item.options as { value: string; label: string }[])
+        : Array.isArray(item.enum_values)
+          ? (item.enum_values as string[]).map((v) => ({ value: v, label: v }))
+          : undefined,
+      description: String(item.description ?? ''),
+    };
+  });
+};
+
+/** 当前算法定义 */
+const currentAlgo = computed(() => algorithms.value.find((a) => a.id === selectedAlgoId.value));
+
+/** 训练参数表单（动态生成，默认值来自算法 param_schema，需求 6.6.3） */
 const paramForm = ref<Record<string, number | string | boolean>>({});
 
-const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
+const algoNameById = (id: number) => algorithms.value.find((a) => a.id === id)?.display_name ?? String(id);
+const scenarioNameById = (id: number) => scenarios.value.find((s) => s.id === id)?.name ?? String(id);
+
+// ===================== 训练结果 =====================
+interface TrainOutcome {
+  model_version_id: string;
+  status: string;
+  scenario_id: number;
+  dataset_id: number;
+  algorithm_id: number;
+  evaluation_metrics: Record<string, unknown>;
+  training_parameters: Record<string, unknown>;
+}
+const trainResult = ref<TrainOutcome | null>(null);
+const training = ref(false);
+
+const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
+const isRealTrain = computed(() => trainMetrics.value.source === 'java_pmwnb');
+const isMockTrain = computed(() => trainMetrics.value.source === 'mock');
+
+/** 百分比指标展示：缺字段（如 PMWNB 无 specificity/g_mean）显示 — */
+const metricText = (key: string) => {
+  const v = trainMetrics.value[key];
+  return typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—';
+};
+const trainTimeText = () => {
+  const v = trainMetrics.value.train_time_s;
+  return typeof v === 'number' ? `${v} s` : '—';
+};
+const datasetText = () => {
+  const ds = datasetList.value.find((d) => d.id === trainResult.value?.dataset_id);
+  return ds ? `${ds.logical_id}（v${ds.version}）` : String(trainResult.value?.dataset_id);
+};
 
 // ===================== 场景切换 → 加载数据集 =====================
 watch(selectedScenario, async (scenario) => {
   selectedDatasetId.value = '';
-  selectedDatasetVersion.value = '';
+  selectedDatasetVersion.value = null;
   trainResult.value = null;
   if (!scenario) {
     datasetList.value = [];
@@ -62,7 +154,7 @@ watch(selectedScenario, async (scenario) => {
   }
   loadingDatasets.value = true;
   try {
-    datasetList.value = await getDatasetList(scenario);
+    datasetList.value = await getDatasets(scenario);
   } catch {
     datasetList.value = [];
   } finally {
@@ -100,17 +192,26 @@ const handleTrain = async () => {
   training.value = true;
   trainResult.value = null;
   try {
-    const result = await trainModel({
+    const row = await trainModel({
       scenario_id: selectedScenario.value,
       dataset_id: selectedDatasetId.value,
-      dataset_version: selectedDatasetVersion.value,
       algorithm_id: selectedAlgoId.value,
       training_parameters: { ...paramForm.value },
     });
-    trainResult.value = result;
-    ElMessage.success('训练成功，已生成 DRAFT 模型版本，请在模型中心审核发布');
+    trainResult.value = {
+      model_version_id: String(row.id),
+      status: row.status,
+      scenario_id: row.scenario_id,
+      dataset_id: row.dataset_id,
+      algorithm_id: row.algorithm_id,
+      evaluation_metrics: row.evaluation_metrics ?? {},
+      training_parameters: row.training_parameters ?? {},
+    };
+    const done = row.status === 'DRAFT';
+    ElMessage.success(done ? '训练完成，已生成 DRAFT 模型版本，请在模型中心审核发布' : `训练状态：${row.status}`);
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '模型训练失败');
+    const e = err as { response?: { data?: { message?: string } }; message?: string };
+    ElMessage.error(e.response?.data?.message || e.message || '模型训练失败');
   } finally {
     training.value = false;
   }
@@ -120,10 +221,37 @@ const goModelCenter = () => {
   router.push('/models');
 };
 
+/** /api/v1/algorithms 返回的算法行（trainingApi 为 JS 模块无类型，此处显式声明） */
+interface ApiAlgorithmRow {
+  id: number;
+  code: string;
+  display_name: string;
+  description?: string | null;
+  status: string;
+  param_schema?: unknown[];
+}
+
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  algorithms.value = await getAlgorithms();
-  selectedAlgoId.value = algorithms.value[0]?.algorithm_id ?? '';
+  try {
+    scenarios.value = await getScenarios();
+    algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
+      id: a.id,
+      code: a.code,
+      display_name: a.display_name,
+      description: a.description ?? '',
+      available: a.status === 'AVAILABLE',
+      params: mapBackendParams(a.param_schema ?? []),
+    }));
+  } catch (err) {
+    const e = err as { response?: { data?: { message?: string } }; message?: string };
+    ElMessage.warning(`加载算法/场景数据失败：${e.response?.data?.message || e.message || '请确认后端已启动'}`);
+  }
+  // 默认选中第一个 ACTUAL 场景与第一个可用算法
+  if (scenarioOptions.value.length) {
+    selectedScenario.value = scenarioOptions.value[0].id;
+  }
+  selectedAlgoId.value = algorithms.value.find((a) => a.available)?.id ?? '';
 });
 </script>
 
@@ -158,41 +286,44 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 业务场景 -->
+        <!-- 业务场景（数据库注册） -->
         <div class="form-group">
           <label class="form-label">业务场景（需求 1.1.2：训练前必须先确定场景）</label>
           <div class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
-              :key="sc.value"
+              :key="sc.id"
               class="scenario-tab"
-              :class="{ 'is-active': selectedScenario === sc.value }"
-              @click="selectedScenario = sc.value"
+              :class="{ 'is-active': selectedScenario === sc.id }"
+              @click="selectedScenario = sc.id"
             >
-              {{ sc.label }}
+              {{ sc.name }}
             </button>
           </div>
+          <p v-if="!scenarioOptions.length" class="form-hint form-hint--muted">
+            暂无可训练场景（请确认后端已启动且数据库已初始化）
+          </p>
         </div>
 
-        <!-- 数据集版本 -->
+        <!-- 数据集版本（数据库） -->
         <div class="form-group">
           <label class="form-label">数据集（版本）</label>
           <select
             v-model="selectedDatasetId"
             class="form-select"
             :disabled="!selectedScenario || loadingDatasets"
-            @change="selectedDatasetVersion = datasetList.find(d => d.dataset_id === selectedDatasetId)?.dataset_version ?? ''"
+            @change="selectedDatasetVersion = datasetList.find(d => d.id === selectedDatasetId)?.version ?? null"
           >
             <option value="" disabled>-- 请选择数据集 --</option>
             <option
               v-for="ds in datasetList"
-              :key="ds.dataset_id"
-              :value="ds.dataset_id"
+              :key="ds.id"
+              :value="ds.id"
             >
-              {{ ds.name }}（v{{ ds.dataset_version }} · {{ ds.field_count }} 字段 · {{ ds.record_count }} 样本）{{ ds.enabled ? '' : '【已停用】' }}
+              {{ ds.logical_id }}（v{{ ds.version }} · {{ ds.fields_schema?.length ?? 0 }} 字段）{{ ds.status === 'ACTIVE' ? '' : '【已停用】' }}
             </option>
           </select>
-          <p class="form-hint form-hint--muted">仅展示当前场景下的数据集版本；已停用版本不能用于训练</p>
+          <p class="form-hint form-hint--muted">仅展示当前场景下已注册的数据集版本；已停用版本不能用于训练</p>
         </div>
 
         <!-- 算法（需求 6.6.1 五种算法注册） -->
@@ -201,20 +332,20 @@ onMounted(async () => {
           <select v-model="selectedAlgoId" class="form-select">
             <option
               v-for="a in algorithms"
-              :key="a.algorithm_id"
-              :value="a.algorithm_id"
+              :key="a.id"
+              :value="a.id"
               :disabled="!a.available"
             >
-              {{ a.display_name }}（{{ a.algorithm_id }}）
+              {{ a.display_name }}（{{ a.code }}）
             </option>
           </select>
-          <p v-if="currentAlgo" class="form-hint">{{ currentAlgo.description }}｜{{ currentAlgo.input_constraints }}</p>
+          <p v-if="currentAlgo" class="form-hint">{{ currentAlgo.description }}</p>
         </div>
 
-        <!-- 训练参数（需求 6.6.3 动态生成配置表单） -->
+        <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成） -->
         <div v-if="currentAlgo" class="form-group">
           <label class="form-label">训练参数（提供默认值，可修改，须通过类型与范围校验）</label>
-          <div class="param-list">
+          <div v-if="currentAlgo.params.length" class="param-list">
             <div
               v-for="p in currentAlgo.params"
               :key="p.param_name"
@@ -251,6 +382,9 @@ onMounted(async () => {
               </p>
             </div>
           </div>
+          <p v-else class="form-hint">
+            PMWNB 算法基于 Java（weka）真实实现，使用服务内置默认参数训练，无需配置训练参数。
+          </p>
         </div>
 
         <!-- 训练按钮 -->
@@ -283,49 +417,66 @@ onMounted(async () => {
           <div class="result-model-id">
             <span class="result-model-id__label">模型版本</span>
             <span class="result-model-id__value">{{ trainResult.model_version_id }}</span>
-            <span class="result-model-id__status">DRAFT（待发布）</span>
+            <span class="result-model-id__status">
+              <template v-if="isRealTrain">真实训练（Java PMWNB）</template>
+              <template v-else-if="isMockTrain">占位训练（模拟数据）</template>
+              <template v-else>DRAFT（待发布）</template>
+            </span>
           </div>
 
           <div class="train-metrics">
             <div class="metric-card">
               <span class="metric-card__label">Accuracy</span>
-              <span class="metric-card__value metric-card__value--acc">{{ (trainResult.evaluation_metrics.accuracy * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--acc">{{ metricText('accuracy') }}</span>
             </div>
             <div class="metric-card">
               <span class="metric-card__label">Recall</span>
-              <span class="metric-card__value metric-card__value--rec">{{ (trainResult.evaluation_metrics.recall * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--rec">{{ metricText('recall') }}</span>
             </div>
             <div class="metric-card">
               <span class="metric-card__label">Precision</span>
-              <span class="metric-card__value metric-card__value--pre">{{ (trainResult.evaluation_metrics.precision * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--pre">{{ metricText('precision') }}</span>
             </div>
             <div class="metric-card">
               <span class="metric-card__label">Specificity</span>
-              <span class="metric-card__value metric-card__value--spe">{{ (trainResult.evaluation_metrics.specificity * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--spe">{{ metricText('specificity') }}</span>
             </div>
             <div class="metric-card">
               <span class="metric-card__label">F1</span>
-              <span class="metric-card__value metric-card__value--f1">{{ (trainResult.evaluation_metrics.f1 * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--f1">{{ metricText('f1') }}</span>
             </div>
             <div class="metric-card">
               <span class="metric-card__label">G-mean</span>
-              <span class="metric-card__value metric-card__value--gm">{{ (trainResult.evaluation_metrics.g_mean * 100).toFixed(1) }}%</span>
+              <span class="metric-card__value metric-card__value--gm">{{ metricText('g_mean') }}</span>
             </div>
           </div>
 
           <div class="result-detail">
             <div class="result-detail__row">
-              <span>场景</span><strong>{{ scenarioLabel[trainResult.scenario_id] }}</strong>
+              <span>场景</span><strong>{{ scenarioNameById(trainResult.scenario_id) }}</strong>
             </div>
             <div class="result-detail__row">
-              <span>数据集</span><strong>{{ trainResult.dataset_id }} v{{ trainResult.dataset_version }}</strong>
+              <span>数据集</span><strong>{{ datasetText() }}</strong>
             </div>
             <div class="result-detail__row">
-              <span>算法</span><strong>{{ algoName(trainResult.algorithm_id) }}</strong>
+              <span>算法</span><strong>{{ algoNameById(trainResult.algorithm_id) }}</strong>
             </div>
             <div class="result-detail__row">
-              <span>训练耗时</span><strong>{{ trainResult.train_time_s }} s</strong>
+              <span>训练耗时</span><strong>{{ trainTimeText() }}</strong>
             </div>
+            <template v-if="isRealTrain">
+              <div class="result-detail__row">
+                <span>训练样本 / 特征 / 类别</span><strong>{{ trainMetrics.num_instances }} / {{ trainMetrics.num_attributes }} / {{ trainMetrics.num_classes }}</strong>
+              </div>
+              <div class="result-detail__row">
+                <span>模型文件</span><strong class="result-detail__mono">{{ trainMetrics.model_saved_to }}</strong>
+              </div>
+            </template>
+            <template v-else-if="isMockTrain">
+              <div class="result-detail__row">
+                <span>提示</span><strong>算法实现待算法组交付，当前为模拟占位指标</strong>
+              </div>
+            </template>
           </div>
 
           <button class="train-btn train-btn--ghost" @click="goModelCenter">前往模型中心发布</button>
@@ -652,6 +803,13 @@ onMounted(async () => {
 
 .result-detail__row strong {
   color: #d9e8ff;
+}
+
+.result-detail__mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+  text-align: right;
 }
 
 /* 占位 */

@@ -48,6 +48,7 @@ from app.utils.common import (
     row_to_dict,
     validate_params_schema,
 )
+from app.services.training_executor import mock_training_metrics
 
 logger = get_logger("model_version")
 
@@ -117,11 +118,11 @@ class ModelVersionService(ServiceBase):
         if algorithm.status != ALGORITHM_STATUS_AVAILABLE:
             raise ServiceError(400, "算法不可用，不能用于训练")
 
-        if not isinstance(training_parameters, dict) or not training_parameters:
-            raise ServiceError(
-                400, "training_parameters 必须是非空 JSON 对象（需完整保存最终生效参数）"
-            )
-        # 按算法注册的 param_schema 校验必填项、类型与范围（需求 6.6.3.2/6.6.3.4）
+        if not isinstance(training_parameters, dict):
+            raise ServiceError(400, "training_parameters 必须是 JSON 对象")
+        # 按算法注册的 param_schema 校验必填项、类型与范围（需求 6.6.3.2/6.6.3.4）。
+        # 对 param_schema 为空的算法（如 PMWNB 不暴露超参数，使用服务内置默认参数），
+        # 允许传入空对象 {}。
         err = validate_params_schema(algorithm.param_schema, training_parameters)
         if err:
             raise ServiceError(400, err)
@@ -141,6 +142,62 @@ class ModelVersionService(ServiceBase):
         self.db.add(model)
         self.commit()
         return ok(data=self._to_dict(model), message="训练启动，模型版本进入 TRAINING")
+
+    @service_call
+    def train_and_save(
+        self,
+        current_user,
+        scenario_id: int,
+        dataset_id: int,
+        algorithm_id: int,
+        training_parameters: Dict[str, Any],
+    ):
+        """训练并落库（需求 6.7.1 训练执行接口，单次调用完成真实训练）。
+
+        复用 create() 完成场景/数据集/算法/参数校验并创建 TRAINING 版本，随后：
+        - PMWNB：调用 Java 服务（weka 真实算法）对数据集真实训练；
+        - 其余算法：算法实现待算法组交付，暂以 mock 占位指标落库。
+        成功 → TRAINING → DRAFT（保存真实/占位指标）；失败 → TRAINING → FAILED。
+        """
+        created = self.create(
+            current_user, scenario_id, dataset_id, algorithm_id, training_parameters
+        )
+        if created.code != 0:
+            # create() 内部把 ServiceError 转成了 fail 响应（不抛出），此处重新抛出让本
+            # 方法的 @service_call 按统一语义返回 HTTP 状态码。
+            raise ServiceError(created.code, created.message)
+
+        model = self._get(created.data["id"])
+        algorithm = self.db.get(Algorithm, algorithm_id)
+        try:
+            if algorithm.code == "PMWNB":
+                metrics = self._run_pmwnb_training(model)
+            else:
+                metrics = mock_training_metrics(algorithm.code)
+            self._transition(model, MODEL_STATUS_DRAFT)
+            model.evaluation_metrics = metrics
+            self.commit()
+        except Exception as exc:
+            self._transition(model, MODEL_STATUS_FAILED)
+            model.evaluation_metrics = {"source": "error", "error": str(exc)}
+            self.commit()
+            raise ServiceError(500, f"训练失败：{exc}")
+        return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
+
+    def _run_pmwnb_training(self, model: ModelVersion) -> dict:
+        """调用 Java PMWNB 真实训练：解析数据集 ARFF 绝对路径 → /train → 真实指标。"""
+        from app.services.training_executor import (
+            build_model_save_path,
+            execute_pmwnb_training,
+            resolve_dataset_path,
+        )
+
+        dataset = self.db.get(Dataset, model.dataset_id)
+        if dataset is None:
+            raise ServiceError(404, "数据集不存在")
+        dataset_path = resolve_dataset_path(dataset.file_path)
+        model_save_path = build_model_save_path(model.id)
+        return execute_pmwnb_training(dataset_path, model_save_path)
 
     @service_call
     def complete_training(
