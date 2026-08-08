@@ -10,7 +10,8 @@ const props = defineProps<{
 const chartWidth = 820;
 const chartHeight = 260;
 const padding = 26;
-const hoveredIndex = ref(0);
+// null = 未悬停，tooltip/聚焦线不显示；移出图表后必须复位为 null 而非 0
+const hoveredIndex = ref<number | null>(null);
 
 const maxValue = computed(() => Math.max(...props.points.map((item) => item.value), 1));
 const pointMeta = computed(() =>
@@ -25,7 +26,9 @@ const polyline = computed(() => pointMeta.value.map((point) => `${point.x},${poi
 const area = computed(
   () => `${padding},${chartHeight - padding} ${polyline.value} ${chartWidth - padding},${chartHeight - padding}`
 );
-const activePoint = computed(() => pointMeta.value[hoveredIndex.value] ?? pointMeta.value[0]);
+const activePoint = computed(() =>
+  hoveredIndex.value === null ? undefined : pointMeta.value[hoveredIndex.value]
+);
 
 const onMove = (event: MouseEvent) => {
   const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -36,7 +39,7 @@ const onMove = (event: MouseEvent) => {
 </script>
 
 <template>
-  <div class="line-chart" @mousemove="onMove" @mouseleave="hoveredIndex = 0">
+  <div class="line-chart" @mousemove="onMove" @mouseleave="hoveredIndex = null">
     <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" preserveAspectRatio="none">
       <defs>
         <linearGradient id="trend-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
