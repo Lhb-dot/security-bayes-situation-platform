@@ -65,10 +65,12 @@ button {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap; /* 标题占满首行，导航自然换到第二行，标题永不被 bar 遮挡 */
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px 20px;
   margin-bottom: 24px;
+  z-index: 10; /* 高于页面内容，让用户悬停弹层不被盖住；低于弹窗层 20/25 */
 }
 
 .topbar h1,
@@ -81,6 +83,10 @@ button {
 
 .topbar h1 {
   font-size: clamp(1.6rem, 2vw, 2.6rem);
+  /* 长标题（首页/AI模型训练等 11 字）不得换行，避免 topbar 高度随页面变化导致 bar 跳动 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .eyebrow {
@@ -89,12 +95,17 @@ button {
   letter-spacing: 0.24em;
   color: #7dc9ff;
   font-size: 0.72rem;
+  white-space: nowrap; /* 标题区极端窄时省略,不溢出到导航下方 */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar__actions {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+  margin-left: auto; /* 第二行导航整体右对齐 */
 }
 
 .nav-tabs {
@@ -104,6 +115,13 @@ button {
   border-radius: 999px;
   background: rgba(8, 17, 31, 0.7);
   backdrop-filter: blur(18px);
+  overflow-x: auto; /* 极端窄屏时内部横向滚动，不挤压标题 */
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.nav-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .nav-tabs__item,
@@ -117,6 +135,8 @@ button {
 .nav-tabs__item {
   padding: 10px 18px;
   border-radius: 999px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .nav-tabs__item.is-active,

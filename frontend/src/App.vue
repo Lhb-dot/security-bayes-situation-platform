@@ -27,6 +27,12 @@ const activeMetric = ref<MetricHistory | null>(null);
 const currentUser = ref<UserAccount | null>(getCurrentUser());
 const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
+// 路由切换后重新同步当前用户（登录页跳转业务页时 setup 已执行完毕，需手动刷新，
+// 否则登录后右上角姓名/角色仍停留在未登录的空状态）
+const syncCurrentUser = () => {
+  currentUser.value = getCurrentUser();
+};
+
 const handleLogout = async () => {
   await logout();
   currentUser.value = null;
@@ -196,6 +202,7 @@ const pageTitle = computed(() => {
 // ===================== 路由监听与生命周期 =====================
 // 注册路由后置钩子，页面切换时重新加载数据（保存返回的取消注册函数）
 const unregisterAfterEach = router.afterEach(() => {
+  syncCurrentUser();
   loadData();
 });
 
@@ -241,7 +248,7 @@ const isNewRoutePage = computed(() => {
   <div v-else class="app-shell">
     <div class="app-shell__backdrop"></div>
     <header class="topbar">
-      <div>
+      <div class="topbar__heading">
         <p class="eyebrow">AI Security Operations Center</p>
         <h1>{{ pageTitle }}</h1>
       </div>
@@ -343,11 +350,11 @@ const isNewRoutePage = computed(() => {
         <button class="ghost-button" @click="reloadData">刷新模拟数据</button>
         <div class="topbar__user">
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
-          <div class="topbar__user-info">
+          <div class="topbar__user-pop">
             <span class="topbar__user-name">{{ currentUser?.display_name }}</span>
             <span class="topbar__user-role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
+            <button class="ghost-button ghost-button--logout" @click="handleLogout">退出登录</button>
           </div>
-          <button class="ghost-button ghost-button--logout" @click="handleLogout">退出登录</button>
         </div>
       </div>
     </header>
@@ -410,33 +417,67 @@ const isNewRoutePage = computed(() => {
   box-sizing: border-box;
 }
 
+/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡 */
+.topbar__heading {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* ===================== 用户区：仅头像，悬停弹出姓名/角色/退出 ===================== */
 .topbar__user {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
   margin-left: 16px;
   padding-left: 16px;
   border-left: 1px solid rgba(125, 201, 255, 0.15);
 }
 
 .topbar__user-avatar {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #5ba6ff, #407acc);
   color: #fff;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 600;
   flex-shrink: 0;
+  border: 1px solid rgba(125, 201, 255, 0.25);
+  transition: box-shadow 0.2s;
 }
 
-.topbar__user-info {
+.topbar__user:hover .topbar__user-avatar {
+  box-shadow: 0 0 0 3px rgba(91, 166, 255, 0.18);
+}
+
+.topbar__user-pop {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  min-width: 150px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  gap: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(10, 20, 38, 0.96);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+  z-index: 30;
+}
+
+.topbar__user:hover .topbar__user-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .topbar__user-name {

@@ -110,6 +110,27 @@ def create_model_version(
     )
 
 
+@router.post(
+    "/train",
+    response_model=ResponseModel,
+    summary="训练并保存模型版本（仅管理员）：PMWNB 真实调用 Java 训练，其余算法 mock 占位",
+)
+def train_model_version(
+    payload: ModelVersionCreate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_admin),
+):
+    return unwrap(
+        ModelVersionService(db).train_and_save(
+            current_user=current_user,
+            scenario_id=payload.scenario_id,
+            dataset_id=payload.dataset_id,
+            algorithm_id=payload.algorithm_id,
+            training_parameters=payload.training_parameters,
+        )
+    )
+
+
 @router.get(
     "/{model_id}", response_model=ResponseModel, summary="模型版本详情（含评估指标）"
 )
