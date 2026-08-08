@@ -34,6 +34,7 @@ from app.utils.common import (
     validate_enum,
     validate_length,
     validate_required,
+    verify_password,
 )
 
 logger = get_logger("user")
@@ -146,8 +147,13 @@ class UserService(ServiceBase):
         current_user: Optional[AppUser],
         user_id: int,
         new_password: str,
+        old_password: Optional[str] = None,
     ):
-        """修改密码：USER 仅本人；ADMIN 可重置任意用户（需求 6.2）。"""
+        """修改密码：USER 仅本人；ADMIN 可重置任意用户（需求 6.2）。
+
+        - 本人改密（/me）：必须传 old_password 并校验正确（路由 PasswordChange 场景）；
+        - 管理员重置（/reset-password）：不传 old_password，跳过旧密码校验。
+        """
         self.require_login(current_user)
         is_admin = getattr(current_user, "role", None) == ROLE_ADMIN
         if not is_admin and getattr(current_user, "id", None) != user_id:
@@ -159,6 +165,9 @@ class UserService(ServiceBase):
             raise ServiceError(400, err)
 
         user = self._get(user_id)
+        if old_password is not None:
+            if not verify_password(old_password, user.password_hash):
+                raise ServiceError(400, "旧密码不正确")
         user.password_hash = hash_password(new_password)
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
