@@ -27,6 +27,12 @@ const activeMetric = ref<MetricHistory | null>(null);
 const currentUser = ref<UserAccount | null>(getCurrentUser());
 const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
+// 路由切换后重新同步当前用户（登录页跳转业务页时 setup 已执行完毕，需手动刷新，
+// 否则登录后右上角姓名/角色仍停留在未登录的空状态）
+const syncCurrentUser = () => {
+  currentUser.value = getCurrentUser();
+};
+
 const handleLogout = async () => {
   await logout();
   currentUser.value = null;
@@ -196,6 +202,7 @@ const pageTitle = computed(() => {
 // ===================== 路由监听与生命周期 =====================
 // 注册路由后置钩子，页面切换时重新加载数据（保存返回的取消注册函数）
 const unregisterAfterEach = router.afterEach(() => {
+  syncCurrentUser();
   loadData();
 });
 
@@ -241,7 +248,7 @@ const isNewRoutePage = computed(() => {
   <div v-else class="app-shell">
     <div class="app-shell__backdrop"></div>
     <header class="topbar">
-      <div>
+      <div class="topbar__heading">
         <p class="eyebrow">AI Security Operations Center</p>
         <h1>{{ pageTitle }}</h1>
       </div>
@@ -408,6 +415,12 @@ const isNewRoutePage = computed(() => {
   padding: 24px;
   min-height: auto;
   box-sizing: border-box;
+}
+
+/* 标题区占满剩余空间、允许收缩，配合 h1 的 nowrap+ellipsis 保证各页面 topbar 高度一致 */
+.topbar__heading {
+  flex: 1;
+  min-width: 0;
 }
 
 .topbar__user {

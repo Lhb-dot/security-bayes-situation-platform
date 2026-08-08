@@ -81,6 +81,10 @@ button {
 
 .topbar h1 {
   font-size: clamp(1.6rem, 2vw, 2.6rem);
+  /* 长标题（首页/AI模型训练等 11 字）不得换行，避免 topbar 高度随页面变化导致 bar 跳动 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .eyebrow {
