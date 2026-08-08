@@ -13,7 +13,7 @@
  *   - PMWNB：真实调用 Java 服务（weka 算法）训练，返回真实指标（source=java_pmwnb）
  *   - 其余算法：算法实现待交付，mock 占位指标（source=mock）
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AlgorithmParamDef, UserAccount } from '@/types/security';
 import { getCurrentUser } from '@/services/mockApi';
@@ -124,6 +124,24 @@ interface TrainOutcome {
 }
 const trainResult = ref<TrainOutcome | null>(null);
 const training = ref(false);
+// ===== 训练计时（需求：点击训练后实时显示已训练秒数） =====
+const trainingElapsed = ref(0);            // 已训练秒数（实时递增）
+let trainingTimer: number | null = null;   // setInterval 句柄
+
+const startTrainingTimer = () => {
+  trainingElapsed.value = 0;
+  if (trainingTimer !== null) window.clearInterval(trainingTimer);
+  trainingTimer = window.setInterval(() => {
+    trainingElapsed.value += 1;
+  }, 1000);
+};
+
+const stopTrainingTimer = () => {
+  if (trainingTimer !== null) {
+    window.clearInterval(trainingTimer);
+    trainingTimer = null;
+  }
+};
 
 const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
 const isRealTrain = computed(() => trainMetrics.value.source === 'java_pmwnb');
@@ -191,6 +209,7 @@ const handleTrain = async () => {
 
   training.value = true;
   trainResult.value = null;
+  startTrainingTimer();
   try {
     const row = await trainModel({
       scenario_id: selectedScenario.value,
@@ -213,6 +232,7 @@ const handleTrain = async () => {
     const e = err as { response?: { data?: { message?: string } }; message?: string };
     ElMessage.error(e.response?.data?.message || e.message || '模型训练失败');
   } finally {
+    stopTrainingTimer();
     training.value = false;
   }
 };
@@ -252,6 +272,11 @@ onMounted(async () => {
     selectedScenario.value = scenarioOptions.value[0].id;
   }
   selectedAlgoId.value = algorithms.value.find((a) => a.available)?.id ?? '';
+});
+
+// 离开页面时清理训练计时器，防止内存泄漏
+onBeforeUnmount(() => {
+  stopTrainingTimer();
 });
 </script>
 
@@ -394,7 +419,7 @@ onMounted(async () => {
           @click="handleTrain"
         >
           <span v-if="training" class="btn-spinner"></span>
-          {{ training ? '训练中...' : '开始训练' }}
+          {{ training ? `训练中... ${trainingElapsed}s` : '开始训练' }}
         </button>
       </section>
 
@@ -408,9 +433,15 @@ onMounted(async () => {
         </div>
 
         <div v-if="!trainResult" class="infer-placeholder">
-          <div class="infer-placeholder__icon">🧠</div>
-          <h4>尚未开始训练</h4>
-          <p>完成左侧配置后启动训练。训练成功的模型将进入 DRAFT 状态，可在模型中心审核发布。</p>
+          <div class="infer-placeholder__icon">{{ training ? '⏳' : '🧠' }}</div>
+          <h4>{{ training ? `训练中... 已用时 ${trainingElapsed} 秒` : '尚未开始训练' }}</h4>
+          <p>
+            {{
+              training
+                ? '正在执行算法训练，请稍候。PMWNB 为真实 Java 训练，大样本数据集可能需要数十秒。'
+                : '完成左侧配置后启动训练。训练成功的模型将进入 DRAFT 状态，可在模型中心审核发布。'
+            }}
+          </p>
         </div>
 
         <template v-else>
