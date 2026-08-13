@@ -7,7 +7,7 @@ const router = useRouter();
 const route = useRoute();
 
 import AlertDetailView from './views/Alert/AlertDetailView.vue';
-import AlertsView from './views/Alert/AlertsView.vue';
+import AlertsView from './views/Alert/AlertsView.vue'；
 import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
