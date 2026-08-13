@@ -485,16 +485,19 @@ const SCENARIO_META: Array<{
 /** 内部用户记录：密码仅 mock 内部使用，对外接口不返回 */
 interface UserRecord extends UserAccount {
   password: string;
+  /** 对应 PostgreSQL app_user 表的主键 ID：前端登录后以该整数 ID 作为 X-User-Id 调 /api/v1 */
+  backend_id: number;
 }
 
 const SESSION_KEY = 'bayes_session_user_id';
 
-/** 预置账号：admin（管理员）/ alice、bob、carol（普通用户），密码均为 123456 */
+/** 预置账号：admin（管理员）/ alice、bob、carol（普通用户），密码均为 123456。
+ * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐（admin=1/alice=2/bob=3）。 */
 let userRecords: UserRecord[] = [
-  { user_id: 'user_000001', username: 'admin', display_name: '系统管理员', role: 'ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
-  { user_id: 'user_000018', username: 'alice', display_name: '张梦琪', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'admin' },
-  { user_id: 'user_000031', username: 'bob', display_name: '李文昊', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'admin' },
-  { user_id: 'user_000042', username: 'carol', display_name: '陈晓宇', role: 'USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin' },
+  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
+  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '张梦琪', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'admin' },
+  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '李文昊', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'admin' },
+  { user_id: 'user_000042', backend_id: 3, username: 'carol', display_name: '陈晓宇', role: 'USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin' },
 ];
 
 let sessionUser: UserAccount | null = null;
@@ -507,7 +510,10 @@ const nowStr = () => {
 
 const loadSession = (): UserAccount | null => {
   const id = window.localStorage.getItem(SESSION_KEY);
-  const found = userRecords.find((u) => u.user_id === id);
+  // 兼容两种会话格式：旧的 user_000001（mock 编号）与新登录写入的后端整数 ID（1/2/3）
+  const found = userRecords.find(
+    (u) => u.user_id === id || String(u.backend_id) === id
+  );
   return found ? { ...found } : null;
 };
 
@@ -541,7 +547,8 @@ export const login = async (username: string, password: string): Promise<UserAcc
   if (found.status === 'disabled') throw new Error('该账号已被禁用，请联系管理员');
   found.last_login_at = nowStr();
   sessionUser = { ...found };
-  window.localStorage.setItem(SESSION_KEY, found.user_id);
+  // 存后端 AppUser 主键（整数），供 request.js 以 X-User-Id 调 /api/v1 数据库接口
+  window.localStorage.setItem(SESSION_KEY, String(found.backend_id));
   return { ...found };
 };
 
@@ -581,6 +588,8 @@ export const createUser = async (params: {
   const newId = `user_${String(userRecords.length + 1).padStart(6, '0')}`;
   const record: UserRecord = {
     user_id: newId,
+    // mock 新注册用户在后端数据库中不存在，backend_id=0 访问 /api/v1 时会被后端 401 拒绝
+    backend_id: 0,
     username: params.username,
     display_name: params.display_name || params.username,
     role: params.role,

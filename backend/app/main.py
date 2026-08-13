@@ -513,6 +513,12 @@ from app.services.model_sim import get_dataset_list, train_bayes_sim, infer_baye
 
 
 app = FastAPI()
+
+# ============ 数据库 CRUD API v1 路由挂载（Service 层 /api/v1） ============
+from app.api.v1 import api_router
+
+app.include_router(api_router)
+
 train_record = {
     "is_trained": False,
     "dataset": ""
@@ -605,14 +611,6 @@ async def del_exp(record_id: int):
     del_exp_by_id(record_id)
     return {"code": 200, "msg": "实验记录删除完成"}
 # ==================================================================
-
-@app.get("/china-map.json")
-async def get_map_json():
-    map_file = OUTPUT_DIR / "china-map.json"
-    if not map_file.exists():
-        raise HTTPException(status_code=404, detail="地图文件缺失")
-    return FileResponse(map_file, media_type="application/json")
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/ (up from backend/app/)
 PROJECT_ROOT = BASE_DIR.parent                      # security-bayes-platform/

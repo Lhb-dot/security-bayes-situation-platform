@@ -28,6 +28,30 @@ if (-not (Get-Command node   -EA SilentlyContinue)) { Write-Host "  [X] Node.js 
 if (-not (Test-Path $jar))  { Write-Host "  [X] lib/pmwnb-service.jar missing" -ForegroundColor Red; $err=$true }
 if ($err) { Write-Host ""; Read-Host "Press Enter to exit"; exit 1 }
 
+# ---- PostgreSQL (数据库依赖, /api/v1 新世界必需) ----
+Write-Host "  PostgreSQL    " -NoNewline
+function Test-Pg {
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $c.Connect("127.0.0.1", 5432)
+        $ok = $c.Connected; $c.Close(); return $ok
+    } catch { return $false }
+}
+$pgOk = $false
+$t = (Get-Date).AddSeconds(5)
+while (-not $pgOk -and (Get-Date) -lt $t) { $pgOk = Test-Pg; if (-not $pgOk) { Start-Sleep 1 } }
+if (-not $pgOk) {
+    Write-Host ":5432  DOWN" -ForegroundColor Yellow
+    Write-Host "  -> docker compose up -d ..." -NoNewline
+    Push-Location $root
+    docker compose up -d | Out-Null
+    Pop-Location
+    $t = (Get-Date).AddSeconds(40)
+    while (-not $pgOk -and (Get-Date) -lt $t) { $pgOk = Test-Pg; if (-not $pgOk) { Start-Sleep 2 } }
+}
+if ($pgOk) { Write-Host ":5432  OK" -ForegroundColor Green }
+else { Write-Host ":5432  FAIL (数据库不可用, /api/v1 接口将报错; 旧 /api/model 演示不受影响)" -ForegroundColor Red }
+
 # ---- Java PMWNB ----
 Write-Host "  Java PMWNB    " -NoNewline
 $p = Start-Process -FilePath "java" -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
@@ -55,6 +79,17 @@ while ((Get-Date) -lt $t) {
 }
 if ($ok) { Write-Host ":12312  OK" -ForegroundColor Green }
 else     { Write-Host ":12312  FAIL" -ForegroundColor Red }
+# FastAPI 起来后,顺带探测数据库新接口 /api/v1 是否真的连通
+if ($ok) {
+    try {
+        $h = @{ "X-User-Id" = "1" }
+        $r = Invoke-RestMethod "http://127.0.0.1:12312/api/v1/scenarios" -Headers $h -TimeoutSec 5
+        if ($r.code -eq 0) { Write-Host "    /api/v1     OK (数据库已连接)" -ForegroundColor Green }
+        else { Write-Host "    /api/v1     WARN ($($r.message))" -ForegroundColor Yellow }
+    } catch {
+        Write-Host "    /api/v1     WARN (数据库未就绪, 新接口暂不可用)" -ForegroundColor Yellow
+    }
+}
 
 # ---- Vue Frontend ----
 Write-Host "  Vue Frontend  " -NoNewline
@@ -82,6 +117,7 @@ if ($javaPid -and $pyPid -and $vuePid) {
     Write-Host ""
     Write-Host "  ====================================" -ForegroundColor Cyan
     Write-Host "  >>  http://localhost:5173           " -ForegroundColor White
+    Write-Host "  >>  API Docs: http://localhost:12312/docs" -ForegroundColor White
     Write-Host "  ====================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Ctrl+C or close this window to stop all services." -ForegroundColor DarkGray
