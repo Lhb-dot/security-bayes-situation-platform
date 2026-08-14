@@ -6,7 +6,7 @@
  * 使用本地 ref + 双向 watch 保证原生 <select> 一定显示选中值（:value 绑定在 select 上不可靠）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import { useScenarioStore } from '@/stores/scenarioStore';
+import { getScenarioList } from '@/services/mockApi';
 import type { ScenarioId } from '@/types/security';
 
 const props = defineProps<{
@@ -21,14 +21,18 @@ const emit = defineEmits<{
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-const scenarioStore = useScenarioStore();
+/**
+ * 场景列表：直接调 mockApi.getScenarioList() 存本地 ref（与推理记录同源：
+ * 管理员=全部场景，普通用户=自选场景），不依赖共享 store 的时序/响应式。
+ */
+const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
 
-/** 选项列表："所有场景"恒为第一项 + 用户可见场景 */
+/** 选项列表："所有场景"恒为第一项 + 场景列表 */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
   const list: { value: ScenarioId | 'all'; label: string }[] = [{ value: 'all', label: '所有场景' }];
   if (props.showAll !== false) {
-    for (const s of scenarioStore.activeScenarios) {
-      list.push({ value: s.scenario_id, label: s.name });
+    for (const s of localScenarios.value) {
+      list.push(s);
     }
   }
   return list;
@@ -46,8 +50,13 @@ watch(localValue, (v) => {
   emit('update:modelValue', v);
 });
 
-onMounted(() => {
-  scenarioStore.fetchScenarioList();
+onMounted(async () => {
+  try {
+    const list = await getScenarioList();
+    localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
+  } catch {
+    localScenarios.value = [];
+  }
 });
 </script>
 
