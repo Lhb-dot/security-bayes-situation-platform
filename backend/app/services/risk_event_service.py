@@ -84,6 +84,37 @@ class RiskEventService(ServiceBase):
         return float(threshold.medium_threshold), float(threshold.high_threshold)
 
     @staticmethod
+    def _calc_fault_position(
+        dataset_logical_id: str, input_features: Optional[Dict]
+    ) -> tuple:
+        """计算航母甲板故障点坐标（需求 V3.0 §7.4.1）。
+
+        仅航母甲板作业场景生成坐标，其余场景返回 (None, None)（前端不渲染红点）。
+        坐标基准：甲板底图原始宽度 1000px，取值范围 [0, 1000]。
+
+        计算逻辑（占位，待与业务方确认正式映射）：
+        用双机平均航向角把"风险发生方位"映射到底图——1 号机航向角决定横坐标、
+        2 号机航向角决定纵坐标，均为 (角度 % 360) / 360 * 1000。
+        输入缺失或非法时返回 None，不虚构坐标。
+        """
+        if DATASET_RISK_TYPES.get(dataset_logical_id) != RISK_TYPE_FLIGHT_DECK:
+            return None, None
+        feats = input_features if isinstance(input_features, dict) else {}
+
+        def _ratio(key: str):
+            try:
+                val = float(feats.get(key))
+            except (TypeError, ValueError):
+                return None
+            if val < 0:
+                return None
+            return round((val % 360) / 360 * 1000, 2)
+
+        x = _ratio("Plane1_dir_mean_deg")
+        y = _ratio("Plane2_dir_mean_deg")
+        return x, y
+
+    @staticmethod
     def _build_description(
         dataset_logical_id: str, prediction_label: str, input_features: Dict
     ) -> str:
@@ -156,6 +187,11 @@ class RiskEventService(ServiceBase):
         raw_features = dict(record.input_features or {})
         raw_features.pop(dataset.label_field, None)
 
+        # 航母甲板故障点坐标（V3.0 §7.4.1）：仅航母场景非空，其余留空
+        pos_x, pos_y = self._calc_fault_position(
+            dataset.logical_id, record.input_features
+        )
+
         event = RiskEvent(
             inference_record_id=record.id,
             created_by_user_id=record.user_id,
@@ -175,6 +211,8 @@ class RiskEventService(ServiceBase):
             description=self._build_description(
                 dataset.logical_id, record.prediction_label, record.input_features
             ),
+            fault_position_x=pos_x,
+            fault_position_y=pos_y,
         )
         self.db.add(event)
         self.db.flush()  # 获取 event.id，供调用方回填推理记录
