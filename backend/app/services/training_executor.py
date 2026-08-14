@@ -64,6 +64,9 @@ def execute_pmwnb_training(dataset_path: str, model_save_path: str) -> dict:
         "f1": metrics["f1"],
         "recall": metrics["recall"],
         "precision": metrics["precision"],
+        # V3.0 §6.4：Java 服务已返回 specificity / g_mean（weightedTrueNegativeRate 口径）
+        "specificity": metrics.get("specificity", 0.0),
+        "g_mean": metrics.get("g_mean", 0.0),
         "train_time_s": metrics["train_time_s"],
         "num_instances": metrics.get("num_instances", 0),
         "num_attributes": metrics.get("num_attributes", 0),
