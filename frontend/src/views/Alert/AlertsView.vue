@@ -8,11 +8,14 @@
 import { computed, onMounted, ref } from 'vue';
 import type { RiskEvent, ScenarioId } from '../../types/security';
 import { getRiskEvents } from '@/services/mockApi';
+import { useScenarioStore } from '@/stores/scenarioStore';
 
 /** 风险事件列表 */
 const events = ref<RiskEvent[]>([]);
 const loading = ref(true);
 const error = ref('');
+
+const scenarioStore = useScenarioStore();
 
 /** 筛选条件 */
 const selectedScenario = ref<ScenarioId | 'all'>('all');
@@ -23,15 +26,15 @@ const selectedStatus = ref<string>('all');
 const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
-/** 场景选项 */
-const scenarioOptions: { value: ScenarioId | 'all'; label: string }[] = [
+/** 场景选项（"所有场景" + 当前用户可见场景；管理员=全部，普通用户=自选/绑定） */
+const scenarioOptions = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => [
   { value: 'all', label: '所有场景' },
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-];
+  ...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })),
+]);
 
 /** 风险等级选项 */
 const riskLevelOptions = [
@@ -92,6 +95,7 @@ const statusMap: Record<string, string> = {
 };
 
 onMounted(() => {
+  scenarioStore.fetchScenarioList();
   loadEvents();
 });
 </script>

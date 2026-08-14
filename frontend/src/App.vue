@@ -230,7 +230,7 @@ const navItems: NavItem[] = [
   { path: '/overview', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goOverview },
   { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
   { path: '/datasets', label: '数据集中心', action: goDatasetCenter },
-  { path: '/alerts', label: '告警中心', requiresAdmin: true, hiddenForUser: true, action: goAlertsList },
+  { path: '/alerts', label: '告警中心', action: goAlertsList },
   { path: '/risk', label: 'AI模型训练', requiresAdmin: true, hiddenForUser: true, action: goAiTrainPage },
   { path: '/models', label: '模型中心', action: goModelCenter },
   { path: '/inference', label: '风险研判', action: goRiskInference },
