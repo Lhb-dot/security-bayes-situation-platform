@@ -2,10 +2,13 @@
 /**
  * UserManagement - 用户管理
  *
- * 需求 6.2（P0）：管理员创建普通用户账号，并可重置密码、启用或禁用账号；普通用户可修改本人密码。
+ * 需求 6.2（P0）：管理员创建普通用户账号，并可重置密码、启用或禁用账号、分配绑定场景；
+ * 普通用户可修改本人密码。
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 import {
   getCurrentUser,
   getUserList,
@@ -14,13 +17,21 @@ import {
   setUserStatus,
   changeOwnPassword,
 } from '@/services/mockApi';
-import type { UserAccount, UserRole } from '@/types/security';
+import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const loading = ref(false);
+const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
 const isAdmin = () => currentUser.value?.role === 'ADMIN';
+
+/** 场景选项（创建/分配场景多选用，Task 017 补齐管理员闭环） */
+const scenarioOptions = computed(() =>
+  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+);
+const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
 
 // ========== 创建用户弹窗 ==========
 const createOpen = ref(false);
@@ -29,21 +40,49 @@ const createForm = ref({
   display_name: '',
   password: '',
   role: 'USER' as UserRole,
+  scenario_ids: [] as ScenarioId[],
 });
 
 const openCreate = () => {
-  createForm.value = { username: '', display_name: '', password: '', role: 'USER' };
+  createForm.value = { username: '', display_name: '', password: '', role: 'USER', scenario_ids: [] };
   createOpen.value = true;
 };
 
 const submitCreate = async () => {
   try {
-    await createUser({ ...createForm.value, role: createForm.value.role });
+    await createUser({
+      username: createForm.value.username,
+      display_name: createForm.value.display_name,
+      password: createForm.value.password,
+      role: createForm.value.role,
+      scenario_ids: createForm.value.role === 'USER' ? createForm.value.scenario_ids : [],
+    });
     ElMessage.success('账号创建成功');
     createOpen.value = false;
     await loadUsers();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '创建失败');
+  }
+};
+
+// ========== 分配绑定场景（需求 1.1.6 / 6.5，仅普通用户） ==========
+const bindTarget = ref<UserAccount | null>(null);
+const bindScenarioIds = ref<ScenarioId[]>([]);
+
+const openBind = (user: UserAccount) => {
+  bindTarget.value = user;
+  bindScenarioIds.value = [...(user.scenario_ids ?? [])];
+};
+
+const submitBind = async () => {
+  if (!bindTarget.value) return;
+  try {
+    await userStore.updateUserScenarios(bindTarget.value.user_id, bindScenarioIds.value);
+    ElMessage.success(`已更新 ${bindTarget.value.username} 的绑定场景`);
+    bindTarget.value = null;
+    await loadUsers();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '分配失败');
   }
 };
 
@@ -111,6 +150,7 @@ const loadUsers = async () => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
+  await scenarioStore.fetchScenarioList();
   if (isAdmin()) await loadUsers();
 });
 </script>
@@ -145,6 +185,7 @@ onMounted(async () => {
               <th>显示名</th>
               <th>角色</th>
               <th>状态</th>
+              <th>绑定场景</th>
               <th>创建时间</th>
               <th>最后登录</th>
               <th>操作</th>
@@ -165,6 +206,12 @@ onMounted(async () => {
                   {{ user.status === 'active' ? '启用' : '禁用' }}
                 </span>
               </td>
+              <td>
+                <span v-if="user.scenario_ids?.length" class="scenario-tags">
+                  <span v-for="sid in user.scenario_ids" :key="sid" class="scenario-tag">{{ scenarioName(sid) }}</span>
+                </span>
+                <span v-else class="users-table__muted">—</span>
+              </td>
               <td>{{ user.created_at }}</td>
               <td>{{ user.last_login_at ?? '—' }}</td>
               <td class="users-table__ops">
@@ -174,6 +221,13 @@ onMounted(async () => {
                   @click="openReset(user)"
                 >
                   重置密码
+                </button>
+                <button
+                  class="op-btn"
+                  v-if="user.role === 'USER'"
+                  @click="openBind(user)"
+                >
+                  分配场景
                 </button>
                 <button
                   class="op-btn"
@@ -243,6 +297,15 @@ onMounted(async () => {
               <option value="ADMIN">管理员</option>
             </select>
           </div>
+          <div v-if="createForm.role === 'USER'" class="pwd-form__field">
+            <label class="pwd-form__label">分配场景（可多选，空表示无可见场景）</label>
+            <div class="scenario-checkbox-list">
+              <label v-for="sc in scenarioOptions" :key="sc.value" class="scenario-checkbox">
+                <input v-model="createForm.scenario_ids" type="checkbox" :value="sc.value" />
+                <span>{{ sc.label }}</span>
+              </label>
+            </div>
+          </div>
         </div>
         <div class="modal-card__foot">
           <button class="users-btn" @click="createOpen = false">取消</button>
@@ -267,6 +330,29 @@ onMounted(async () => {
         <div class="modal-card__foot">
           <button class="users-btn" @click="resetTarget = null">取消</button>
           <button class="users-btn users-btn--primary" @click="submitReset">确认重置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 分配场景弹窗（仅普通用户，需求 1.1.6 / 6.5） -->
+    <div v-if="bindTarget" class="modal-mask" @click.self="bindTarget = null">
+      <div class="modal-card">
+        <div class="modal-card__head">
+          <h3>分配场景 — {{ bindTarget.username }}</h3>
+          <button class="modal-close" @click="bindTarget = null">✕</button>
+        </div>
+        <div class="modal-card__body">
+          <p class="bind-tip">勾选该用户可见的场景（可多选，空表示无可见场景）</p>
+          <div class="scenario-checkbox-list">
+            <label v-for="sc in scenarioOptions" :key="sc.value" class="scenario-checkbox">
+              <input v-model="bindScenarioIds" type="checkbox" :value="sc.value" />
+              <span>{{ sc.label }}</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-card__foot">
+          <button class="users-btn" @click="bindTarget = null">取消</button>
+          <button class="users-btn users-btn--primary" @click="submitBind">保存</button>
         </div>
       </div>
     </div>
@@ -342,6 +428,54 @@ onMounted(async () => {
   padding: 20px;
   text-align: center;
   color: rgba(220, 234, 255, 0.5);
+}
+
+.users-table__muted {
+  color: rgba(220, 234, 255, 0.4);
+}
+
+.scenario-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scenario-tag {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.scenario-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.scenario-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(220, 234, 255, 0.8);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.scenario-checkbox input {
+  accent-color: #5ba6ff;
+}
+
+.bind-tip {
+  margin: 0;
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.55);
 }
 
 .op-btn {

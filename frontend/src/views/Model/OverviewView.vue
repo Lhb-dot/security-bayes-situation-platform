@@ -69,10 +69,16 @@ const goScenarioDashboard = (scenarioId: string) => {
   router.push({ path: `/scenarios/${scenarioId}/dashboard` });
 };
 
+/** 点击事件行 → 风险事件详情（Task 012） */
+const goEventDetail = (eventId: string) => {
+  router.push({ path: `/events/${eventId}` });
+};
+
 /** 场景名称映射 */
 const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
@@ -197,6 +203,7 @@ onMounted(() => {
               v-for="ev in highRiskEvents"
               :key="ev.event_id"
               class="ov-events__item"
+              @click="goEventDetail(ev.event_id)"
             >
               <div class="ov-events__left">
                 <span
@@ -355,6 +362,7 @@ onMounted(() => {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(125, 201, 255, 0.1);
+  cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
 

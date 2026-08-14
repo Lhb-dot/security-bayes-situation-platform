@@ -8,15 +8,17 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import type { SituationData, ScenarioId } from '@/types/security';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import { getSituationData } from '@/services/mockApi';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import DonutChart from '@/components/DonutChart.vue';
 
-/** 场景列表 */
-const SCENARIOS: { id: ScenarioId; label: string }[] = [
-  { id: 'network_security', label: '网络安全' },
-  { id: 'power_system', label: '电力系统' },
-];
+const scenarioStore = useScenarioStore();
+
+/** 场景列表：从 scenarioStore.activeScenarios 注入（Task 016，已按用户绑定过滤） */
+const SCENARIOS = computed<{ id: ScenarioId; label: string }[]>(() =>
+  scenarioStore.activeScenarios.map((s) => ({ id: s.scenario_id, label: s.name }))
+);
 
 /** 时间范围选项 */
 const timeRanges = [
@@ -69,7 +71,7 @@ const eventStats = computed(() =>
   allData.value.map((d) => {
     const total = d.event_distribution.reduce((sum, e) => sum + e.value, 0);
     return {
-      name: SCENARIOS.find((s) => s.id === d.scenario_id)?.label ?? d.scenario_id,
+      name: SCENARIOS.value.find((s) => s.id === d.scenario_id)?.label ?? d.scenario_id,
       score: total,
     };
   })
@@ -78,8 +80,9 @@ const eventStats = computed(() =>
 onMounted(async () => {
   loading.value = true;
   try {
+    await scenarioStore.fetchScenarioList();
     const results = await Promise.all(
-      SCENARIOS.map((s) => getSituationData(s.id))
+      SCENARIOS.value.map((s) => getSituationData(s.id))
     );
     allData.value = results;
   } catch {
@@ -96,7 +99,7 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Situation Analysis</p>
         <h2>态势分析</h2>
-        <p class="situation-page__desc">多维度风险趋势分析（航母甲板作业场景暂未接入数据集）</p>
+        <p class="situation-page__desc">四场景风险趋势分析</p>
       </div>
     </div>
 

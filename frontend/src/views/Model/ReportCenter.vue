@@ -7,6 +7,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import { getReportList, generateReport, getCurrentUser, getUserList } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
@@ -15,6 +16,7 @@ const loading = ref(true);
 const error = ref('');
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
+const scenarioStore = useScenarioStore();
 
 const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
@@ -126,8 +128,14 @@ const statusLabel: Record<string, string> = {
 const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
+
+/** 报告生成场景选项：从 scenarioStore.activeScenarios 注入（Task 016） */
+const scenarioOptions = computed(() =>
+  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+);
 
 const formatLabel: Record<string, string> = {
   markdown: 'Markdown',
@@ -137,6 +145,7 @@ const formatLabel: Record<string, string> = {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
+  await scenarioStore.fetchScenarioList();
   if (isAdmin.value) {
     users.value = await getUserList();
   }
@@ -245,8 +254,7 @@ onMounted(async () => {
             <label class="gen-field__label">报告场景<span class="required">*</span></label>
             <select v-model="genForm.scenario_id" class="gen-field__input">
               <option value="" disabled>-- 请选择场景 --</option>
-              <option value="network_security">网络安全</option>
-              <option value="power_system">电力系统</option>
+              <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
             </select>
           </div>
           <div class="gen-field">

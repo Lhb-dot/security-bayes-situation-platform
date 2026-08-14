@@ -4,32 +4,62 @@
  *
  * 选择场景 → 选择数据集 → 展示该范围已发布模型列表（含评估指标）
  * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
- * → 执行单条样本推理 → 风险类结果转换为统一 RiskEvent
+ * （carrier 279 字段按字段族分组折叠）→ 执行单条样本推理 → 风险类结果可跳风险事件详情
+ *
+ * 数据链路：页面 → scenarioStore / datasetStore / modelStore / inferenceStore（不直连 mockApi）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord, AlgorithmDefinition } from '@/types/security';
-import { getDatasetList, getModelVersions, getDatasetFields, executeInference, getAlgorithms } from '@/services/mockApi';
-import type { InferenceResult } from '@/services/mockApi';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import { useDatasetStore } from '@/stores/datasetStore';
+import { useModelStore } from '@/stores/modelStore';
+import { useInferenceStore } from '@/stores/inferenceStore';
+import { useUserStore } from '@/stores/userStore';
+import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord } from '@/types/security';
+// 过渡期：InferenceResult 类型定义于 mockApi.ts（仅 type import，页面不调用 mockApi 函数）
+import type { InferenceResult } from '@/services/mockApi';
 
-/** 场景选项 */
-const scenarioOptions: { value: ScenarioId; label: string }[] = [
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-];
+const router = useRouter();
+const route = useRoute();
+const scenarioStore = useScenarioStore();
+const datasetStore = useDatasetStore();
+const modelStore = useModelStore();
+const inferenceStore = useInferenceStore();
+const userStore = useUserStore();
+
+/** 需求 6.5.2/6.2：普通用户由账号绑定自动确定场景，不展示场景切换入口 */
+const isAdmin = computed(() => userStore.currentUser?.role === 'ADMIN');
+
+const currentScenarioLabel = computed(() =>
+  scenarioOptions.value.find((s) => s.value === selectedScenario.value)?.label ?? '—'
+);
+
+/** 场景选项：从 scenarioStore.activeScenarios 注入（Task 006 已按用户绑定过滤） */
+const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
+  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+);
 
 const selectedScenario = ref<ScenarioId | ''>('');
-const datasetList = ref<Dataset[]>([]);
 const selectedDatasetId = ref<string>('');
 const loadingDatasets = ref(false);
 
-/** 当前范围的已发布模型（普通用户仅可见 PUBLISHED） */
-const publishedModels = ref<ModelVersionRecord[]>([]);
+/** 当前场景的数据集（datasetStore.fetchDatasets(scenarioId) 已按场景/用户过滤） */
+const datasetOptions = computed<Dataset[]>(() =>
+  selectedScenario.value
+    ? datasetStore.datasets.filter((d) => d.scenario_id === selectedScenario.value)
+    : []
+);
+
+/** 当前范围的已发布模型（modelStore.fetchModelVersions 已过滤） */
+const publishedModels = computed<ModelVersionRecord[]>(() =>
+  modelStore.modelVersions.filter((m) => m.status === 'PUBLISHED')
+);
 const loadingModels = ref(false);
 const selectedModelId = ref('');
 
-const algorithms = ref<AlgorithmDefinition[]>([]);
-const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
+const algoName = (id: string) =>
+  modelStore.algorithms.find((a) => a.algorithm_id === id)?.display_name ?? id;
 
 const inputFields = ref<DatasetField[]>([]);
 const inputData = ref<Record<string, string | number>>({});
@@ -42,21 +72,20 @@ const selectedModel = computed(() => publishedModels.value.find((m) => m.model_v
 // ===================== 场景切换 =====================
 watch(selectedScenario, async (scenario) => {
   selectedDatasetId.value = '';
-  publishedModels.value = [];
   selectedModelId.value = '';
   inputFields.value = [];
   inputData.value = {};
   inferResult.value = null;
   hasInferred.value = false;
   if (!scenario) {
-    datasetList.value = [];
+    datasetStore.datasets = [];
     return;
   }
   loadingDatasets.value = true;
   try {
-    datasetList.value = await getDatasetList(scenario);
+    await datasetStore.fetchDatasets(scenario);
   } catch {
-    datasetList.value = [];
+    datasetStore.datasets = [];
   } finally {
     loadingDatasets.value = false;
   }
@@ -64,7 +93,6 @@ watch(selectedScenario, async (scenario) => {
 
 // ===================== 数据集切换 → 加载已发布模型 =====================
 watch(selectedDatasetId, async (datasetId) => {
-  publishedModels.value = [];
   selectedModelId.value = '';
   inputFields.value = [];
   inputData.value = {};
@@ -73,12 +101,13 @@ watch(selectedDatasetId, async (datasetId) => {
   if (!datasetId) return;
   loadingModels.value = true;
   try {
-    const all = await getModelVersions(selectedScenario.value || undefined, datasetId);
-    publishedModels.value = all.filter((m) => m.status === 'PUBLISHED');
+    await modelStore.fetchModelVersions(selectedScenario.value || undefined, datasetId);
     // 自动选中默认推荐模型（需求 6.7.4.3）；无默认时提示手动选择（需求 6.7.4.6）
     const def = publishedModels.value.find((m) => m.is_default);
     if (def) {
       selectedModelId.value = def.model_version_id;
+    } else {
+      selectedModelId.value = '';
     }
   } finally {
     loadingModels.value = false;
@@ -95,17 +124,98 @@ watch(selectedModelId, async (modelId) => {
   const model = publishedModels.value.find((m) => m.model_version_id === modelId);
   if (!model) return;
   try {
-    const allFields = await getDatasetFields(model.dataset_id, model.dataset_version);
+    await datasetStore.fetchFields(model.dataset_id, model.dataset_version);
+    const allFields = datasetStore.fields;
     inputFields.value = allFields.filter((f) => f.field_role === '输入特征');
-    const init: Record<string, string | number> = {};
-    for (const f of inputFields.value) {
-      init[f.field_name] = f.field_type === 'string' ? '' : 0;
+    inputData.value = buildInputData(inputFields.value);
+    // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
+    const port = route.query.port;
+    if (port && inputData.value.L4_DST_PORT !== undefined) {
+      const n = Number(port);
+      if (Number.isFinite(n)) inputData.value.L4_DST_PORT = n;
     }
-    inputData.value = init;
+    // 默认仅展开第一组（carrier 279 字段不一次性挂载 279 个 DOM）
+    expandedGroups.value = fieldGroups.value.length > 0 ? [fieldGroups.value[0].name] : [];
   } catch {
     inputFields.value = [];
+    inputData.value = {};
   }
 });
+
+// ===================== carrier 字段族分组（需求 7.4：279 字段折叠防卡顿） =====================
+const CARRIER_GROUP_RULES: Array<{ name: string; match: (name: string) => boolean }> = [
+  { name: '方向角族', match: (n) => n.startsWith('Plane1_dir_') || n.startsWith('Plane2_dir_') },
+  { name: '相对角度族', match: (n) => n.startsWith('relative_angle_') },
+  {
+    name: '间距族',
+    match: (n) =>
+      n.startsWith('inter_distance_') || n.startsWith('inter_dist_')
+      || n === 'start_dist' || n === 'end_dist' || n === 'dist_change' || n === 'dist_change_ratio',
+  },
+  {
+    name: '距离变化族',
+    match: (n) =>
+      n.startsWith('dist_change_step_')
+      || n.startsWith('dist_change_mean_step') || n.startsWith('dist_change_std_step')
+      || n.startsWith('dist_change_max_step') || n.startsWith('dist_change_min_step'),
+  },
+  {
+    name: '航程族',
+    match: (n) =>
+      n === 'Plane1_total_distance' || n === 'Plane2_total_distance'
+      || n === 'total_dist_diff' || n === 'total_dist_ratio',
+  },
+  { name: '标识族', match: (n) => n === 'PlaneID1' || n === 'PlaneID2' },
+];
+
+interface FieldGroup {
+  name: string;
+  fields: DatasetField[];
+}
+
+/** 按字段族前缀分组；未命中任何前缀归入"其它字段"，非 carrier 小字段集归为单组「全部字段」 */
+const fieldGroups = computed<FieldGroup[]>(() => {
+  const groups: FieldGroup[] = CARRIER_GROUP_RULES.map((r) => ({ name: r.name, fields: [] as DatasetField[] }));
+  const other: DatasetField[] = [];
+  for (const f of inputFields.value) {
+    const idx = CARRIER_GROUP_RULES.findIndex((r) => r.match(f.field_name));
+    if (idx >= 0) groups[idx].fields.push(f);
+    else other.push(f);
+  }
+  const matched = groups.filter((g) => g.fields.length > 0);
+  if (matched.length === 0) {
+    return other.length > 0 ? [{ name: '全部字段', fields: other }] : [];
+  }
+  if (other.length > 0) matched.push({ name: '其它字段', fields: other });
+  return matched;
+});
+
+/** el-collapse 展开的组名 */
+const expandedGroups = ref<string[]>([]);
+
+const expandAll = () => {
+  expandedGroups.value = fieldGroups.value.map((g) => g.name);
+};
+
+const collapseAll = () => {
+  expandedGroups.value = [];
+};
+
+/** 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value，否则空（由校验提示填写） */
+const buildInputData = (fields: DatasetField[]): Record<string, string | number> => {
+  const init: Record<string, string | number> = {};
+  for (const f of fields) {
+    if (f.field_type === 'float' || f.field_type === 'int') {
+      const parsed = Number(f.sample_value);
+      init[f.field_name] = Number.isFinite(parsed) ? parsed : 0;
+    } else if (f.enum_values && f.enum_values.length > 0) {
+      init[f.field_name] = f.enum_values.includes(f.sample_value) ? f.sample_value : '';
+    } else {
+      init[f.field_name] = '';
+    }
+  }
+  return init;
+};
 
 // ===================== 执行推理 =====================
 const handleInfer = async () => {
@@ -123,7 +233,7 @@ const handleInfer = async () => {
   inferResult.value = null;
   hasInferred.value = false;
   try {
-    const result = await executeInference({
+    const result = await inferenceStore.executeInference({
       model_version_id: selectedModelId.value,
       input_features: { ...inputData.value },
     });
@@ -139,8 +249,16 @@ const handleInfer = async () => {
   }
 };
 
+/** 推理结果 → 风险事件详情（Task 012 /events/:id） */
+const goEventDetail = (eventId: string) => {
+  router.push({ path: `/events/${eventId}` });
+};
+
 onMounted(async () => {
-  algorithms.value = await getAlgorithms();
+  await Promise.all([
+    scenarioStore.fetchScenarioList(),
+    modelStore.fetchAlgorithms(),
+  ]);
 });
 </script>
 
@@ -167,7 +285,7 @@ onMounted(async () => {
         <!-- 场景选择 -->
         <div class="form-group">
           <label class="form-label">业务场景</label>
-          <div class="scenario-tabs">
+          <div v-if="scenarioOptions.length && isAdmin" class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
               :key="sc.value"
@@ -178,6 +296,10 @@ onMounted(async () => {
               {{ sc.label }}
             </button>
           </div>
+          <p v-else-if="scenarioOptions.length" class="user-scenario-hint">
+            当前场景：{{ currentScenarioLabel }}（由账号绑定确定）
+          </p>
+          <p v-else class="no-model-tip">当前账号暂无可用场景，请联系管理员分配</p>
         </div>
 
         <!-- 数据集选择 -->
@@ -185,7 +307,7 @@ onMounted(async () => {
           <label class="form-label">数据集</label>
           <select v-model="selectedDatasetId" class="form-input" :disabled="!selectedScenario || loadingDatasets">
             <option value="" disabled>-- 请选择数据集 --</option>
-            <option v-for="ds in datasetList" :key="ds.dataset_id" :value="ds.dataset_id">
+            <option v-for="ds in datasetOptions" :key="ds.dataset_id" :value="ds.dataset_id">
               {{ ds.name }}（{{ ds.field_count }} 字段）
             </option>
           </select>
@@ -233,44 +355,60 @@ onMounted(async () => {
 
         <!-- 动态输入字段 -->
         <div v-if="selectedModel && inputFields.length > 0" class="dynamic-fields">
-          <div class="form-group" v-for="field in inputFields" :key="field.field_name">
-            <label class="form-label">
-              {{ field.field_name }}
-              <span class="form-label__type">（{{ field.field_type }}）</span>
-              <span class="form-label__hint">{{ field.description }}</span>
-            </label>
-            <input
-              v-if="field.field_type === 'float'"
-              v-model.number="inputData[field.field_name]"
-              type="number"
-              step="0.01"
-              class="form-input"
-              :placeholder="field.sample_value"
-            />
-            <input
-              v-else-if="field.field_type === 'int'"
-              v-model.number="inputData[field.field_name]"
-              type="number"
-              step="1"
-              class="form-input"
-              :placeholder="field.sample_value"
-            />
-            <select
-              v-else-if="field.enum_values && field.enum_values.length > 0"
-              v-model="inputData[field.field_name]"
-              class="form-input"
-            >
-              <option value="" disabled>-- 请选择 --</option>
-              <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
-            </select>
-            <input
-              v-else
-              v-model="inputData[field.field_name]"
-              type="text"
-              class="form-input"
-              :placeholder="field.sample_value"
-            />
+          <div class="dynamic-fields__toolbar">
+            <span class="dynamic-fields__count">共 {{ inputFields.length }} 个输入特征</span>
+            <el-button size="small" plain @click="expandAll">展开全部</el-button>
+            <el-button size="small" plain @click="collapseAll">收起全部</el-button>
           </div>
+
+          <el-collapse v-model="expandedGroups" class="field-collapse">
+            <el-collapse-item v-for="group in fieldGroups" :key="group.name" :name="group.name">
+              <template #title>
+                <span class="field-group-title">{{ group.name }}（{{ group.fields.length }} 字段）</span>
+              </template>
+              <!-- v-if 保证折叠组不挂载内部 input（el-collapse 默认 v-show 仍会挂载子节点） -->
+              <div v-if="expandedGroups.includes(group.name)" class="field-group-body">
+                <div class="form-group" v-for="field in group.fields" :key="field.field_name">
+                  <label class="form-label">
+                    {{ field.field_name }}
+                    <span class="form-label__type">（{{ field.field_type }}）</span>
+                    <span class="form-label__hint">{{ field.description }}</span>
+                  </label>
+                  <input
+                    v-if="field.field_type === 'float'"
+                    v-model.number="inputData[field.field_name]"
+                    type="number"
+                    step="0.01"
+                    class="form-input"
+                    :placeholder="field.sample_value"
+                  />
+                  <input
+                    v-else-if="field.field_type === 'int'"
+                    v-model.number="inputData[field.field_name]"
+                    type="number"
+                    step="1"
+                    class="form-input"
+                    :placeholder="field.sample_value"
+                  />
+                  <select
+                    v-else-if="field.enum_values && field.enum_values.length > 0"
+                    v-model="inputData[field.field_name]"
+                    class="form-input"
+                  >
+                    <option value="" disabled>-- 请选择 --</option>
+                    <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                  <input
+                    v-else
+                    v-model="inputData[field.field_name]"
+                    type="text"
+                    class="form-input"
+                    :placeholder="field.sample_value"
+                  />
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
 
           <button
             class="infer-btn"
@@ -341,6 +479,16 @@ onMounted(async () => {
           </div>
           <div v-if="inferResult.is_risk" class="event-tip">
             已生成风险事件：{{ inferResult.generated_event_id }}（状态：待处置）
+            <el-button
+              v-if="inferResult.generated_event_id"
+              size="small"
+              type="primary"
+              plain
+              class="event-tip__btn"
+              @click="goEventDetail(inferResult.generated_event_id)"
+            >
+              查看风险事件详情
+            </el-button>
           </div>
         </div>
       </section>
@@ -417,6 +565,33 @@ onMounted(async () => {
   display: grid;
   gap: 16px;
   margin-top: 18px;
+}
+
+.dynamic-fields__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dynamic-fields__count {
+  margin-right: auto;
+  font-size: 0.8rem;
+  color: rgba(220, 234, 255, 0.55);
+}
+
+.field-collapse {
+  width: 100%;
+}
+
+.field-group-title {
+  font-size: 0.9rem;
+  color: #dbe9ff;
+}
+
+.field-group-body {
+  display: grid;
+  gap: 14px;
 }
 
 .form-group {
@@ -557,6 +732,16 @@ select.form-input option {
   line-height: 1.5;
 }
 
+.user-scenario-hint {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(91, 166, 255, 0.08);
+  border: 1px solid rgba(91, 166, 255, 0.2);
+  color: #9ad6ff;
+  font-size: 0.86rem;
+}
+
 .infer-btn {
   padding: 12px 24px;
   border: none;
@@ -652,12 +837,20 @@ select.form-input option {
 }
 
 .event-tip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 12px 16px;
   border-radius: 10px;
   background: rgba(255, 123, 114, 0.08);
   border: 1px solid rgba(255, 123, 114, 0.22);
   color: #ff8a83;
   font-size: 0.85rem;
+}
+
+.event-tip__btn {
+  margin-left: auto;
 }
 
 .inference-placeholder {
@@ -680,5 +873,62 @@ select.form-input option {
   .inference-layout {
     grid-template-columns: 1fr;
   }
+}
+</style>
+
+<style>
+/* Element Plus 折叠面板暗色覆盖（inference-page 命名空间） */
+.inference-page .el-collapse {
+  border: none;
+  --el-collapse-header-bg-color: transparent;
+  --el-collapse-content-bg-color: transparent;
+  --el-collapse-border-color: rgba(125, 201, 255, 0.1);
+  --el-collapse-header-text-color: #dbe9ff;
+  --el-collapse-header-active-text-color: #9ad6ff;
+  --el-collapse-content-text-color: rgba(217, 232, 255, 0.85);
+}
+
+.inference-page .el-collapse-item__header {
+  background: rgba(8, 17, 31, 0.6);
+  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.inference-page .el-collapse-item__header.is-active {
+  background: rgba(91, 166, 255, 0.08);
+}
+
+.inference-page .el-collapse-item__arrow {
+  color: rgba(154, 214, 255, 0.7);
+}
+
+.inference-page .el-collapse-item__wrap {
+  background: transparent;
+  border-bottom: none;
+}
+
+.inference-page .el-collapse-item__content {
+  padding: 10px 14px 16px;
+}
+
+.inference-page .el-button.is-plain {
+  --el-button-bg-color: rgba(91, 166, 255, 0.1) !important;
+  --el-button-border-color: rgba(91, 166, 255, 0.35) !important;
+  --el-button-text-color: #9ad6ff !important;
+  --el-button-hover-bg-color: rgba(91, 166, 255, 0.2) !important;
+  --el-button-hover-border-color: rgba(91, 166, 255, 0.5) !important;
+  --el-button-hover-text-color: #bae3ff !important;
+}
+
+.inference-page .el-button--primary {
+  --el-button-bg-color: #5ba6ff;
+  --el-button-border-color: #5ba6ff;
+  --el-button-text-color: #ffffff;
+  --el-button-hover-bg-color: #4a94ee;
+  --el-button-hover-border-color: #4a94ee;
+  --el-button-hover-text-color: #ffffff;
 }
 </style>

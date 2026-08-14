@@ -8,12 +8,7 @@
  * request.js 响应拦截器已剥掉 axios 外层，直接返回后端统一结构
  * {code, data, message}；非零 code 时后端以对应 HTTP 状态码返回，由 axios 抛错。
  */
-import request from '@/utils/request';
-
-const unwrapData = (res) => {
-  if (res && res.code === 0) return res.data;
-  throw new Error(res?.message || '请求失败');
-};
+import request, { unwrapData } from '@/utils/request';
 
 /** 已注册场景（需求 1.1：训练前必须先选场景） */
 export const getScenarios = async () => unwrapData(await request.get('/api/v1/scenarios'));

@@ -5,16 +5,17 @@
  * 展示三大场景卡片：网络安全 / 电力系统 / 航母甲板
  * 点击卡片跳转至对应场景大屏
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { Scenario } from '@/types/security';
-import { getScenarioList } from '@/services/mockApi';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import ScenarioCard from '@/components/common/ScenarioCard.vue';
 
 const router = useRouter();
+const scenarioStore = useScenarioStore();
 
-/** 场景列表数据 */
-const scenarios = ref<Scenario[]>([]);
+/** 场景列表数据（由 scenarioStore 经 mockApi 过滤后注入，页面不直连 mockApi） */
+const scenarios = computed<Scenario[]>(() => scenarioStore.scenarios);
 /** 加载状态 */
 const loading = ref(true);
 /** 错误信息 */
@@ -25,7 +26,7 @@ const loadScenarios = async () => {
   loading.value = true;
   error.value = '';
   try {
-    scenarios.value = await getScenarioList();
+    await scenarioStore.fetchScenarioList();
   } catch (err) {
     error.value = err instanceof Error ? err.message : '场景数据加载失败';
   } finally {
@@ -66,6 +67,11 @@ onMounted(() => {
     <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
       <button class="ghost-button" @click="loadScenarios">重试</button>
+    </section>
+
+    <!-- 空态引导：未分配任何场景（需求 6.5：普通用户仅见被分配场景） -->
+    <section v-else-if="!scenarios.length" class="state-card">
+      <p>暂无分配场景，请联系管理员</p>
     </section>
 
     <!-- 场景卡片网格 -->

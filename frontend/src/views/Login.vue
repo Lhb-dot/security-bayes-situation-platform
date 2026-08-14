@@ -7,9 +7,10 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { login } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
+const userStore = useUserStore();
 
 const username = ref('');
 const password = ref('');
@@ -24,9 +25,13 @@ const handleLogin = async () => {
   loading.value = true;
   errorMsg.value = '';
   try {
-    const user = await login(username.value.trim(), password.value);
+    // 登录态统一走 Pinia userStore，与路由守卫同源，避免登录后仍被当作未登录而重定向回登录页
+    await userStore.login(username.value.trim(), password.value);
+    const user = userStore.currentUser;
+    if (!user) throw new Error('登录失败');
     ElMessage.success(`欢迎回来，${user.display_name}（${user.role === 'ADMIN' ? '管理员' : '普通用户'}）`);
-    router.push('/overview');
+    // Task 007：登录成功按角色落地（ADMIN → 场景中心；USER → 首页 /home）
+    router.push(user.role === 'ADMIN' ? '/scenarios' : '/home');
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '登录失败';
   } finally {
@@ -48,7 +53,7 @@ const quickLogin = async (uname: string, pwd: string) => {
       <div class="login-card__head">
         <p class="eyebrow">Bayes Situation Awareness Platform</p>
         <h1>多场景贝叶斯分类态势感知系统</h1>
-        <p class="login-card__sub">网络 · 电力 · 航母甲板保障作业</p>
+        <p class="login-card__sub">网络 · 电力 · 地质 · 航母甲板保障作业</p>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">

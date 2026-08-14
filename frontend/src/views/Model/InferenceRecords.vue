@@ -6,11 +6,15 @@
  * 需求 6.8.4：管理员查看单个用户数据时，可以按用户ID筛选。
  */
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import {
   getInferenceRecords,
   getUserList,
   getCurrentUser,
   getAlgorithms,
+  getRiskEventByInferenceRecordId,
 } from '@/services/mockApi';
 import type { InferenceRecord, ScenarioId, UserAccount, AlgorithmDefinition } from '@/types/security';
 
@@ -19,6 +23,8 @@ const users = ref<UserAccount[]>([]);
 const algorithms = ref<AlgorithmDefinition[]>([]);
 const currentUser = ref<UserAccount | null>(null);
 const loading = ref(false);
+const router = useRouter();
+const scenarioStore = useScenarioStore();
 
 const scenarioFilter = ref<'' | ScenarioId>('');
 const userFilter = ref<string>('');
@@ -27,8 +33,19 @@ const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 const userName = (id: string) => users.value.find((u) => u.user_id === id)?.username ?? id;
-const scenarioName = (id: string) =>
-  id === 'network_security' ? '网络安全' : id === 'power_system' ? '电力系统' : '航母甲板作业';
+/** 四场景展示名映射（Task 016 补全 geological_risk） */
+const SCENARIO_LABEL: Record<string, string> = {
+  network_security: '网络安全',
+  power_system: '电力系统',
+  geological_risk: '地质风险',
+  flightdeck_operation: '航母甲板作业',
+};
+const scenarioName = (id: string) => SCENARIO_LABEL[id] ?? id;
+
+/** 场景筛选选项：从 scenarioStore.activeScenarios 注入（Task 016） */
+const scenarioOptions = computed(() =>
+  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+);
 
 const loadRecords = async () => {
   loading.value = true;
@@ -45,10 +62,25 @@ const openFeatures = (r: InferenceRecord) => {
   featureTarget.value = r;
 };
 
+/** 风险记录 → 跳转风险事件详情（Task 012） */
+const goEventDetail = async (r: InferenceRecord) => {
+  try {
+    const ev = await getRiskEventByInferenceRecordId(r.inference_record_id);
+    if (!ev) {
+      ElMessage.info('该记录未生成风险事件');
+      return;
+    }
+    router.push({ path: `/events/${ev.event_id}` });
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '查询风险事件失败');
+  }
+};
+
 onMounted(async () => {
   currentUser.value = getCurrentUser();
   const algos = await getAlgorithms();
   algorithms.value = algos;
+  await scenarioStore.fetchScenarioList();
   if (isAdmin.value) users.value = await getUserList();
   await loadRecords();
 });
@@ -71,8 +103,7 @@ onMounted(async () => {
         <span class="filter-item__label">场景</span>
         <select v-model="scenarioFilter" class="filter-select" @change="loadRecords">
           <option value="">全部场景</option>
-          <option value="network_security">网络安全</option>
-          <option value="power_system">电力系统</option>
+          <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
         </select>
       </label>
       <label v-if="isAdmin" class="filter-item">
@@ -125,7 +156,10 @@ onMounted(async () => {
               <td>{{ (r.risk_score * 100).toFixed(1) }}%</td>
               <td>{{ r.occurred_at }}</td>
               <td>
-                <button class="op-btn" @click="openFeatures(r)">输入特征</button>
+                <div class="op-group">
+                  <button class="op-btn" @click="openFeatures(r)">输入特征</button>
+                  <button v-if="r.is_risk" class="op-btn" @click="goEventDetail(r)">查看事件</button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -256,6 +290,11 @@ onMounted(async () => {
 
 .op-btn:hover {
   background: rgba(91, 166, 255, 0.2);
+}
+
+.op-group {
+  display: flex;
+  gap: 6px;
 }
 
 .risk-badge,

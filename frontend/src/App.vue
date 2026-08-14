@@ -7,12 +7,13 @@ const router = useRouter();
 const route = useRoute();
 
 import AlertDetailView from './views/Alert/AlertDetailView.vue';
-import AlertsView from './views/Alert/AlertsView.vue'；
+import AlertsView from './views/Alert/AlertsView.vue';
 import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
-import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData, getCurrentUser, logout } from './services/mockApi';
-import type { AlertRecord, DashboardSnapshot, MetricHistory, UserAccount } from './types/security';
+import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData } from './services/mockApi';
+import type { AlertRecord, DashboardSnapshot, MetricHistory } from './types/security';
+import { useUserStore } from './stores/userStore';
 
 // 页面数据
 const dashboard = ref<DashboardSnapshot | null>(null);
@@ -23,19 +24,14 @@ const error = ref('');
 const warRoomOpen = ref(false);
 const activeMetric = ref<MetricHistory | null>(null);
 
-// ===================== v2.0 当前登录用户 =====================
-const currentUser = ref<UserAccount | null>(getCurrentUser());
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
-
-// 路由切换后重新同步当前用户（登录页跳转业务页时 setup 已执行完毕，需手动刷新，
-// 否则登录后右上角姓名/角色仍停留在未登录的空状态）
-const syncCurrentUser = () => {
-  currentUser.value = getCurrentUser();
-};
+// ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
+// 登录/登出统一走 userStore，避免页面直连 mockApi 导致 Pinia 状态与守卫判断不同步
+const userStore = useUserStore();
+const currentUser = computed(() => userStore.currentUser);
+const isAdmin = computed(() => userStore.isAdmin);
 
 const handleLogout = async () => {
-  await logout();
-  currentUser.value = null;
+  await userStore.logout();
   router.push('/login');
 };
 
@@ -182,6 +178,7 @@ const openMetric = (id: string) => {
 // ===================== 页面标题计算属性 =====================
 const pageTitle = computed(() => {
   if (route.path === '/login') return '用户登录';
+  if (route.path === '/home') return '首页（全局态势）';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
   if (route.path === '/alerts') return '告警详情总览';
   if (route.path.startsWith('/alerts/')) return '告警处置分析';
@@ -189,6 +186,7 @@ const pageTitle = computed(() => {
   if (route.path === '/scenarios') return '场景中心';
   if (route.path.startsWith('/scenarios/')) return '场景大屏';
   if (route.path === '/datasets') return '数据集中心';
+  if (route.path.startsWith('/datasets/')) return '数据集详情';
   if (route.path === '/models') return '模型中心';
   if (route.path === '/inference') return '风险研判';
   if (route.path === '/inference-records') return '推理记录';
@@ -196,13 +194,13 @@ const pageTitle = computed(() => {
   if (route.path === '/reports') return '报告中心';
   if (route.path === '/users') return '用户管理';
   if (route.path === '/settings') return '系统设置';
+  if (route.path.startsWith('/events/')) return '风险事件详情';
   return '态势感知与威胁可视化平台';
 });
 
 // ===================== 路由监听与生命周期 =====================
 // 注册路由后置钩子，页面切换时重新加载数据（保存返回的取消注册函数）
 const unregisterAfterEach = router.afterEach(() => {
-  syncCurrentUser();
   loadData();
 });
 
@@ -221,6 +219,7 @@ onBeforeUnmount(() => {
 
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');
+const isHomePage = computed(() => route.path === '/home');
 const isDashboardPage = computed(() => route.path === '/dashboard');
 const isAlertsListPage = computed(() => route.path === '/alerts');
 const isAlertDetailPage = computed(() => route.path.startsWith('/alerts/'));
@@ -237,10 +236,82 @@ const isUsersPage = computed(() => route.path === '/users');
 const isSettingsPage = computed(() => route.path === '/settings');
 const isNewRoutePage = computed(() => {
   const path = route.path;
-  return path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets'
+  return path === '/home' || path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
     || path === '/models' || path === '/inference' || path === '/inference-records' || path === '/situation'
-    || path === '/reports' || path === '/users' || path === '/settings';
+    || path === '/reports' || path === '/users' || path === '/settings' || path.startsWith('/events/');
 });
+
+// ===================== 顶部导航（Task 005：meta/角色驱动渲染） =====================
+// 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
+interface NavItem {
+  path: string;
+  label: string;
+  /** 仅管理员可见/可访问（与路由 meta.requiresAdmin 对应） */
+  requiresAdmin?: boolean;
+  /** 普通用户隐藏入口（与路由 meta.hiddenForUser 对应） */
+  hiddenForUser?: boolean;
+  /** 仅普通用户可见入口（与路由 meta.userOnly 对应；管理员隐藏，如 /home） */
+  userOnly?: boolean;
+  /** 点击动作：复用原导航跳转函数，保持既有行为（如首页重置图表并重载） */
+  action?: () => void;
+}
+
+const navItems: NavItem[] = [
+  { path: '/home', label: '首页（全局态势）', userOnly: true },
+  { path: '/dashboard', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goDashboard },
+  { path: '/overview', label: '全局总览', requiresAdmin: true, hiddenForUser: true, action: goOverview },
+  { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
+  { path: '/datasets', label: '数据集中心', action: goDatasetCenter },
+  { path: '/alerts', label: '告警中心', requiresAdmin: true, hiddenForUser: true, action: goAlertsList },
+  { path: '/risk', label: 'AI模型训练', requiresAdmin: true, hiddenForUser: true, action: goAiTrainPage },
+  { path: '/models', label: '模型中心', action: goModelCenter },
+  { path: '/inference', label: '风险研判', action: goRiskInference },
+  { path: '/inference-records', label: '推理记录', action: goInferenceRecords },
+  { path: '/situation', label: '态势分析', action: goSituation },
+  { path: '/reports', label: '报告中心', action: goReportCenter },
+  { path: '/users', label: '用户管理', requiresAdmin: true, hiddenForUser: true, action: goUsers },
+  { path: '/settings', label: '系统设置', action: goSettings },
+];
+
+/** 按当前角色过滤可见导航项（管理员全部；普通用户隐藏管理员专属入口） */
+const visibleNavItems = computed(() =>
+  navItems.filter((item) => {
+    if (item.requiresAdmin && !isAdmin.value) return false;
+    if (item.hiddenForUser && !isAdmin.value) return false;
+    if (item.userOnly && isAdmin.value) return false;
+    return true;
+  })
+);
+
+/** 导航激活态：沿用原 isXxxPage 判断，保持既有高亮逻辑（含告警详情前缀高亮） */
+const isNavActive = (item: NavItem): boolean => {
+  switch (item.path) {
+    case '/home': return isHomePage.value;
+    case '/dashboard': return isDashboardPage.value;
+    case '/overview': return isOverviewPage.value;
+    case '/scenarios': return isScenarioCenterPage.value;
+    case '/datasets': return isDatasetCenterPage.value;
+    case '/alerts': return isAlertsListPage.value || isAlertDetailPage.value;
+    case '/risk': return isRiskPage.value;
+    case '/models': return isModelCenterPage.value;
+    case '/inference': return isRiskInferencePage.value;
+    case '/inference-records': return isInferenceRecordsPage.value;
+    case '/situation': return isSituationPage.value;
+    case '/reports': return isReportCenterPage.value;
+    case '/users': return isUsersPage.value;
+    case '/settings': return isSettingsPage.value;
+    default: return false;
+  }
+};
+
+/** 导航点击：优先复用原导航跳转函数（含首页图表重置重载），兜底 router.push */
+const handleNavClick = (item: NavItem): void => {
+  if (item.action) {
+    item.action();
+    return;
+  }
+  router.push(item.path);
+};
 </script>
 
 <template>
@@ -255,98 +326,13 @@ const isNewRoutePage = computed(() => {
       <div class="topbar__actions">
         <nav class="nav-tabs">
           <button
-            v-if="isAdmin"
+            v-for="item in visibleNavItems"
+            :key="item.path"
             class="nav-tabs__item"
-            :class="{ 'is-active': isDashboardPage }"
-            @click="goDashboard"
+            :class="{ 'is-active': isNavActive(item) }"
+            @click="handleNavClick(item)"
           >
-            首页
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isOverviewPage }"
-            @click="goOverview"
-          >
-            全局总览
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isScenarioCenterPage }"
-            @click="goScenarioCenter"
-          >
-            场景中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isDatasetCenterPage }"
-            @click="goDatasetCenter"
-          >
-            数据集中心
-          </button>
-          <button
-            v-if="isAdmin"
-            class="nav-tabs__item"
-            :class="{ 'is-active': isAlertsListPage || isAlertDetailPage }"
-            @click="goAlertsList"
-          >
-            告警中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isRiskPage }"
-            @click="goAiTrainPage"
-          >
-            AI模型训练
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isModelCenterPage }"
-            @click="goModelCenter"
-          >
-            模型中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isRiskInferencePage }"
-            @click="goRiskInference"
-          >
-            风险研判
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isInferenceRecordsPage }"
-            @click="goInferenceRecords"
-          >
-            推理记录
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isSituationPage }"
-            @click="goSituation"
-          >
-            态势分析
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isReportCenterPage }"
-            @click="goReportCenter"
-          >
-            报告中心
-          </button>
-          <button
-            v-if="isAdmin"
-            class="nav-tabs__item"
-            :class="{ 'is-active': isUsersPage }"
-            @click="goUsers"
-          >
-            用户管理
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isSettingsPage }"
-            @click="goSettings"
-          >
-            系统设置
+            {{ item.label }}
           </button>
         </nav>
         <button class="ghost-button" @click="reloadData">刷新模拟数据</button>

@@ -2,9 +2,11 @@
 /**
  * ScenarioSelector - 场景筛选器组件
  *
- * 支持筛选全部场景或三个具体场景
+ * 支持筛选全部场景或当前用户可见场景（Task 016：场景选项从 scenarioStore.activeScenarios 注入）
  * 使用 v-model 绑定选中值
  */
+import { computed, onMounted } from 'vue';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import type { ScenarioId } from '@/types/security';
 
 defineProps<{
@@ -19,13 +21,17 @@ defineEmits<{
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-/** 场景选项列表 */
-const options: { value: ScenarioId | 'all'; label: string }[] = [
+const scenarioStore = useScenarioStore();
+
+/** 场景选项列表（"全部场景" + 当前用户可见场景，Task 006 已按绑定过滤） */
+const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => [
   { value: 'all', label: '全部场景' },
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-  { value: 'flightdeck_operation', label: '航母甲板' },
-];
+  ...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })),
+]);
+
+onMounted(() => {
+  scenarioStore.fetchScenarioList();
+});
 </script>
 
 <template>

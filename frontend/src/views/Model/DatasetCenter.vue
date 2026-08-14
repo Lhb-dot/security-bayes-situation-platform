@@ -6,6 +6,7 @@
  * 支持按场景筛选、数据集列表展示、数据集字段预览
  */
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { Dataset, DatasetField, DatasetVersion, ScenarioId, UserAccount } from '@/types/security';
 import {
@@ -20,10 +21,13 @@ import {
 } from '@/services/mockApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 
+const router = useRouter();
+
 /** 场景名称映射 */
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
@@ -264,6 +268,11 @@ const closeFieldPreview = () => {
   fieldDialogFields.value = [];
 };
 
+/** 跳转数据集详情页（数据内容预览，需求 2.4） */
+const goDatasetDetail = (dataset: Dataset) => {
+  router.push({ path: `/datasets/${dataset.dataset_id}` });
+};
+
 // ===================== 生命周期 =====================
 onMounted(() => {
   currentUser.value = getCurrentUser();
@@ -375,7 +384,7 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="170" align="center" fixed="right">
+        <el-table-column label="操作" width="240" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
               <el-button
@@ -385,6 +394,13 @@ onMounted(() => {
                 @click="openFieldPreview(row)"
               >
                 字段预览
+              </el-button>
+              <el-button
+                size="small"
+                plain
+                @click="goDatasetDetail(row)"
+              >
+                数据预览
               </el-button>
               <el-button
                 v-if="isAdmin"
@@ -478,6 +494,7 @@ onMounted(() => {
             <option value="network_security">网络安全</option>
             <option value="power_system">电力系统</option>
             <option value="flightdeck_operation">航母甲板作业</option>
+            <option value="geological_risk">地质风险</option>
           </select>
         </div>
         <div class="upload-form__row upload-form__row--split">

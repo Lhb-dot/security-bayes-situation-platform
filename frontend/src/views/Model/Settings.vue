@@ -2,7 +2,7 @@
 /**
  * Settings - 系统设置
  *
- * 需求 5.4.1 风险阈值配置：按场景隔离（network/power）、medium/high 两档、
+ * 需求 5.4.1 风险阈值配置：按场景隔离（network/power/geological；航母甲板预留）、medium/high 两档、
  *  范围 [0,1]、high > medium、实时生效、每次修改记录变更日志（操作人/场景/时间/前后值）。
  * 航母甲板场景第一阶段仅预留配置能力，不启用实际阈值计算。
  * 需求 6.5.2：仅管理员可修改风险阈值。
@@ -28,15 +28,17 @@ const editing = ref<Record<string, { medium: number; high: number }>>({
   network_security: { medium: 0.45, high: 0.75 },
   power_system: { medium: 0.5, high: 0.8 },
   flightdeck_operation: { medium: 0.5, high: 0.8 },
+  geological_risk: { medium: 0.5, high: 0.8 },
 });
 
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   flightdeck_operation: '航母甲板作业',
+  geological_risk: '地质风险',
 };
 
-const activeScenarios: ScenarioId[] = ['network_security', 'power_system'];
+const activeScenarios: ScenarioId[] = ['network_security', 'power_system', 'geological_risk'];
 
 const loadData = async () => {
   const [ths, logs] = await Promise.all([getThresholds(), getThresholdChangeLogs()]);
@@ -74,6 +76,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
 const scenarioSwitches = ref([
   { id: 'network_security', label: '网络安全态势感知', enabled: true },
   { id: 'power_system', label: '电力系统风险态势感知', enabled: true },
+  { id: 'geological_risk', label: '地质风险态势感知', enabled: true },
   { id: 'flightdeck_operation', label: '航母甲板保障作业态势感知', enabled: true },
 ]);
 
