@@ -113,9 +113,9 @@ onMounted(() => {
       <section class="ov-hero card">
         <div class="ov-hero__content">
           <div>
-            <p class="eyebrow">Global Overview</p>
-            <h2>全局总览</h2>
-            <p class="ov-hero__desc">三大复杂系统安全态势统一监控平台</p>
+            <p class="eyebrow">Home</p>
+            <h2>首页</h2>
+            <p class="ov-hero__desc">全平台安全态势统一监控（管理员首页）</p>
           </div>
           <div class="ov-hero__metrics">
             <div class="ov-hero__main-score">

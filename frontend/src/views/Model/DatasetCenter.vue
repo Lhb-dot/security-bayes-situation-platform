@@ -416,12 +416,13 @@ onMounted(() => {
       </el-table>
     </div>
 
-    <!-- 字段预览弹窗 -->
+    <!-- 字段预览弹窗（append-to-body：逃出页面容器层叠上下文，不被 topbar 遮挡） -->
     <el-dialog
       v-model="fieldDialogVisible"
       :title="fieldDialogTitle"
       width="760px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
       @close="closeFieldPreview"
     >
@@ -434,6 +435,7 @@ onMounted(() => {
         v-else
         :data="fieldDialogFields"
         stripe
+        max-height="55vh"
         style="width: 100%"
         empty-text="该数据集暂无字段信息"
       >
@@ -470,12 +472,13 @@ onMounted(() => {
       </el-table>
     </el-dialog>
 
-    <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3） -->
+    <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="uploadDialogVisible"
       :title="uploadDialogMode === 'newVersion' ? `创建新版本 - ${newVersionTarget?.name ?? ''}` : '上传数据集'"
       width="680px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
     >
       <div class="upload-form">
@@ -539,12 +542,13 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6） -->
+    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="versionDialogVisible"
       :title="versionDialogTitle"
       width="720px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
     >
       <div class="version-dialog-toolbar">
@@ -562,6 +566,7 @@ onMounted(() => {
       <el-table
         :data="versionList"
         stripe
+        max-height="55vh"
         style="width: 100%"
         empty-text="暂无版本记录"
       >
@@ -927,6 +932,9 @@ onMounted(() => {
 .upload-fields {
   display: grid;
   gap: 8px;
+  max-height: 38vh; /* 字段较多时列表内部竖向滚动，标题/X/底部按钮始终可见 */
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .upload-field-row {

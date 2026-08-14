@@ -153,7 +153,7 @@ const pageTitle = computed(() => {
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
   if (route.path === '/alerts') return '告警详情总览';
   if (route.path.startsWith('/alerts/')) return '告警处置分析';
-  if (route.path === '/overview') return '全局总览';
+  if (route.path === '/overview') return '首页';
   if (route.path === '/scenarios') return '场景中心';
   if (route.path.startsWith('/scenarios/')) return '场景大屏';
   if (route.path === '/datasets') return '数据集中心';
@@ -227,7 +227,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/home', label: '首页', userOnly: true },
-  { path: '/overview', label: '全局总览', requiresAdmin: true, hiddenForUser: true, action: goOverview },
+  { path: '/overview', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goOverview },
   { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
   { path: '/datasets', label: '数据集中心', action: goDatasetCenter },
   { path: '/alerts', label: '告警中心', requiresAdmin: true, hiddenForUser: true, action: goAlertsList },
