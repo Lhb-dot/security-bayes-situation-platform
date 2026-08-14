@@ -2128,6 +2128,10 @@ export const getScenarioList = async (): Promise<Scenario[]> => {
   );
 };
 
+/** 全部场景选项（筛选下拉用）：不按用户过滤，恒返回四个场景；用户数据可见性由各数据接口保证 */
+export const getAllScenarioOptions = async (): Promise<{ value: ScenarioId; label: string }[]> =>
+  simulateLatency(SCENARIO_META.map((m) => ({ value: m.id, label: m.name })));
+
 /** 获取单个场景详情及态势数据（需求 6.8 个人/全局态势） */
 export const getScenarioDetail = async (scenarioId: ScenarioId): Promise<ScenarioDetail> => {
   ensureScenarioCache();

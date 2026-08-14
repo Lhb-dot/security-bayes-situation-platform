@@ -6,7 +6,7 @@
  * 使用本地 ref + 双向 watch 保证原生 <select> 一定显示选中值（:value 绑定在 select 上不可靠）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import { useScenarioStore } from '@/stores/scenarioStore';
+import { getAllScenarioOptions } from '@/services/mockApi';
 import type { ScenarioId } from '@/types/security';
 
 const props = defineProps<{
@@ -21,14 +21,15 @@ const emit = defineEmits<{
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-const scenarioStore = useScenarioStore();
+/** 全部场景选项（筛选下拉用，不按用户过滤；管理员与普通用户都展示所有场景） */
+const allScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
 
-/** 选项列表："所有场景"恒为第一项 + 用户可见场景 */
+/** 选项列表："所有场景"恒为第一项 + 全部场景 */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
   const list: { value: ScenarioId | 'all'; label: string }[] = [{ value: 'all', label: '所有场景' }];
   if (props.showAll !== false) {
-    for (const s of scenarioStore.activeScenarios) {
-      list.push({ value: s.scenario_id, label: s.name });
+    for (const s of allScenarios.value) {
+      list.push(s);
     }
   }
   return list;
@@ -46,8 +47,8 @@ watch(localValue, (v) => {
   emit('update:modelValue', v);
 });
 
-onMounted(() => {
-  scenarioStore.fetchScenarioList();
+onMounted(async () => {
+  allScenarios.value = await getAllScenarioOptions();
 });
 </script>
 
