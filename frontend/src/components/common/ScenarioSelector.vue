@@ -52,32 +52,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <select v-model="localValue" class="scenario-selector__select">
-    <option v-for="opt in options" :key="opt.value" :value="opt.value">
-      {{ opt.label }}
-    </option>
-  </select>
+  <!-- 与推理记录筛选框一致的样式（filter-item/filter-select 全局类） -->
+  <label class="filter-item">
+    <span class="filter-item__label">场景</span>
+    <select v-model="localValue" class="filter-select">
+      <option v-for="opt in options" :key="opt.value" :value="opt.value">
+        {{ opt.label }}
+      </option>
+    </select>
+  </label>
 </template>
-
-<style scoped>
-.scenario-selector__select {
-  padding: 7px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 201, 255, 0.2);
-  background: rgba(8, 17, 31, 0.6);
-  color: #e8f1ff;
-  font-size: 0.88rem;
-  outline: none;
-  cursor: pointer;
-  min-width: 130px;
-}
-
-.scenario-selector__select:focus {
-  border-color: rgba(91, 166, 255, 0.5);
-}
-
-.scenario-selector__select option {
-  background: #0b1628;
-  color: #e8f1ff;
-}
-</style>

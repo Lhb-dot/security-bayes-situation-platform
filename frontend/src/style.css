@@ -1259,3 +1259,35 @@ button {
   background: linear-gradient(135deg, #5ba6ff, #407acc);
   color: #fff;
 }
+
+/* ===================== 筛选框（统一为推理记录样式，全站一致） ===================== */
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-item__label {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.filter-select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  outline: none;
+  min-width: 120px;
+}
+
+.filter-select:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.filter-select option {
+  background: #0b1628;
+  color: #e8f1ff;
+}

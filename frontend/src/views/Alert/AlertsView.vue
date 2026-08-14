@@ -107,28 +107,28 @@ onMounted(() => {
       <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
     </div>
 
-    <!-- 筛选栏：下拉框选择，默认全部 -->
+    <!-- 筛选栏：下拉框选择，默认全部（样式与推理记录筛选框一致） -->
     <div class="risk-events-filters">
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">场景</label>
-        <select v-model="selectedScenario" class="risk-events-filters__select">
+      <label class="filter-item">
+        <span class="filter-item__label">场景</span>
+        <select v-model="selectedScenario" class="filter-select">
           <option v-for="opt in scenarioOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
-      </div>
+      </label>
 
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">风险等级</label>
-        <select v-model="selectedRiskLevel" class="risk-events-filters__select">
+      <label class="filter-item">
+        <span class="filter-item__label">风险等级</span>
+        <select v-model="selectedRiskLevel" class="filter-select">
           <option v-for="opt in riskLevelOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
-      </div>
+      </label>
 
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">处置状态</label>
-        <select v-model="selectedStatus" class="risk-events-filters__select">
+      <label class="filter-item">
+        <span class="filter-item__label">处置状态</span>
+        <select v-model="selectedStatus" class="filter-select">
           <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
-      </div>
+      </label>
     </div>
 
     <!-- 加载状态 -->
