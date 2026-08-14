@@ -6,6 +6,7 @@
 需求 1.1：场景编码是固定数据字典（4 个场景），创建时用 SCENARIO_CODES 硬编码校验。
 权限要点（需求 6.5.2）：查看场景列表/切换场景所有登录用户允许；增删改仅 ADMIN。
 """
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,6 +19,7 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    MODEL_STATUS_PUBLISHED,
     ROLE_ADMIN,
     SCENARIO_ACCESS_ACTUAL,
     SCENARIO_ACCESS_STATUSES,
@@ -25,6 +27,7 @@ from app.services.constants import (
     SCENARIO_CODES,
     SCENARIO_NAME_MAX_LEN,
 )
+from app.services.scenario_analytics import compute_scenario_insights
 from app.utils.common import (
     get_logger,
     row_to_dict,
@@ -66,6 +69,67 @@ class ScenarioService(ServiceBase):
         if scenario is None:
             raise ServiceError(404, "场景不存在")
         return ok(data=row_to_dict(scenario))
+
+    @service_call
+    def get_insights(
+        self,
+        current_user: Optional[AppUser],
+        scenario_id: int,
+        dataset_id: Optional[int] = None,
+        sample_rows: int = 500,
+    ):
+        """场景差异化辅助计算（V3.0 §8）。
+
+        读取指定场景数据集 ARFF 的前 sample_rows 行，按场景分发计算
+        （网络端口聚合/电力设备健康度/地质因子合成/航母轨迹特征）。
+        权限：登录用户；普通用户仅能访问被绑定场景（§1.1.6）的洞察。
+        """
+        self.require_login(current_user)
+        scenario = self.db.get(Scenario, scenario_id)
+        if scenario is None:
+            raise ServiceError(404, "场景不存在")
+        if getattr(current_user, "role", None) != ROLE_ADMIN:
+            if getattr(current_user, "scenario_id", None) != scenario_id:
+                raise ServiceError(403, "无权限操作")
+
+        from app.services.constants import DATASET_RISK_TYPES
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import read_arff
+
+        stmt = select(Dataset).where(Dataset.scenario_id == scenario_id)
+        if dataset_id is not None:
+            stmt = stmt.where(Dataset.id == dataset_id)
+        stmt = stmt.order_by(Dataset.id)
+        dataset = self.db.scalars(stmt).first()
+        if dataset is None:
+            raise ServiceError(404, "该场景下没有可用数据集")
+
+        if getattr(current_user, "role", None) != ROLE_ADMIN:
+            published = self.db.scalar(
+                select(func.count()).select_from(ModelVersion).where(
+                    ModelVersion.dataset_id == dataset.id,
+                    ModelVersion.status == MODEL_STATUS_PUBLISHED,
+                )
+            )
+            if not published:
+                raise ServiceError(403, "普通用户仅能查看已发布模型关联数据集的洞察")
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            raise ServiceError(404, f"数据集文件不存在: {path}")
+
+        fields, rows = read_arff(path, max_rows=sample_rows)
+        risk_type = DATASET_RISK_TYPES.get(dataset.logical_id)
+        insights = compute_scenario_insights(risk_type or "", fields, rows)
+        return ok(
+            data={
+                "scenario_id": scenario_id,
+                "dataset_id": dataset.id,
+                "logical_id": dataset.logical_id,
+                "computed_rows": len(rows),
+                **insights,
+            }
+        )
 
     # ------------------------------------------------------------------
     # 维护（仅 ADMIN）
