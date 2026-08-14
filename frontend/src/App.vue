@@ -78,12 +78,6 @@ const goRiskInference = () => {
   router.push({ path: '/inference' });
 };
 
-/**
- * 跳转态势分析
- */
-const goSituation = () => {
-  router.push({ path: '/situation' });
-};
 
 /**
  * 跳转报告中心
@@ -257,7 +251,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { path: '/home', label: '首页（全局态势）', userOnly: true },
+  { path: '/home', label: '首页', userOnly: true },
   { path: '/dashboard', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goDashboard },
   { path: '/overview', label: '全局总览', requiresAdmin: true, hiddenForUser: true, action: goOverview },
   { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
@@ -267,10 +261,9 @@ const navItems: NavItem[] = [
   { path: '/models', label: '模型中心', action: goModelCenter },
   { path: '/inference', label: '风险研判', action: goRiskInference },
   { path: '/inference-records', label: '推理记录', action: goInferenceRecords },
-  { path: '/situation', label: '态势分析', action: goSituation },
   { path: '/reports', label: '报告中心', action: goReportCenter },
   { path: '/users', label: '用户管理', requiresAdmin: true, hiddenForUser: true, action: goUsers },
-  { path: '/settings', label: '系统设置', action: goSettings },
+  { path: '/settings', label: '设置', action: goSettings },
 ];
 
 /** 按当前角色过滤可见导航项（管理员全部；普通用户隐藏管理员专属入口） */
@@ -332,7 +325,7 @@ const handleNavClick = (item: NavItem): void => {
             :class="{ 'is-active': isNavActive(item) }"
             @click="handleNavClick(item)"
           >
-            {{ item.label }}
+            {{ item.path === '/settings' ? (isAdmin ? '系统设置' : '设置') : item.label }}
           </button>
         </nav>
         <button class="ghost-button" @click="reloadData">刷新模拟数据</button>

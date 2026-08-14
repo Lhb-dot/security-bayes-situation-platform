@@ -6,7 +6,7 @@
  *  - 管理员：审核发布、下线、重新发布、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   getModelVersions,
@@ -47,13 +47,22 @@ const scenarioLabel: Record<string, string> = {
   flightdeck_operation: '航母甲板',
 };
 
-/** 数据集选项（从模型列表提取） */
+/** 数据集选项（仅展示当前所选场景的数据集；未选场景时展示全部） */
 const datasetOptions = computed(() => {
   const set = new Map<string, string>();
-  for (const m of models.value) {
+  const base =
+    selectedScenario.value === 'all'
+      ? models.value
+      : models.value.filter((m) => m.scenario_id === selectedScenario.value);
+  for (const m of base) {
     if (!set.has(m.dataset_id)) set.set(m.dataset_id, m.dataset_id);
   }
   return Array.from(set, ([id, name]) => ({ id, name }));
+});
+
+/** 切换场景时重置数据集筛选 */
+watch(selectedScenario, () => {
+  selectedDataset.value = 'all';
 });
 
 const filteredModels = computed(() => {

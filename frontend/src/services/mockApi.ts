@@ -860,6 +860,20 @@ export const setUserScenarioIds = async (userId: string, scenarioIds: ScenarioId
   record.scenario_ids = [...scenarioIds];
 };
 
+/**
+ * 当前用户更新自己关注的场景（V3.0 需求：账号不被管理员分配场景，由用户自选）。
+ * 同步更新 userRecords 与会话中的当前用户，供其它页面实时读取。
+ */
+export const updateMyScenarios = async (scenarioIds: ScenarioId[]): Promise<UserAccount> => {
+  const user = requireLogin();
+  if (user.role === 'ADMIN') throw new Error('管理员可见全部场景，无需设置');
+  const record = userRecords.find((u) => u.user_id === user.user_id);
+  if (!record) throw new Error('用户不存在');
+  record.scenario_ids = [...scenarioIds];
+  sessionUser = { ...record };
+  return { ...record };
+};
+
 // ===================== v2.0 数据集版本（需求 2.3） =====================
 
 /** 数据集编码（需求 2.2：三个数据集固定归属场景） */

@@ -19,9 +19,9 @@ const routes = [
   },
   {
     path: '/home',
-    name: '首页（全局态势）',
+    name: '首页',
     component: () => import('@/views/Home/HomeView.vue'),
-    meta: { title: '首页（全局态势）', userOnly: true },
+    meta: { title: '首页', userOnly: true },
   },
   {
     path: '/',
@@ -103,12 +103,6 @@ const routes = [
     name: '推理记录',
     component: () => import('@/views/Model/InferenceRecords.vue'),
     meta: { title: '推理记录' },
-  },
-  {
-    path: '/situation',
-    name: 'SituationAnalysis',
-    component: () => import('@/views/Model/SituationAnalysis.vue'),
-    meta: { title: '态势分析' },
   },
   {
     path: '/reports',

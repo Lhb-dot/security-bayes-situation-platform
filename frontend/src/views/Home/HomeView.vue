@@ -10,15 +10,20 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSituationStore } from '@/stores/situationStore';
 import { useUserStore } from '@/stores/userStore';
-import type { Scenario, TypeDistribution } from '@/types/security';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import { getSituationData } from '@/services/mockApi';
+import type { Scenario, SituationData, TypeDistribution } from '@/types/security';
 import PieChart from '@/components/charts/PieChart.vue';
 import BarChart from '@/components/charts/BarChart.vue';
 import LineChart from '@/components/charts/LineChart.vue';
+import LineTrendChart from '@/components/LineTrendChart.vue';
+import DonutChart from '@/components/DonutChart.vue';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
 
 const router = useRouter();
 const situationStore = useSituationStore();
 const userStore = useUserStore();
+const scenarioStore = useScenarioStore();
 
 const loading = ref(true);
 const error = ref('');
@@ -98,7 +103,80 @@ const loadData = async () => {
   }
 };
 
-onMounted(loadData);
+// ===================== 态势分析（并入首页，原 SituationAnalysis 页） =====================
+const timeRanges = [
+  { value: '24h', label: '最近24小时' },
+  { value: '7d', label: '最近7天' },
+  { value: '30d', label: '最近30天' },
+];
+const selectedRange = ref('7d');
+const situationData = ref<SituationData[]>([]);
+const loadingSituation = ref(false);
+
+/** 场景列表（按用户可见范围过滤） */
+const situationScenarios = computed<{ id: Scenario['scenario_id']; label: string }[]>(() =>
+  scenarioStore.activeScenarios.map((s: Scenario) => ({ id: s.scenario_id, label: s.name }))
+);
+
+/** 合并风险趋势点（取均值） */
+const mergedTrend = computed(() => {
+  if (!situationData.value.length) return [];
+  const first = situationData.value[0];
+  return first.risk_trend.map((_, i) => {
+    const values = situationData.value.map((d) => d.risk_trend[i]?.value ?? 0);
+    const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+    return {
+      label: first.risk_trend[i]?.label ?? '',
+      value: avg,
+      blocked: Math.round(avg * 0.4),
+      sources: Math.round(avg * 0.15),
+      primaryType: first.risk_trend[i]?.primaryType ?? '',
+    };
+  });
+});
+
+/** 合并事件分布 */
+const mergedDistribution = computed(() => {
+  if (!situationData.value.length) return [];
+  const allTypes = new Set<string>();
+  situationData.value.forEach((d) => d.event_distribution.forEach((e) => allTypes.add(e.label)));
+  return Array.from(allTypes).map((label, i) => {
+    const total = situationData.value.reduce((sum, d) => {
+      const found = d.event_distribution.find((e) => e.label === label);
+      return sum + (found?.value ?? 0);
+    }, 0);
+    return { label, value: total, color: ['#5ba6ff', '#53e5c8', '#ffd166', '#ff7b72', '#a78bfa'][i % 5] };
+  });
+});
+
+/** 事件总数统计 */
+const eventStats = computed(() =>
+  situationData.value.map((d) => {
+    const total = d.event_distribution.reduce((sum, e) => sum + e.value, 0);
+    return {
+      name: situationScenarios.value.find((s) => s.id === d.scenario_id)?.label ?? d.scenario_id,
+      score: total,
+    };
+  })
+);
+
+const loadSituation = async () => {
+  loadingSituation.value = true;
+  try {
+    await scenarioStore.fetchScenarioList();
+    const results = await Promise.all(situationScenarios.value.map((s) => getSituationData(s.id)));
+    situationData.value = results;
+  } catch {
+    situationData.value = [];
+  } finally {
+    loadingSituation.value = false;
+  }
+};
+
+onMounted(() => {
+  loadData();
+  loadSituation();
+});
 </script>
 
 <template>
@@ -192,6 +270,110 @@ onMounted(loadData);
           </button>
         </div>
         <p v-else class="home-empty">暂无已接入场景</p>
+      </section>
+
+      <!-- ==================== 态势分析（并入首页） ==================== -->
+      <section class="card home-situation">
+        <div class="home-situation__head">
+          <div>
+            <p class="eyebrow">Situation Analysis</p>
+            <h3>态势分析</h3>
+          </div>
+          <div class="situation-toolbar__tabs">
+            <button
+              v-for="range in timeRanges"
+              :key="range.value"
+              class="situation-toolbar__tab"
+              :class="{ 'is-active': selectedRange === range.value }"
+              @click="selectedRange = range.value"
+            >
+              {{ range.label }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="loadingSituation" class="state-card">
+          <div class="loader"></div>
+          <p>正在加载态势数据...</p>
+        </div>
+
+        <template v-else>
+          <div class="situation-charts">
+            <div class="card chart-card">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Trend</p>
+                  <h3>风险趋势图</h3>
+                </div>
+                <span class="section-tag">{{ selectedRange === '24h' ? '24h' : selectedRange === '7d' ? '7天' : '30天' }}</span>
+              </div>
+              <LineTrendChart :points="mergedTrend" />
+            </div>
+
+            <div class="card chart-card">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Distribution</p>
+                  <h3>风险等级分布</h3>
+                </div>
+              </div>
+              <DonutChart :items="mergedDistribution" title="风险分布" />
+            </div>
+          </div>
+
+          <div class="situation-bottom">
+            <div class="card">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Events</p>
+                  <h3>事件数量统计</h3>
+                </div>
+              </div>
+              <div class="situation-events">
+                <div v-for="event in eventStats" :key="event.name" class="situation-events__item">
+                  <span class="situation-events__name">{{ event.name }}</span>
+                  <span class="situation-events__bar">
+                    <span
+                      class="situation-events__bar-fill"
+                      :style="{ width: Math.min(100, (event.score / Math.max(...eventStats.map(e => e.score))) * 100) + '%' }"
+                    ></span>
+                  </span>
+                  <span class="situation-events__value">{{ event.score }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Scenario</p>
+                  <h3>场景统计</h3>
+                </div>
+              </div>
+              <div class="situation-scenarios">
+                <div v-for="s in situationScenarios" :key="s.id" class="situation-scenarios__item">
+                  <h4 class="situation-scenarios__name">{{ s.label }}</h4>
+                  <div class="situation-scenarios__metrics">
+                    <div
+                      v-for="m in (situationData.find(d => d.scenario_id === s.id)?.metrics ?? [])"
+                      :key="m.id"
+                      class="situation-scenarios__metric"
+                    >
+                      <span class="situation-scenarios__metric-label">{{ m.label }}</span>
+                      <span
+                        class="situation-scenarios__metric-value"
+                        :class="{ 'is-up': m.trend > 0, 'is-down': m.trend < 0 }"
+                      >
+                        {{ m.value }}
+                        <small>{{ m.trend > 0 ? '+' : '' }}{{ m.trend }}%</small>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </section>
     </template>
   </div>
@@ -387,6 +569,173 @@ onMounted(loadData);
   text-align: center;
   color: rgba(220, 234, 255, 0.45);
   font-size: 0.88rem;
+}
+
+/* ===== 态势分析（并入首页） ===== */
+.home-situation {
+  padding: 20px 24px;
+}
+
+.home-situation__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.home-situation__head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #e8f1ff;
+}
+
+.situation-toolbar__tabs {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid rgba(125, 201, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(8, 17, 31, 0.7);
+  gap: 2px;
+}
+
+.situation-toolbar__tab {
+  border: 0;
+  padding: 8px 18px;
+  border-radius: 999px;
+  color: #d9e8ff;
+  background: transparent;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.25s;
+  white-space: nowrap;
+}
+
+.situation-toolbar__tab:hover {
+  background: rgba(91, 166, 255, 0.12);
+}
+
+.situation-toolbar__tab.is-active {
+  background: rgba(91, 166, 255, 0.18);
+  color: #fff;
+  font-weight: 500;
+}
+
+.situation-charts {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.situation-charts .chart-card {
+  min-height: 340px;
+  padding: 18px;
+}
+
+.situation-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.situation-events {
+  display: grid;
+  gap: 14px;
+}
+
+.situation-events__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.situation-events__name {
+  width: 80px;
+  font-size: 0.9rem;
+  color: #d9e8ff;
+  flex-shrink: 0;
+}
+
+.situation-events__bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.situation-events__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #5ba6ff, #407acc);
+  transition: width 0.5s ease;
+}
+
+.situation-events__value {
+  width: 40px;
+  text-align: right;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.situation-scenarios {
+  display: grid;
+  gap: 18px;
+}
+
+.situation-scenarios__item {
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(125, 201, 255, 0.08);
+}
+
+.situation-scenarios__name {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  color: #e8f1ff;
+}
+
+.situation-scenarios__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.situation-scenarios__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.situation-scenarios__metric-label {
+  font-size: 0.78rem;
+  color: rgba(220, 234, 255, 0.55);
+}
+
+.situation-scenarios__metric-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e8f1ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.situation-scenarios__metric-value small {
+  font-size: 0.78rem;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.situation-scenarios__metric-value.is-up small {
+  color: #ff8c84;
+}
+
+.situation-scenarios__metric-value.is-down small {
+  color: #53e5c8;
 }
 
 /* ===== 响应式降级 ===== */

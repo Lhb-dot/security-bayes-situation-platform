@@ -265,6 +265,10 @@ onMounted(async () => {
     scenarioStore.fetchScenarioList(),
     modelStore.fetchAlgorithms(),
   ]);
+  // 自动确定当前场景：普通用户取绑定/自选场景（首个）；管理员默认选中第一个便于直接操作（仍可通过 tabs 切换）。
+  if (!selectedScenario.value && scenarioOptions.value.length) {
+    selectedScenario.value = scenarioOptions.value[0].value;
+  }
 });
 </script>
 
