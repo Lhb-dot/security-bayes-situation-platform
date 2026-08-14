@@ -387,27 +387,13 @@ onMounted(() => {
         <el-table-column label="操作" width="240" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                @click="openFieldPreview(row)"
-              >
+              <el-button size="small" plain @click="openFieldPreview(row)">
                 字段预览
               </el-button>
-              <el-button
-                size="small"
-                plain
-                @click="goDatasetDetail(row)"
-              >
+              <el-button size="small" plain @click="goDatasetDetail(row)">
                 数据预览
               </el-button>
-              <el-button
-                v-if="isAdmin"
-                size="small"
-                plain
-                @click="openVersionDialog(row)"
-              >
+              <el-button v-if="isAdmin" size="small" plain @click="openVersionDialog(row)">
                 版本管理
               </el-button>
             </div>

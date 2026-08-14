@@ -1168,8 +1168,8 @@ button {
   backdrop-filter: blur(4px);
 }
 
-/* 弹窗容器 */
-.el-dialog {
+/* 弹窗容器（高优先级：style.css 先于 element-plus 加载，用 .el-overlay 前缀保证覆盖默认亮色） */
+.el-overlay .el-dialog {
   background: linear-gradient(165deg, rgba(16, 30, 54, 0.98), rgba(8, 17, 31, 0.98));
   border: 1px solid rgba(91, 166, 255, 0.28);
   border-radius: 16px;
@@ -1177,37 +1177,37 @@ button {
   color: rgba(217, 232, 255, 0.9);
 }
 
-.el-dialog__header {
+.el-dialog .el-dialog__header {
   padding: 18px 24px;
   margin-right: 0;
   border-bottom: 1px solid rgba(125, 201, 255, 0.14);
 }
 
-.el-dialog__title {
+.el-dialog .el-dialog__title {
   color: #e8f1ff;
   font-size: 1.05rem;
   font-weight: 600;
 }
 
-.el-dialog__headerbtn .el-dialog__close {
+.el-dialog .el-dialog__headerbtn .el-dialog__close {
   color: rgba(217, 232, 255, 0.7);
 }
-.el-dialog__headerbtn:hover .el-dialog__close {
+.el-dialog .el-dialog__headerbtn:hover .el-dialog__close {
   color: #fff;
 }
 
-.el-dialog__body {
+.el-dialog .el-dialog__body {
   padding: 20px 24px;
   color: rgba(217, 232, 255, 0.9);
 }
 
-.el-dialog__footer {
+.el-dialog .el-dialog__footer {
   padding: 14px 24px;
   border-top: 1px solid rgba(125, 201, 255, 0.12);
 }
 
-/* 弹窗内表格 */
-.el-table {
+/* 表格（暗色） */
+.el-overlay .el-table {
   --el-table-border-color: rgba(125, 201, 255, 0.12);
   --el-table-header-bg-color: rgba(16, 34, 60, 0.9);
   --el-table-tr-bg-color: rgba(8, 18, 34, 0.6);
@@ -1229,7 +1229,7 @@ button {
   background-color: rgba(125, 201, 255, 0.1);
 }
 
-/* 弹窗内按钮 */
+/* 按钮（暗色） */
 .el-button {
   border-color: rgba(125, 201, 255, 0.3);
   color: #9ad6ff;

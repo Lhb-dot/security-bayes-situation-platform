@@ -23,9 +23,9 @@ defineEmits<{
 
 const scenarioStore = useScenarioStore();
 
-/** 场景选项列表（"全部场景" + 当前用户可见场景，Task 006 已按绑定过滤） */
+/** 场景选项列表（"所有场景" + 当前用户可见场景，Task 006 已按绑定过滤） */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => [
-  { value: 'all', label: '全部场景' },
+  { value: 'all', label: '所有场景' },
   ...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })),
 ]);
 

@@ -28,7 +28,7 @@ const scenarioLabel: Record<string, string> = {
 
 /** 场景选项 */
 const scenarioOptions: { value: ScenarioId | 'all'; label: string }[] = [
-  { value: 'all', label: '全部场景' },
+  { value: 'all', label: '所有场景' },
   { value: 'network_security', label: '网络安全' },
   { value: 'power_system', label: '电力系统' },
 ];

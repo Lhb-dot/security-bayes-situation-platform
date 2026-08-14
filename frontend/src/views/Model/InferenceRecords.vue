@@ -102,7 +102,7 @@ onMounted(async () => {
       <label class="filter-item">
         <span class="filter-item__label">场景</span>
         <select v-model="scenarioFilter" class="filter-select" @change="loadRecords">
-          <option value="">全部场景</option>
+          <option value="">所有场景</option>
           <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
         </select>
       </label>
