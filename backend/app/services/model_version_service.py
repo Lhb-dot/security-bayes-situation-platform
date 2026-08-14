@@ -369,7 +369,12 @@ class ModelVersionService(ServiceBase):
         self.require_login(current_user)
         stmt = select(ModelVersion)
         if getattr(current_user, "role", None) != ROLE_ADMIN:
+            # 需求 V3.0 §1.1.6：普通用户仅看到被分配场景的已发布模型
             stmt = stmt.where(ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES))
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
+            stmt = stmt.where(ModelVersion.scenario_id == bound)
         elif status:
             stmt = stmt.where(ModelVersion.status == status)
         if scenario_id is not None:

@@ -4,7 +4,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -21,9 +21,15 @@ class AppUser(Base):
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 用户-场景绑定（V3.0 §1.1.2/§1.1.6）：普通用户绑定一个场景，登录后自动确定；
+    # 管理员不绑定（NULL = 可见全部场景）。
+    scenario_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("scenario.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    scenario: Mapped["Scenario"] = relationship(back_populates="users")
     datasets: Mapped[list["Dataset"]] = relationship(back_populates="uploader")
     models_trained: Mapped[list["ModelVersion"]] = relationship(
         back_populates="trainer", foreign_keys="ModelVersion.trained_by"

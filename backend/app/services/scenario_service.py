@@ -18,6 +18,7 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    ROLE_ADMIN,
     SCENARIO_ACCESS_ACTUAL,
     SCENARIO_ACCESS_STATUSES,
     SCENARIO_CODE_MAX_LEN,
@@ -42,9 +43,19 @@ class ScenarioService(ServiceBase):
     # ------------------------------------------------------------------
     @service_call
     def get_list(self, current_user: Optional[AppUser]):
-        """场景列表，标明接入状态（access_status）。"""
+        """场景列表，标明接入状态（access_status）。
+
+        需求 V3.0 §1.1.6：普通用户仅看到被分配的场景（账号绑定，通常一个）；
+        管理员可见全部场景。普通用户未绑定场景时返回空列表。
+        """
         self.require_login(current_user)
-        scenarios = self.db.scalars(select(Scenario).order_by(Scenario.id)).all()
+        stmt = select(Scenario).order_by(Scenario.id)
+        if getattr(current_user, "role", None) != ROLE_ADMIN:
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data=[])
+            stmt = stmt.where(Scenario.id == bound)
+        scenarios = self.db.scalars(stmt).all()
         return ok(data=[row_to_dict(s) for s in scenarios])
 
     @service_call

@@ -17,6 +17,7 @@ from app.schemas.user import (
     PasswordChange,
     UserCreate,
     UserUpdatePassword,
+    UserUpdateScenario,
     UserUpdateStatus,
 )
 from app.services.user_service import UserService
@@ -80,6 +81,27 @@ def create_user(
             username=payload.username,
             password=payload.password,
             role=payload.role,
+            scenario_id=payload.scenario_id,
+        )
+    )
+
+
+@router.put(
+    "/{user_id}/scenario",
+    response_model=ResponseModel,
+    summary="分配/修改用户绑定场景（仅管理员，V3.0 §1.1.6；普通用户登录后自动确定场景）",
+)
+def update_user_scenario(
+    user_id: int,
+    payload: UserUpdateScenario,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_admin),
+):
+    return unwrap(
+        UserService(db).update_scenario(
+            current_user=current_user,
+            user_id=user_id,
+            scenario_id=payload.scenario_id,
         )
     )
 

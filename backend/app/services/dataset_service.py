@@ -96,6 +96,11 @@ class DatasetService(ServiceBase):
         if scenario_id is not None:
             stmt = stmt.where(Dataset.scenario_id == scenario_id)
         if getattr(current_user, "role", None) != ROLE_ADMIN:
+            # 需求 V3.0 §1.1.6：普通用户仅看到被分配场景的数据集
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
+            stmt = stmt.where(Dataset.scenario_id == bound)
             stmt = stmt.where(
                 Dataset.id.in_(
                     select(ModelVersion.dataset_id).where(

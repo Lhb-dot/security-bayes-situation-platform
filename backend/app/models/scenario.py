@@ -24,6 +24,7 @@ class Scenario(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    users: Mapped[list["AppUser"]] = relationship(back_populates="scenario")
     datasets: Mapped[list["Dataset"]] = relationship(back_populates="scenario")
     model_versions: Mapped[list["ModelVersion"]] = relationship(back_populates="scenario")
     risk_events: Mapped[list["RiskEvent"]] = relationship(back_populates="scenario")
