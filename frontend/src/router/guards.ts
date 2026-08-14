@@ -22,9 +22,9 @@ declare module 'vue-router' {
   }
 }
 
-/** 角色落地页：管理员 → 场景中心；普通用户 → 首页（全局态势） */
+/** 角色落地页：管理员 → 全局总览（首页）；普通用户 → 首页 */
 const roleLanding = (user: UserAccount): string => {
-  if (user.role === 'ADMIN') return '/scenarios';
+  if (user.role === 'ADMIN') return '/overview';
   return '/home';
 };
 
@@ -46,9 +46,9 @@ export const setupRouterGuards = (router: Router): void => {
     if (to.meta.requiresAdmin && user.role !== 'ADMIN') {
       return roleLanding(user);
     }
-    // 普通用户专属页面（如 /home）：ADMIN 访问 → 场景中心
+    // 普通用户专属页面（如 /home）：ADMIN 访问 → 全局总览
     if (to.meta.userOnly && user.role === 'ADMIN') {
-      return '/scenarios';
+      return '/overview';
     }
     // 根路径按角色落地（路由配置中也有函数式 redirect，此处双保险）
     if (to.path === '/') {

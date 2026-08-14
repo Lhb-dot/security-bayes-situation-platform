@@ -11,7 +11,7 @@ import AlertsView from './views/Alert/AlertsView.vue';
 import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
-import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData } from './services/mockApi';
+import { getAlertById, getAlerts, getDashboardSnapshot } from './services/mockApi';
 import type { AlertRecord, DashboardSnapshot, MetricHistory } from './types/security';
 import { useUserStore } from './stores/userStore';
 
@@ -101,23 +101,6 @@ const goInferenceRecords = () => {
 };
 
 /**
- * 跳转用户管理
- */
-const goUsers = () => {
-  router.push({ path: '/users' });
-};
-
-/**
- * 跳转首页大屏
- */
-const goDashboard = () => {
-  router.push({ path: '/dashboard' });
-  // 切回首页重载图表数据，解决图表残留问题
-  dashboard.value = null;
-  loadData();
-};
-
-/**
  * 跳转告警列表页
  */
 const goAlertsList = () => {
@@ -152,12 +135,6 @@ const loadData = async () => {
   }
 };
 
-// 刷新Mock模拟数据
-const reloadData = async () => {
-  refreshMockData();
-  await loadData();
-};
-
 // 作战大屏打开后跳转告警
 const openAlertFromWarRoom = (id: string) => {
   warRoomOpen.value = false;
@@ -172,7 +149,7 @@ const openMetric = (id: string) => {
 // ===================== 页面标题计算属性 =====================
 const pageTitle = computed(() => {
   if (route.path === '/login') return '用户登录';
-  if (route.path === '/home') return '首页（全局态势）';
+  if (route.path === '/home') return '首页';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
   if (route.path === '/alerts') return '告警详情总览';
   if (route.path.startsWith('/alerts/')) return '告警处置分析';
@@ -184,10 +161,8 @@ const pageTitle = computed(() => {
   if (route.path === '/models') return '模型中心';
   if (route.path === '/inference') return '风险研判';
   if (route.path === '/inference-records') return '推理记录';
-  if (route.path === '/situation') return '态势分析';
   if (route.path === '/reports') return '报告中心';
-  if (route.path === '/users') return '用户管理';
-  if (route.path === '/settings') return '系统设置';
+  if (route.path === '/settings') return isAdmin ? '系统设置' : '设置';
   if (route.path.startsWith('/events/')) return '风险事件详情';
   return '态势感知与威胁可视化平台';
 });
@@ -200,9 +175,9 @@ const unregisterAfterEach = router.afterEach(() => {
 
 onMounted(async () => {
   await loadData();
-  // 默认进入首页
+  // 落地页由路由 '/' 重定向处理（ADMIN → /overview；USER → /home）
   if (route.path === '/') {
-    goDashboard();
+    router.push(isAdmin.value ? '/overview' : '/home');
   }
 });
 
@@ -252,7 +227,6 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/home', label: '首页', userOnly: true },
-  { path: '/dashboard', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goDashboard },
   { path: '/overview', label: '全局总览', requiresAdmin: true, hiddenForUser: true, action: goOverview },
   { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
   { path: '/datasets', label: '数据集中心', action: goDatasetCenter },
@@ -262,7 +236,6 @@ const navItems: NavItem[] = [
   { path: '/inference', label: '风险研判', action: goRiskInference },
   { path: '/inference-records', label: '推理记录', action: goInferenceRecords },
   { path: '/reports', label: '报告中心', action: goReportCenter },
-  { path: '/users', label: '用户管理', requiresAdmin: true, hiddenForUser: true, action: goUsers },
   { path: '/settings', label: '设置', action: goSettings },
 ];
 
@@ -328,7 +301,6 @@ const handleNavClick = (item: NavItem): void => {
             {{ item.path === '/settings' ? (isAdmin ? '系统设置' : '设置') : item.label }}
           </button>
         </nav>
-        <button class="ghost-button" @click="reloadData">刷新模拟数据</button>
         <div class="topbar__user">
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
           <div class="topbar__user-pop">

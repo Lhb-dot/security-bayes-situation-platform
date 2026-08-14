@@ -849,18 +849,6 @@ export const setUserStatus = async (userId: string, status: 'active' | 'disabled
 };
 
 /**
- * 管理员设置用户绑定场景（需求 1.1.6 / 6.5；仅普通用户记录允许设置）。
- * 注意：真实权限校验必须由后端完成，mock 层过滤仅为前端联调基线（需求 6.5.x）。
- */
-export const setUserScenarioIds = async (userId: string, scenarioIds: ScenarioId[]): Promise<void> => {
-  requireAdmin();
-  const record = userRecords.find((u) => u.user_id === userId);
-  if (!record) throw new Error('用户不存在');
-  if (record.role !== 'USER') throw new Error('仅普通用户可分配场景');
-  record.scenario_ids = [...scenarioIds];
-};
-
-/**
  * 当前用户更新自己关注的场景（V3.0 需求：账号不被管理员分配场景，由用户自选）。
  * 同步更新 userRecords 与会话中的当前用户，供其它页面实时读取。
  */

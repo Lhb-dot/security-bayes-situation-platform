@@ -2,8 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 import { getCurrentUser } from '@/services/mockApi';
 import { setupRouterGuards } from './guards';
 
-// 仪表盘大屏
-import DashboardView from '@/views/Dashboard/DashboardView.vue';
 // 告警态势页面
 import AlertsView from '@/views/Alert/AlertsView.vue';
 import AlertDetailView from '@/views/Alert/AlertDetailView.vue';
@@ -25,15 +23,9 @@ const routes = [
   },
   {
     path: '/',
-    // Task 007：按角色落地（ADMIN → 场景中心；USER → 首页 /home）
-    redirect: () => (getCurrentUser()?.role === 'ADMIN' ? '/scenarios' : '/home'),
+    // 按角色落地：ADMIN → 全局总览（首页）；USER → 首页 /home
+    redirect: () => (getCurrentUser()?.role === 'ADMIN' ? '/overview' : '/home'),
     meta: { title: '首页' },
-  },
-  {
-    path: '/dashboard',
-    name: '态势监控大屏',
-    component: DashboardView,
-    meta: { title: '态势监控大屏', requiresAdmin: true, hiddenForUser: true },
   },
   {
     path: '/alerts',
@@ -109,12 +101,6 @@ const routes = [
     name: 'ReportCenter',
     component: () => import('@/views/Model/ReportCenter.vue'),
     meta: { title: '报告中心' },
-  },
-  {
-    path: '/users',
-    name: '用户管理',
-    component: () => import('@/views/Model/UserManagement.vue'),
-    meta: { title: '用户管理', requiresAdmin: true, hiddenForUser: true },
   },
   {
     path: '/settings',

@@ -74,11 +74,6 @@ export const useUserStore = defineStore('user', {
       await mockApi.setUserStatus(userId, status);
       await this.fetchUsers();
     },
-    /** 管理员设置用户绑定场景（需求 1.1.6 / 6.5），保存后刷新用户列表 */
-    async updateUserScenarios(userId: string, scenarioIds: ScenarioId[]): Promise<void> {
-      await mockApi.setUserScenarioIds(userId, scenarioIds);
-      await this.fetchUsers();
-    },
     /** 当前用户更新自己关注的场景（V3.0：用户自选，非管理员分配） */
     async updateMyScenarios(scenarioIds: ScenarioId[]): Promise<void> {
       this.currentUser = await mockApi.updateMyScenarios(scenarioIds);
