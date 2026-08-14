@@ -11,12 +11,19 @@ import { getScenarioList } from '@/services/mockApi';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import type { ScenarioId } from '@/types/security';
 
-const props = defineProps<{
-  /** 当前选中的场景 ID（'all' 表示所有场景） */
-  modelValue: ScenarioId | 'all';
-  /** 是否显示"所有场景"选项，默认 true */
-  showAll?: boolean;
-}>();
+/**
+ * showAll 默认必须为 true：Vue 会把未传入的可选 boolean 属性默认为 false，
+ * 导致下方 options 计算里 `showAll !== false` 不成立、场景被过滤。用 withDefaults 显式修正。
+ */
+const props = withDefaults(
+  defineProps<{
+    /** 当前选中的场景 ID（'all' 表示所有场景） */
+    modelValue: ScenarioId | 'all';
+    /** 是否显示"所有场景"选项，默认 true */
+    showAll?: boolean;
+  }>(),
+  { showAll: true }
+);
 
 const emit = defineEmits<{
   /** 选中值变更 */
@@ -29,11 +36,9 @@ const scenarioStore = useScenarioStore();
 const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
 
 const syncScenarios = () => {
-  console.log('[ScenarioSelector] props.showAll =', props.showAll);
   const storeScenarios = scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }));
   if (storeScenarios.length > 0) {
     localScenarios.value = storeScenarios;
-    console.log('[ScenarioSelector] store 场景:', storeScenarios.map((s) => s.value));
     return;
   }
   if (localScenarios.value.length === 0) {
@@ -41,16 +46,14 @@ const syncScenarios = () => {
     getScenarioList()
       .then((list) => {
         localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
-        console.log('[ScenarioSelector] getScenarioList →', list.length, list.map((s) => s.name));
-        console.log('[ScenarioSelector] options 现在 =', options.value.map((o) => `${o.value}:${o.label}`));
       })
-      .catch((e) => {
-        console.warn('[ScenarioSelector] getScenarioList 失败:', e);
+      .catch(() => {
+        localScenarios.value = [];
       });
   }
 };
 
-/** 选项列表："所有场景"恒为第一项 + 场景列表 */
+/** 选项列表："所有场景"恒为第一项 + 场景列表（showAll 为 true 才加场景；默认 true） */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
   const list: { value: ScenarioId | 'all'; label: string }[] = [{ value: 'all', label: '所有场景' }];
   if (props.showAll !== false) {
