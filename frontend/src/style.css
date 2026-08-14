@@ -1156,3 +1156,97 @@ button {
     align-items: flex-start;
   }
 }
+
+/* ===================== Element Plus 暗色主题（全局） =====================
+ * el-dialog / el-table / el-button 等覆盖为暗色科幻风，与整体一致。
+ * append-to-body 的弹窗渲染在 body，scoped 样式够不到，故放全局。
+ * ------------------------------------------------------------------ */
+
+/* 弹窗遮罩 */
+.el-overlay {
+  background: rgba(3, 8, 16, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+/* 弹窗容器 */
+.el-dialog {
+  background: linear-gradient(165deg, rgba(16, 30, 54, 0.98), rgba(8, 17, 31, 0.98));
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  color: rgba(217, 232, 255, 0.9);
+}
+
+.el-dialog__header {
+  padding: 18px 24px;
+  margin-right: 0;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.14);
+}
+
+.el-dialog__title {
+  color: #e8f1ff;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.el-dialog__headerbtn .el-dialog__close {
+  color: rgba(217, 232, 255, 0.7);
+}
+.el-dialog__headerbtn:hover .el-dialog__close {
+  color: #fff;
+}
+
+.el-dialog__body {
+  padding: 20px 24px;
+  color: rgba(217, 232, 255, 0.9);
+}
+
+.el-dialog__footer {
+  padding: 14px 24px;
+  border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+/* 弹窗内表格 */
+.el-table {
+  --el-table-border-color: rgba(125, 201, 255, 0.12);
+  --el-table-header-bg-color: rgba(16, 34, 60, 0.9);
+  --el-table-tr-bg-color: rgba(8, 18, 34, 0.6);
+  --el-table-row-hover-bg-color: rgba(20, 44, 72, 0.9);
+  --el-table-bg-color: transparent;
+  background: transparent;
+  color: rgba(217, 232, 255, 0.9);
+}
+.el-table th.el-table__cell {
+  background: rgba(16, 34, 60, 0.9);
+  color: rgba(154, 214, 255, 0.85);
+  font-weight: 600;
+}
+.el-table td.el-table__cell,
+.el-table th.el-table__cell {
+  border-bottom-color: rgba(125, 201, 255, 0.08);
+}
+.el-table .el-table__inner-wrapper::before {
+  background-color: rgba(125, 201, 255, 0.1);
+}
+
+/* 弹窗内按钮 */
+.el-button {
+  border-color: rgba(125, 201, 255, 0.3);
+  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.1);
+}
+.el-button:hover {
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
+  background: rgba(91, 166, 255, 0.18);
+}
+.el-button--primary {
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  border-color: transparent;
+  color: #fff;
+}
+.el-button--primary:hover {
+  opacity: 0.9;
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  color: #fff;
+}

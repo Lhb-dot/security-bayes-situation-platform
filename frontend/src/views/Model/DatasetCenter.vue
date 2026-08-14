@@ -435,7 +435,7 @@ onMounted(() => {
         v-else
         :data="fieldDialogFields"
         stripe
-        max-height="55vh"
+        max-height="62vh"
         style="width: 100%"
         empty-text="该数据集暂无字段信息"
       >
@@ -566,7 +566,7 @@ onMounted(() => {
       <el-table
         :data="versionList"
         stripe
-        max-height="55vh"
+        max-height="62vh"
         style="width: 100%"
         empty-text="暂无版本记录"
       >
@@ -932,7 +932,7 @@ onMounted(() => {
 .upload-fields {
   display: grid;
   gap: 8px;
-  max-height: 38vh; /* 字段较多时列表内部竖向滚动，标题/X/底部按钮始终可见 */
+  max-height: 45vh; /* 字段较多时列表内部竖向滚动，标题/X/底部按钮始终可见 */
   overflow-y: auto;
   padding-right: 4px;
 }

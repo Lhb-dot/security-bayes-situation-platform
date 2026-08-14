@@ -107,51 +107,27 @@ onMounted(() => {
       <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：下拉框选择，默认全部 -->
     <div class="risk-events-filters">
       <div class="risk-events-filters__group">
         <label class="risk-events-filters__label">场景</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in scenarioOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedScenario === opt.value }"
-            @click="selectedScenario = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
+        <select v-model="selectedScenario" class="risk-events-filters__select">
+          <option v-for="opt in scenarioOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
       </div>
 
       <div class="risk-events-filters__group">
         <label class="risk-events-filters__label">风险等级</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in riskLevelOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedRiskLevel === opt.value }"
-            @click="selectedRiskLevel = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
+        <select v-model="selectedRiskLevel" class="risk-events-filters__select">
+          <option v-for="opt in riskLevelOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
       </div>
 
       <div class="risk-events-filters__group">
         <label class="risk-events-filters__label">处置状态</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in statusOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedStatus === opt.value }"
-            @click="selectedStatus = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
+        <select v-model="selectedStatus" class="risk-events-filters__select">
+          <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
       </div>
     </div>
 
@@ -284,25 +260,25 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.risk-events-filters__tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: rgba(8, 17, 31, 0.5);
-  border: 1px solid rgba(125, 201, 255, 0.12);
+.risk-events-filters__select {
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  outline: none;
+  cursor: pointer;
+  min-width: 130px;
 }
 
-.risk-events-filters__tab {
-  border: 0;
-  padding: 5px 12px;
-  border-radius: 999px;
-  color: rgba(220, 234, 255, 0.7);
-  background: transparent;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+.risk-events-filters__select:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.risk-events-filters__select option {
+  background: #0b1628;
+  color: #e8f1ff;
 }
 
 .risk-events-filters__tab:hover {
