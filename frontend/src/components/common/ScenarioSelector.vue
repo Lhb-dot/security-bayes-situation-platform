@@ -29,9 +29,11 @@ const scenarioStore = useScenarioStore();
 const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
 
 const syncScenarios = () => {
+  console.log('[ScenarioSelector] props.showAll =', props.showAll);
   const storeScenarios = scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }));
   if (storeScenarios.length > 0) {
     localScenarios.value = storeScenarios;
+    console.log('[ScenarioSelector] store 场景:', storeScenarios.map((s) => s.value));
     return;
   }
   if (localScenarios.value.length === 0) {
@@ -40,6 +42,7 @@ const syncScenarios = () => {
       .then((list) => {
         localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
         console.log('[ScenarioSelector] getScenarioList →', list.length, list.map((s) => s.name));
+        console.log('[ScenarioSelector] options 现在 =', options.value.map((o) => `${o.value}:${o.label}`));
       })
       .catch((e) => {
         console.warn('[ScenarioSelector] getScenarioList 失败:', e);
@@ -78,7 +81,8 @@ onMounted(() => {
 <template>
   <label class="filter-item">
     <span class="filter-item__label">场景</span>
-    <select v-model="localValue" class="filter-select">
+    <!-- :key 绑定选项数量：原生 <select> 在动态新增 <option> 后不刷新是已知问题，key 变化强制重建 -->
+    <select v-model="localValue" class="filter-select" :key="options.length">
       <option v-for="opt in options" :key="opt.value" :value="opt.value">
         {{ opt.label }}
       </option>
