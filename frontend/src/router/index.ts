@@ -48,7 +48,7 @@ const routes = [
   // ===================== 多场景架构新增路由 =====================
   {
     path: '/overview',
-    name: '首页',
+    name: '管理员首页',
     component: () => import('@/views/Model/OverviewView.vue'),
     // 管理员首页（原全局总览）：全平台跨用户态势，仅管理员可访问；普通用户的首页是 /home
     meta: { title: '首页', requiresAdmin: true, hiddenForUser: true },
