@@ -2,17 +2,17 @@
 /**
  * ScenarioSelector - 场景筛选下拉框
  *
- * 支持"全部场景"或当前用户可见场景（Task 016：场景选项从 scenarioStore.activeScenarios 注入）
- * 使用 v-model 绑定选中值；默认"全部场景"，避免筛选条件堆叠过长。
+ * 第一项恒为"所有场景"，进入页面默认选中它并显示"所有场景"。
+ * 使用本地 ref + 双向 watch 保证原生 <select> 一定显示选中值（:value 绑定在 select 上不可靠）。
  */
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import type { ScenarioId } from '@/types/security';
 
 const props = defineProps<{
-  /** 当前选中的场景 ID（'all' 表示全部场景） */
+  /** 当前选中的场景 ID（'all' 表示所有场景） */
   modelValue: ScenarioId | 'all';
-  /** 是否显示"全部场景"选项，默认 true */
+  /** 是否显示"所有场景"选项，默认 true */
   showAll?: boolean;
 }>();
 
@@ -21,24 +21,30 @@ const emit = defineEmits<{
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-/** v-model 包装：原生 <select> 用 v-model 才能可靠显示选中值（:value 绑定在 select 上不可靠） */
-const selected = computed<ScenarioId | 'all'>({
-  get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val),
-});
-
 const scenarioStore = useScenarioStore();
 
-/** 场景选项列表（"所有场景" + 当前用户可见场景，Task 006 已按绑定过滤） */
-const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => [
-  { value: 'all', label: '所有场景' },
-  ...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })),
-]);
+/** 选项列表："所有场景"恒为第一项 + 用户可见场景 */
+const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
+  const list: { value: ScenarioId | 'all'; label: string }[] = [{ value: 'all', label: '所有场景' }];
+  if (props.showAll !== false) {
+    for (const s of scenarioStore.activeScenarios) {
+      list.push({ value: s.scenario_id, label: s.name });
+    }
+  }
+  return list;
+});
 
-/** 根据 showAll 过滤"全部场景"选项 */
-const visibleOptions = computed(() =>
-  props.showAll === false ? options.value.filter((o) => o.value !== 'all') : options.value
+/** 本地选中值：默认"所有场景"，与 props 双向同步（保证下拉框加载即显示"所有场景"） */
+const localValue = ref<ScenarioId | 'all'>(props.modelValue ?? 'all');
+watch(
+  () => props.modelValue,
+  (v) => {
+    localValue.value = v ?? 'all';
+  }
 );
+watch(localValue, (v) => {
+  emit('update:modelValue', v);
+});
 
 onMounted(() => {
   scenarioStore.fetchScenarioList();
@@ -46,8 +52,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <select v-model="selected" class="scenario-selector__select">
-    <option v-for="opt in visibleOptions" :key="opt.value" :value="opt.value">
+  <select v-model="localValue" class="scenario-selector__select">
+    <option v-for="opt in options" :key="opt.value" :value="opt.value">
       {{ opt.label }}
     </option>
   </select>
