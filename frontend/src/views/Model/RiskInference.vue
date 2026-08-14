@@ -16,7 +16,13 @@ import { useDatasetStore } from '@/stores/datasetStore';
 import { useModelStore } from '@/stores/modelStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
-import type { ScenarioId, Dataset, DatasetField, ModelVersionRecord } from '@/types/security';
+import type {
+  AlgorithmDefinition,
+  Dataset,
+  DatasetField,
+  ModelVersionRecord,
+  ScenarioId,
+} from '@/types/security';
 // 过渡期：InferenceResult 类型定义于 mockApi.ts（仅 type import，页面不调用 mockApi 函数）
 import type { InferenceResult } from '@/services/mockApi';
 
@@ -53,13 +59,13 @@ const datasetOptions = computed<Dataset[]>(() =>
 
 /** 当前范围的已发布模型（modelStore.fetchModelVersions 已过滤） */
 const publishedModels = computed<ModelVersionRecord[]>(() =>
-  modelStore.modelVersions.filter((m) => m.status === 'PUBLISHED')
+  modelStore.modelVersions.filter((m: ModelVersionRecord) => m.status === 'PUBLISHED')
 );
 const loadingModels = ref(false);
 const selectedModelId = ref('');
 
 const algoName = (id: string) =>
-  modelStore.algorithms.find((a) => a.algorithm_id === id)?.display_name ?? id;
+  modelStore.algorithms.find((a: AlgorithmDefinition) => a.algorithm_id === id)?.display_name ?? id;
 
 const inputFields = ref<DatasetField[]>([]);
 const inputData = ref<Record<string, string | number>>({});
@@ -126,7 +132,7 @@ watch(selectedModelId, async (modelId) => {
   try {
     await datasetStore.fetchFields(model.dataset_id, model.dataset_version);
     const allFields = datasetStore.fields;
-    inputFields.value = allFields.filter((f) => f.field_role === '输入特征');
+    inputFields.value = allFields.filter((f: DatasetField) => f.field_role === '输入特征');
     inputData.value = buildInputData(inputFields.value);
     // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
     const port = route.query.port;

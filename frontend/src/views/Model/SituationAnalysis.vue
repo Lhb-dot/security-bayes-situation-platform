@@ -7,7 +7,7 @@
  * 底部：场景统计
  */
 import { computed, onMounted, ref } from 'vue';
-import type { SituationData, ScenarioId } from '@/types/security';
+import type { Scenario, SituationData, ScenarioId } from '@/types/security';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { getSituationData } from '@/services/mockApi';
 import LineTrendChart from '@/components/LineTrendChart.vue';
@@ -17,7 +17,7 @@ const scenarioStore = useScenarioStore();
 
 /** 场景列表：从 scenarioStore.activeScenarios 注入（Task 016，已按用户绑定过滤） */
 const SCENARIOS = computed<{ id: ScenarioId; label: string }[]>(() =>
-  scenarioStore.activeScenarios.map((s) => ({ id: s.scenario_id, label: s.name }))
+  scenarioStore.activeScenarios.map((s: Scenario) => ({ id: s.scenario_id, label: s.name }))
 );
 
 /** 时间范围选项 */

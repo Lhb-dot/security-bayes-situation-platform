@@ -17,7 +17,7 @@ import {
   setUserStatus,
   changeOwnPassword,
 } from '@/services/mockApi';
-import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { Scenario, ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
@@ -29,7 +29,7 @@ const isAdmin = () => currentUser.value?.role === 'ADMIN';
 
 /** 场景选项（创建/分配场景多选用，Task 017 补齐管理员闭环） */
 const scenarioOptions = computed(() =>
-  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+  scenarioStore.activeScenarios.map((s: Scenario) => ({ value: s.scenario_id, label: s.name }))
 );
 const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
 
