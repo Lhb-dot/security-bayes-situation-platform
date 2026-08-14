@@ -167,7 +167,7 @@ def _split_arff_values(content: str):
 
 def parse_arff_fields(path: str, label_field: str):
     """解析 ARFF，返回 (fields_schema, rows)。rows 为 @data 后非空行数。"""
-    fields, rows = [], 0
+    fields, rows, in_data = [], 0, False
     for raw in open(path, encoding="utf-8-sig", errors="replace"):
         line = raw.strip()
         upper = line.upper()
@@ -198,11 +198,20 @@ def parse_arff_fields(path: str, label_field: str):
                 "type": field_type,
                 "role": "label" if name == label_field else "feature",
                 "enum_values": enum_values,
+                "sample_values": [],
             })
         elif upper.startswith("@DATA"):
-            continue
-        elif line and not line.startswith("%") and not line.startswith("@"):
+            in_data = True
+        elif in_data and line and not line.startswith("%") and not line.startswith("@"):
             rows += 1
+            values = [v.strip().strip("'\"") for v in line.split(",")]
+            for i, v in enumerate(values):
+                if i >= len(fields):
+                    break
+                if len(fields[i]["sample_values"]) >= 2:
+                    continue
+                if v and v != "?" and v not in fields[i]["sample_values"]:
+                    fields[i]["sample_values"].append(v)
     return fields, rows
 
 
