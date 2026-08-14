@@ -365,7 +365,7 @@ const handleNavClick = (item: NavItem): void => {
 <style scoped>
 .risk-page-wrap,
 .new-page-wrap {
-  padding: 24px;
+  padding: 20px 16px; /* 缩小页面内边距，让数据集/模型等表格更宽 */
   min-height: auto;
   box-sizing: border-box;
 }

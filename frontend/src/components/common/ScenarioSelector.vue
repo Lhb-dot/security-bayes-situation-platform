@@ -16,10 +16,16 @@ const props = defineProps<{
   showAll?: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   /** 选中值变更 */
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
+
+/** v-model 包装：原生 <select> 用 v-model 才能可靠显示选中值（:value 绑定在 select 上不可靠） */
+const selected = computed<ScenarioId | 'all'>({
+  get: () => props.modelValue,
+  set: (val) => emit('update:modelValue', val),
+});
 
 const scenarioStore = useScenarioStore();
 
@@ -40,11 +46,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <select
-    class="scenario-selector__select"
-    :value="modelValue"
-    @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value as ScenarioId | 'all')"
-  >
+  <select v-model="selected" class="scenario-selector__select">
     <option v-for="opt in visibleOptions" :key="opt.value" :value="opt.value">
       {{ opt.label }}
     </option>

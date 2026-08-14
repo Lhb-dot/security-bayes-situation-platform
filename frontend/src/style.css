@@ -1210,8 +1210,9 @@ button {
 .el-overlay .el-table {
   --el-table-border-color: rgba(125, 201, 255, 0.12);
   --el-table-header-bg-color: rgba(16, 34, 60, 0.9);
-  --el-table-tr-bg-color: rgba(8, 18, 34, 0.6);
-  --el-table-row-hover-bg-color: rgba(20, 44, 72, 0.9);
+  --el-table-tr-bg-color: rgba(20, 44, 72, 0.55);
+  --el-table-row-hover-bg-color: rgba(20, 44, 72, 0.55);
+  --el-table-striped-row-bg-color: rgba(20, 44, 72, 0.55);
   --el-table-bg-color: transparent;
   background: transparent;
   color: rgba(217, 232, 255, 0.9);
@@ -1227,6 +1228,14 @@ button {
 }
 .el-table .el-table__inner-wrapper::before {
   background-color: rgba(125, 201, 255, 0.1);
+}
+/* 悬停色常驻：普通行/条纹行都用悬停暗色，悬停不再变色 */
+.el-overlay .el-table__body tr td.el-table__cell,
+.el-overlay .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(20, 44, 72, 0.55);
+}
+.el-overlay .el-table__body tr:hover > td.el-table__cell {
+  background: rgba(20, 44, 72, 0.55);
 }
 
 /* 按钮（暗色） */

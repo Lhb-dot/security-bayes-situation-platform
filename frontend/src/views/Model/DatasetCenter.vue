@@ -843,6 +843,20 @@ onMounted(() => {
   align-items: center;
 }
 
+/* 三个操作按钮：暗色背景 + 圆角 */
+.dataset-ops .el-button {
+  border-radius: 999px;
+  border: 1px solid rgba(91, 166, 255, 0.35);
+  background: rgba(91, 166, 255, 0.14);
+  color: #9ad6ff;
+  font-size: 0.78rem;
+}
+.dataset-ops .el-button:hover {
+  background: rgba(91, 166, 255, 0.26);
+  border-color: rgba(91, 166, 255, 0.55);
+  color: #fff;
+}
+
 /* 版本徽章 */
 .version-badge {
   display: inline-block;
