@@ -44,6 +44,11 @@ const toggleScenario = (id: ScenarioId) => {
 };
 
 const saveMyScenarios = async () => {
+  // 至少选择一个场景（用户必须关注 ≥1 个场景，否则其它页面无可用场景）
+  if (myScenarios.value.length === 0) {
+    ElMessage.warning('请至少选择一个感兴趣的场景（不可为 0）');
+    return;
+  }
   savingScenarios.value = true;
   try {
     await userStore.updateMyScenarios(myScenarios.value);
@@ -172,7 +177,7 @@ onMounted(async () => {
           <p class="eyebrow">Scenarios</p>
           <h3>选择感兴趣的场景</h3>
         </div>
-        <span class="perm-tip">可多选，保存后其它页面实时更新</span>
+        <span class="perm-tip">可多选，至少选 1 个；保存后其它页面实时更新</span>
       </div>
       <div class="scenario-pick-grid">
         <button

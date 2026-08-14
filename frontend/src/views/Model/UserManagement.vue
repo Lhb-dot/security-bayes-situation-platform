@@ -5,10 +5,9 @@
  * 需求 6.2（P0）：管理员创建普通用户账号，并可重置密码、启用或禁用账号、分配绑定场景；
  * 普通用户可修改本人密码。
  */
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useScenarioStore } from '@/stores/scenarioStore';
-import { useUserStore } from '@/stores/userStore';
 import {
   getCurrentUser,
   getUserList,
@@ -17,34 +16,29 @@ import {
   setUserStatus,
   changeOwnPassword,
 } from '@/services/mockApi';
-import type { Scenario, ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const loading = ref(false);
 const scenarioStore = useScenarioStore();
-const userStore = useUserStore();
 
 const isAdmin = () => currentUser.value?.role === 'ADMIN';
 
-/** 场景选项（创建/分配场景多选用，Task 017 补齐管理员闭环） */
-const scenarioOptions = computed(() =>
-  scenarioStore.activeScenarios.map((s: Scenario) => ({ value: s.scenario_id, label: s.name }))
-);
+/** 场景名称映射（表格只读展示用户自选场景） */
 const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
 
-// ========== 创建用户弹窗 ==========
+// ========== 创建用户弹窗（场景由用户登录后在"设置"页自选，管理员不再分配） ==========
 const createOpen = ref(false);
 const createForm = ref({
   username: '',
   display_name: '',
   password: '',
   role: 'USER' as UserRole,
-  scenario_ids: [] as ScenarioId[],
 });
 
 const openCreate = () => {
-  createForm.value = { username: '', display_name: '', password: '', role: 'USER', scenario_ids: [] };
+  createForm.value = { username: '', display_name: '', password: '', role: 'USER' };
   createOpen.value = true;
 };
 
@@ -55,34 +49,12 @@ const submitCreate = async () => {
       display_name: createForm.value.display_name,
       password: createForm.value.password,
       role: createForm.value.role,
-      scenario_ids: createForm.value.role === 'USER' ? createForm.value.scenario_ids : [],
     });
     ElMessage.success('账号创建成功');
     createOpen.value = false;
     await loadUsers();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '创建失败');
-  }
-};
-
-// ========== 分配绑定场景（需求 1.1.6 / 6.5，仅普通用户） ==========
-const bindTarget = ref<UserAccount | null>(null);
-const bindScenarioIds = ref<ScenarioId[]>([]);
-
-const openBind = (user: UserAccount) => {
-  bindTarget.value = user;
-  bindScenarioIds.value = [...(user.scenario_ids ?? [])];
-};
-
-const submitBind = async () => {
-  if (!bindTarget.value) return;
-  try {
-    await userStore.updateUserScenarios(bindTarget.value.user_id, bindScenarioIds.value);
-    ElMessage.success(`已更新 ${bindTarget.value.username} 的绑定场景`);
-    bindTarget.value = null;
-    await loadUsers();
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '分配失败');
   }
 };
 
@@ -224,13 +196,6 @@ onMounted(async () => {
                 </button>
                 <button
                   class="op-btn"
-                  v-if="user.role === 'USER'"
-                  @click="openBind(user)"
-                >
-                  分配场景
-                </button>
-                <button
-                  class="op-btn"
                   :class="user.status === 'active' ? 'op-btn--danger' : 'op-btn--ok'"
                   :disabled="!isAdmin()"
                   @click="toggleStatus(user)"
@@ -297,15 +262,9 @@ onMounted(async () => {
               <option value="ADMIN">管理员</option>
             </select>
           </div>
-          <div v-if="createForm.role === 'USER'" class="pwd-form__field">
-            <label class="pwd-form__label">分配场景（可多选，空表示无可见场景）</label>
-            <div class="scenario-checkbox-list">
-              <label v-for="sc in scenarioOptions" :key="sc.value" class="scenario-checkbox">
-                <input v-model="createForm.scenario_ids" type="checkbox" :value="sc.value" />
-                <span>{{ sc.label }}</span>
-              </label>
-            </div>
-          </div>
+          <p v-if="createForm.role === 'USER'" class="bind-tip">
+            场景由用户登录后在"设置"页自行选择，管理员无需分配
+          </p>
         </div>
         <div class="modal-card__foot">
           <button class="users-btn" @click="createOpen = false">取消</button>
@@ -334,28 +293,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 分配场景弹窗（仅普通用户，需求 1.1.6 / 6.5） -->
-    <div v-if="bindTarget" class="modal-mask" @click.self="bindTarget = null">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>分配场景 — {{ bindTarget.username }}</h3>
-          <button class="modal-close" @click="bindTarget = null">✕</button>
-        </div>
-        <div class="modal-card__body">
-          <p class="bind-tip">勾选该用户可见的场景（可多选，空表示无可见场景）</p>
-          <div class="scenario-checkbox-list">
-            <label v-for="sc in scenarioOptions" :key="sc.value" class="scenario-checkbox">
-              <input v-model="bindScenarioIds" type="checkbox" :value="sc.value" />
-              <span>{{ sc.label }}</span>
-            </label>
-          </div>
-        </div>
-        <div class="modal-card__foot">
-          <button class="users-btn" @click="bindTarget = null">取消</button>
-          <button class="users-btn users-btn--primary" @click="submitBind">保存</button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
