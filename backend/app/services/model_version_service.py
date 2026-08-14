@@ -17,6 +17,7 @@
    默认模型下线时自动清除默认状态（需求 6.7.4.5）。
 4. 发布和下线必须记录操作管理员及操作时间（published_by / published_at）。
 """
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -65,6 +66,57 @@ class ModelVersionService(ServiceBase):
     @staticmethod
     def _to_dict(model: ModelVersion) -> dict:
         return row_to_dict(model)
+
+    def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
+        """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
+
+        检查项（任一失败 → 返回错误信息，禁止训练）：
+        - 字段重名：实际文件出现同名两列
+        - 标签字段缺失：label_field 不在实际文件中
+        - 字段缺失：注册 schema 定义的字段必须全部存在于实际文件
+        - 类型不匹配：注册类型（numeric/enum/string）与实际文件类型不一致
+        只读 ARFF 头部（1 行），对大文件开销可忽略。
+        """
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import read_arff
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            return f"数据集文件不存在: {path}"
+        try:
+            actual_fields, _ = read_arff(path, max_rows=1)
+        except Exception as exc:  # noqa: BLE001
+            return f"数据集文件解析失败: {exc}"
+
+        actual_names = [f["name"] for f in actual_fields]
+        seen: set = set()
+        for name in actual_names:
+            if name in seen:
+                return f"数据集文件字段重名: {name}，禁止训练"
+            seen.add(name)
+
+        if dataset.label_field not in actual_names:
+            return f"标签字段 {dataset.label_field} 缺失，缺少标签无法监督训练，禁止训练"
+
+        schema = dataset.fields_schema or []
+        schema_names = [f["name"] for f in schema]
+        missing = [name for name in schema_names if name not in actual_names]
+        if missing:
+            shown = "、".join(missing[:5])
+            suffix = " 等" if len(missing) > 5 else ""
+            return f"数据集缺少注册字段: {shown}{suffix}，禁止训练"
+
+        actual_type = {f["name"]: f["type"] for f in actual_fields}
+        for field in schema:
+            expect = field.get("type")
+            got = actual_type.get(field["name"])
+            if expect == "numeric" and got != "numeric":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+            if expect == "enum" and got != "enum":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+            if expect == "string" and got != "string":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+        return None
 
     def _transition(
         self, model: ModelVersion, to_status: str, operator_id: Optional[int] = None
@@ -126,6 +178,12 @@ class ModelVersionService(ServiceBase):
         err = validate_params_schema(algorithm.param_schema, training_parameters)
         if err:
             raise ServiceError(400, err)
+
+        # 训练数据与注册字段结构一致性校验（需求 3.1.1/3.1.2）：
+        # 字段缺失 / 重名 / 类型不匹配 / 标签字段缺失 → 禁止训练。
+        file_err = self._validate_dataset_file(dataset)
+        if file_err:
+            raise ServiceError(400, file_err)
 
         now = datetime.now(timezone.utc)
         model = ModelVersion(
@@ -311,7 +369,12 @@ class ModelVersionService(ServiceBase):
         self.require_login(current_user)
         stmt = select(ModelVersion)
         if getattr(current_user, "role", None) != ROLE_ADMIN:
+            # 需求 V3.0 §1.1.6：普通用户仅看到被分配场景的已发布模型
             stmt = stmt.where(ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES))
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
+            stmt = stmt.where(ModelVersion.scenario_id == bound)
         elif status:
             stmt = stmt.where(ModelVersion.status == status)
         if scenario_id is not None:

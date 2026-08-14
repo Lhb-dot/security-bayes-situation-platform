@@ -15,6 +15,7 @@ from typing import Optional
 from sqlalchemy import func, select
 
 from app.models.app_user import AppUser
+from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
@@ -103,8 +104,13 @@ class UserService(ServiceBase):
         username: str,
         password: str,
         role: str = ROLE_USER,
+        scenario_id: Optional[int] = None,
     ):
-        """创建用户账号（仅 ADMIN）。默认状态 ENABLED。"""
+        """创建用户账号（仅 ADMIN）。默认状态 ENABLED。
+
+        需求 V3.0 §1.1.6：管理员创建账号时可为普通用户指定绑定场景；
+        普通用户登录后只看到该场景。管理员不绑定（scenario_id=None）。
+        """
         self.require_admin(current_user)
         err = validate_required(
             {"username": username, "password": password}, ("username", "password")
@@ -121,6 +127,8 @@ class UserService(ServiceBase):
         err = validate_enum(role, ROLES, "role")
         if err:
             raise ServiceError(400, err)
+        if scenario_id is not None and self.db.get(Scenario, scenario_id) is None:
+            raise ServiceError(404, "绑定场景不存在")
 
         exists = self.db.scalar(
             select(AppUser).where(AppUser.username == username)
@@ -134,12 +142,37 @@ class UserService(ServiceBase):
             password_hash=hash_password(password),
             role=role,
             status=USER_STATUS_ENABLED,
+            scenario_id=scenario_id if role == ROLE_USER else None,
             created_at=now,
             updated_at=now,
         )
         self.db.add(user)
         self.commit()
         return ok(data=self._safe(user), message="用户创建成功")
+
+    @service_call
+    def update_scenario(
+        self,
+        current_user: Optional[AppUser],
+        user_id: int,
+        scenario_id: Optional[int],
+    ):
+        """分配/修改用户绑定场景（仅 ADMIN，V3.0 §1.1.6）。
+
+        传 None 解除绑定（普通用户将看不到任何场景）；管理员账号不绑定场景。
+        """
+        self.require_admin(current_user)
+        user = self._get(user_id)
+        if user.role == ROLE_ADMIN:
+            raise ServiceError(400, "管理员不绑定场景，无需分配")
+        if scenario_id is not None:
+            scenario = self.db.get(Scenario, scenario_id)
+            if scenario is None:
+                raise ServiceError(404, "绑定场景不存在")
+        user.scenario_id = scenario_id
+        user.updated_at = datetime.now(timezone.utc)
+        self.commit()
+        return ok(data=self._safe(user), message="场景绑定已更新")
 
     @service_call
     def update_password(

@@ -92,21 +92,22 @@ DATASETS = {
         "binary": True,
     },
     # 补录：网络 / 电力场景真实数据集（原文件在下载目录，source 指向原始文件）
-    "nf_unsw_nb15": {
+    # logical_id 与 V3.0 §2 需求文档一致（constants.py 的 DATASET_RISK_TYPES/DATASET_POSITIVE_LABELS 按此键名映射）
+    "nf_unsw_nb15_v2": {
         "file": "NF-UNSW-NB15-v2.arff",
         "source": r"D:\001Mine\005   Download\NF-UNSW-NB15-v20503",
         "scenario": "network_security",
         "label": "Label",
         "binary": True,
     },
-    "kdd_train_20": {
+    "kdd_train_20_percent": {
         "file": "KDDTrain_20Percent.arff",
         "source": r"D:\001Mine\005   Download\KDDTrain+_20Percent0503",
         "scenario": "network_security",
         "label": "class",
         "binary": True,
     },
-    "powergrid_knowledge": {
+    "powergrid_knowledgebase": {
         "file": "powergrid_knowledgebase_dataset.arff",
         "source": r"D:\001Mine\005   Download\powergrid_knowledgebase_dataset0503",
         "scenario": "power_system",
@@ -167,7 +168,7 @@ def _split_arff_values(content: str):
 
 def parse_arff_fields(path: str, label_field: str):
     """解析 ARFF，返回 (fields_schema, rows)。rows 为 @data 后非空行数。"""
-    fields, rows = [], 0
+    fields, rows, in_data = [], 0, False
     for raw in open(path, encoding="utf-8-sig", errors="replace"):
         line = raw.strip()
         upper = line.upper()
@@ -198,11 +199,20 @@ def parse_arff_fields(path: str, label_field: str):
                 "type": field_type,
                 "role": "label" if name == label_field else "feature",
                 "enum_values": enum_values,
+                "sample_values": [],
             })
         elif upper.startswith("@DATA"):
-            continue
-        elif line and not line.startswith("%") and not line.startswith("@"):
+            in_data = True
+        elif in_data and line and not line.startswith("%") and not line.startswith("@"):
             rows += 1
+            values = [v.strip().strip("'\"") for v in line.split(",")]
+            for i, v in enumerate(values):
+                if i >= len(fields):
+                    break
+                if len(fields[i]["sample_values"]) >= 2:
+                    continue
+                if v and v != "?" and v not in fields[i]["sample_values"]:
+                    fields[i]["sample_values"].append(v)
     return fields, rows
 
 

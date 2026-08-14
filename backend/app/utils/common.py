@@ -123,9 +123,13 @@ def validate_fields_schema(
         return "fields_schema 必须是非空字段列表"
     feature_count = 0
     label_found = False
+    seen_names: set = set()
     for idx, field in enumerate(fields_schema):
         if not isinstance(field, dict) or not field.get("name"):
             return f"fields_schema 第 {idx + 1} 项缺少 name"
+        if field["name"] in seen_names:
+            return f"fields_schema 字段重名: {field['name']}，禁止训练（需求 3.1.1）"
+        seen_names.add(field["name"])
         role = field.get("role")
         if role == "feature":
             feature_count += 1

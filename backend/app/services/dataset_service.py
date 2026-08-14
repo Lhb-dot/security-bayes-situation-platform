@@ -15,6 +15,7 @@
 5. 停用数据集不得用于新的模型训练（model_version service 侧校验）。
 6. 普通用户只能查看与已发布模型有关的数据集（需求 2.3.1）。
 """
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -95,6 +96,11 @@ class DatasetService(ServiceBase):
         if scenario_id is not None:
             stmt = stmt.where(Dataset.scenario_id == scenario_id)
         if getattr(current_user, "role", None) != ROLE_ADMIN:
+            # 需求 V3.0 §1.1.6：普通用户仅看到被分配场景的数据集
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
+            stmt = stmt.where(Dataset.scenario_id == bound)
             stmt = stmt.where(
                 Dataset.id.in_(
                     select(ModelVersion.dataset_id).where(
@@ -286,5 +292,56 @@ class DatasetService(ServiceBase):
                 "version": dataset.version,
                 "label_field": dataset.label_field,
                 "fields_schema": dataset.fields_schema,
+            }
+        )
+
+    @service_call
+    def get_preview(
+        self,
+        current_user,
+        dataset_id: int,
+        page: int = 1,
+        page_size: int = 50,
+    ):
+        """数据内容预览（需求 2.4：前 N 条数据、标签列高亮、分页）。
+
+        - 权限：管理员全部数据集；普通用户仅与已发布模型关联的数据集（2.4.4）
+        - 性能：单次最多返回 50 条（2.4.5），后端从 ARFF 直接读取，读多少算多少
+        """
+        self.require_login(current_user)
+        if page_size > 50:
+            page_size = 50  # 2.4.5 每页最多 50 条
+        dataset = self._get(dataset_id)
+        if getattr(current_user, "role", None) != ROLE_ADMIN:
+            published = self.db.scalar(
+                select(func.count()).select_from(ModelVersion).where(
+                    ModelVersion.dataset_id == dataset_id,
+                    ModelVersion.status == MODEL_STATUS_PUBLISHED,
+                )
+            )
+            if not published:
+                raise ServiceError(403, "无权限操作")
+
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import count_arff_rows, read_arff
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            raise ServiceError(404, f"数据集文件不存在: {path}")
+
+        offset = (page - 1) * page_size
+        _, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
+        page_rows = rows[offset: offset + page_size]
+        return ok(
+            data={
+                "dataset_id": dataset.id,
+                "logical_id": dataset.logical_id,
+                "version": dataset.version,
+                "label_field": dataset.label_field,
+                "fields_schema": dataset.fields_schema,
+                "rows": page_rows,
+                "page": page,
+                "page_size": len(page_rows),
+                "total": count_arff_rows(path),
             }
         )
