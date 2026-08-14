@@ -116,26 +116,100 @@ class RiskEventService(ServiceBase):
 
     @staticmethod
     def _build_description(
-        dataset_logical_id: str, prediction_label: str, input_features: Dict
+        dataset_logical_id: str,
+        prediction_label: str,
+        input_features: Dict,
+        risk_score: float,
+        risk_level: str,
     ) -> str:
-        """生成风险说明（需求 5.5.6：电力事件结合 IssueType 生成）。"""
+        """生成风险事件解释文本（需求 V3.0 §5.7.2：结合场景特征生成有信息量的说明）。
+
+        模板按场景差异化（含风险评分、风险等级与关键特征值），面向业务人员，
+        不使用 softmax/对数似然等算法术语（§5.7.3）；解释文本随事件持久化保存。
+        特征值只读取输入特征中存在且非空的键，缺失时跳过该句，不虚构数据。
+        """
+        feats = input_features if isinstance(input_features, dict) else {}
         risk_type = DATASET_RISK_TYPES.get(dataset_logical_id)
+
+        def _f(name: str):
+            v = feats.get(name)
+            return None if v in (None, "", "?") else v
+
+        head = f"（风险评分：{risk_score}，风险等级：{risk_level}）"
+
         if risk_type == RISK_TYPE_POWER:
-            issue = (
-                input_features.get("IssueType")
-                if isinstance(input_features, dict)
-                else None
-            )
+            # §5.7.2 电力：受影响设备/所属系统/问题现象(IssueType)/当前电压
+            bits = [f"该样本被判定为形成电力系统风险{head}"]
+            component, system = _f("Component"), _f("SystemName")
+            issue, voltage = _f("IssueType"), _f("VoltageLevel_kV")
+            if component:
+                bits.append(f"受影响设备：{component}")
+            if system:
+                bits.append(f"所属系统：{system}")
             if issue:
-                return f"模型判定该样本形成电力系统风险，问题现象为 {issue}。"
-            return "模型判定该样本形成电力系统风险。"
+                bits.append(f"问题现象：{issue}")
+            if voltage:
+                bits.append(f"当前电压 {voltage} kV")
+            bits.append("建议核实相关设备是否存在越限或异常，并检查关联监测数据")
+            return "，".join(bits) + "。"
+
         if risk_type == RISK_TYPE_NETWORK:
-            return "模型判定该网络流量样本存在网络安全风险。"
+            # §5.7.2 网络：目标端口/协议/字节数/重传等明显异常特征
+            bits = [f"该网络流量样本被判定为网络安全风险{head}"]
+            dport = _f("L4_DST_PORT") or _f("dst_port")
+            proto = _f("PROTOCOL") or _f("protocol_type")
+            in_bytes = _f("IN_BYTES") or _f("src_bytes")
+            retrans = _f("RETRANSMITTED_IN_BYTES") or _f("dst_bytes")
+            if dport:
+                bits.append(f"目标端口 {dport} 收到异常流量")
+            if proto:
+                bits.append(f"协议类型为 {proto}")
+            if in_bytes:
+                bits.append(f"流入字节数 {in_bytes}")
+            if retrans:
+                bits.append(f"流入方向重传 {retrans} 字节，重传率偏高")
+            bits.append("建议重点关注该连接是否存在扫描或攻击行为")
+            return "，".join(bits) + "。"
+
         if risk_type == RISK_TYPE_GEOLOGICAL:
-            return "模型判定该区域存在地质风险（滑坡）。"
+            # §5.7.2 地质：坡度/TWI/距断层距离/岩性等关键因子
+            bits = [f"该区域被判定为存在滑坡风险{head}"]
+            slope = _f("Slope") or _f("slope")
+            twi = _f("TWI") or _f("twi")
+            dist_fault = _f("Dis2fault") or _f("DR")
+            lith = _f("Lithology") or _f("lithology")
+            if slope:
+                bits.append(f"坡度 {slope}°")
+            if twi:
+                bits.append(f"TWI（地形湿度指数）{twi}")
+            if dist_fault:
+                bits.append(f"距断层距离 {dist_fault}")
+            if lith:
+                bits.append(f"岩性为 {lith}")
+            bits.append("建议对该区域进行现场核查，并关注近期降雨情况")
+            return "，".join(bits) + "。"
+
         if risk_type == RISK_TYPE_FLIGHT_DECK:
-            return "模型判定该作业样本存在碰撞风险。"
-        return f"模型判定样本存在风险（原始标签: {prediction_label}）。"
+            # §5.7.2 航母：最小间距/接近率/航向角偏差等关键轨迹特征
+            bits = [f"该双机协同作业样本被判定为存在碰撞风险{head}"]
+            min_dist = _f("inter_dist_min")
+            dist_change = _f("dist_change_mean") or _f("dist_change")
+            plane1 = _f("Plane1_dir_mean_deg")
+            plane2 = _f("Plane2_dir_mean_deg")
+            if min_dist:
+                bits.append(f"最小间距 {min_dist}m")
+            if dist_change:
+                bits.append(f"接近率 {abs(float(dist_change))} m/s")
+            if plane1 and plane2:
+                try:
+                    diff = abs(float(plane1) - float(plane2))
+                    bits.append(f"两机航向角偏差 {round(diff, 1)}°")
+                except (TypeError, ValueError):
+                    pass
+            bits.append("建议立即关注双机相对状态，必要时进行避让调度")
+            return "，".join(bits) + "。"
+
+        return f"模型判定样本存在风险{head}（原始标签: {prediction_label}）。"
 
     # ------------------------------------------------------------------
     # 生成（由 InferenceRecordService 在推理后调用；需求 5.2/5.3/5.4/5.5）
@@ -209,7 +283,11 @@ class RiskEventService(ServiceBase):
             status=RISK_EVENT_STATUS_PENDING,
             raw_features=raw_features,
             description=self._build_description(
-                dataset.logical_id, record.prediction_label, record.input_features
+                dataset.logical_id,
+                record.prediction_label,
+                record.input_features,
+                float(risk_score),
+                risk_level,
             ),
             fault_position_x=pos_x,
             fault_position_y=pos_y,
