@@ -135,6 +135,24 @@ def read_arff(path: str, max_rows: int | None = None):
     return fields, rows
 
 
+def count_arff_rows(path: str) -> int:
+    """统计 ARFF @DATA 段的有效记录行数（预览分页 total 用）。"""
+    count = 0
+    in_data = False
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n").rstrip("\r").strip()
+            if not line or line.startswith("%"):
+                continue
+            upper = line.upper()
+            if upper.startswith("@DATA"):
+                in_data = True
+                continue
+            if in_data and not upper.startswith("@"):
+                count += 1
+    return count
+
+
 def enrich_sample_values(existing: list[dict], new_fields: list[dict]) -> list[dict]:
     """把读取器解析出的 sample_values 合并进已有 fields_schema（按字段名对齐）。"""
     samples_by_name = {f["name"]: f.get("sample_values", []) for f in new_fields}
