@@ -2,11 +2,13 @@
 /**
  * ScenarioSelector - 场景筛选下拉框
  *
- * 第一项恒为"所有场景"，进入页面默认选中它并显示"所有场景"。
- * 使用本地 ref + 双向 watch 保证原生 <select> 一定显示选中值（:value 绑定在 select 上不可靠）。
+ * 与推理记录（InferenceRecords）完全同源：从 scenarioStore.activeScenarios 取场景。
+ * 数据加载：优先用共享 store（与推理记录一致）；若 store 为空再直接调 getScenarioList 兜底。
+ * 本地 ref + 双向 watch 保证原生 <select> 一定显示选中值。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { getScenarioList } from '@/services/mockApi';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import type { ScenarioId } from '@/types/security';
 
 const props = defineProps<{
@@ -21,11 +23,29 @@ const emit = defineEmits<{
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-/**
- * 场景列表：直接调 mockApi.getScenarioList() 存本地 ref（与推理记录同源：
- * 管理员=全部场景，普通用户=自选场景），不依赖共享 store 的时序/响应式。
- */
+const scenarioStore = useScenarioStore();
+
+/** 场景列表：优先共享 store（与推理记录同源），空时用 getScenarioList 兜底 */
 const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
+
+const syncScenarios = () => {
+  const storeScenarios = scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }));
+  if (storeScenarios.length > 0) {
+    localScenarios.value = storeScenarios;
+    return;
+  }
+  if (localScenarios.value.length === 0) {
+    // store 未加载 → 直接拉取
+    getScenarioList()
+      .then((list) => {
+        localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
+        console.log('[ScenarioSelector] getScenarioList →', list.length, list.map((s) => s.name));
+      })
+      .catch((e) => {
+        console.warn('[ScenarioSelector] getScenarioList 失败:', e);
+      });
+  }
+};
 
 /** 选项列表："所有场景"恒为第一项 + 场景列表 */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
@@ -38,7 +58,7 @@ const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
   return list;
 });
 
-/** 本地选中值：默认"所有场景"，与 props 双向同步（保证下拉框加载即显示"所有场景"） */
+/** 本地选中值：默认"所有场景"，与 props 双向同步 */
 const localValue = ref<ScenarioId | 'all'>(props.modelValue ?? 'all');
 watch(
   () => props.modelValue,
@@ -50,18 +70,12 @@ watch(localValue, (v) => {
   emit('update:modelValue', v);
 });
 
-onMounted(async () => {
-  try {
-    const list = await getScenarioList();
-    localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
-  } catch {
-    localScenarios.value = [];
-  }
+onMounted(() => {
+  syncScenarios();
 });
 </script>
 
 <template>
-  <!-- 与推理记录筛选框一致的样式（filter-item/filter-select 全局类） -->
   <label class="filter-item">
     <span class="filter-item__label">场景</span>
     <select v-model="localValue" class="filter-select">
