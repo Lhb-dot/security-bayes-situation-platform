@@ -31,12 +31,6 @@ const selectedDataset = ref<string>('all');
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
-/** 当前用户绑定场景名（管理员/用户固定场景，右上角展示） */
-const myScenarioName = computed(() => {
-  const id = currentUser.value?.scenario_ids?.[0];
-  return id ? scenarioLabel[id] ?? id : '';
-});
-
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 
 const statusLabel: Record<string, string> = {
@@ -197,11 +191,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
         <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
-        <span v-else class="model-center__scenario-tag">当前场景：{{ myScenarioName }}</span>
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>

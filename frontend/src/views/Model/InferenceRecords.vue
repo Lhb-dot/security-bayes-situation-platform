@@ -28,8 +28,8 @@ const router = useRouter();
 const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
 
-/** 是否显示"所有场景"选项（管理员只显示自己场景） */
-const showAllScenario = computed(() => userStore.currentUser?.role !== 'SCENARIO_ADMIN');
+/** 是否系统管理员（管理员/用户场景固定，隐藏场景筛选） */
+const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 
 const scenarioFilter = ref<'' | ScenarioId>('');
 const userFilter = ref<string>('');
@@ -87,6 +87,10 @@ onMounted(async () => {
   algorithms.value = algos;
   await scenarioStore.fetchScenarioList();
   if (isAdmin.value) users.value = await getUserList();
+  // 管理员/用户：场景固定为自己场景（隐藏场景筛选）
+  if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
+    scenarioFilter.value = userStore.currentUser?.scenario_ids?.[0] ?? '';
+  }
   await loadRecords();
 });
 </script>
@@ -104,10 +108,10 @@ onMounted(async () => {
     </div>
 
     <div class="records-filters">
-      <label class="filter-item">
+      <label v-if="isSuperAdmin" class="filter-item">
         <span class="filter-item__label">场景</span>
         <select v-model="scenarioFilter" class="filter-select" @change="loadRecords">
-          <option v-if="showAllScenario" value="">所有场景</option>
+          <option value="">所有场景</option>
           <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
         </select>
       </label>

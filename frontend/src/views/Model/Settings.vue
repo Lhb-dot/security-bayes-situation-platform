@@ -18,50 +18,12 @@ import {
   getThresholds,
   saveThreshold,
 } from '@/services/mockApi';
-import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
-const userStore = useUserStore();
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
-// ===================== 普通用户：选择感兴趣的场景 =====================
-const ALL_SCENARIOS: Array<{ id: ScenarioId; label: string; desc: string }> = [
-  { id: 'network_security', label: '网络安全', desc: '网络流量二分类风险' },
-  { id: 'power_system', label: '电力系统', desc: '电力设备风险事件' },
-  { id: 'geological_risk', label: '地质风险', desc: '滑坡易发性风险' },
-  { id: 'flightdeck_operation', label: '航母甲板作业', desc: '双机协同碰撞风险' },
-];
-const myScenarios = ref<ScenarioId[]>([]);
-const savingScenarios = ref(false);
-
-const toggleScenario = (id: ScenarioId) => {
-  if (myScenarios.value.includes(id)) {
-    myScenarios.value = myScenarios.value.filter((s) => s !== id);
-  } else {
-    myScenarios.value = [...myScenarios.value, id];
-  }
-};
-
-const saveMyScenarios = async () => {
-  // 至少选择一个场景（用户必须关注 ≥1 个场景，否则其它页面无可用场景）
-  if (myScenarios.value.length === 0) {
-    ElMessage.warning('请至少选择一个感兴趣的场景（不可为 0）');
-    return;
-  }
-  savingScenarios.value = true;
-  try {
-    await userStore.updateMyScenarios(myScenarios.value);
-    currentUser.value = userStore.currentUser;
-    ElMessage.success('关注的场景已保存，其它页面将实时更新');
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '保存失败');
-  } finally {
-    savingScenarios.value = false;
-  }
-};
-
-// ===================== 普通用户：个人设置 =====================
+// ===================== 普通用户：个人设置（场景由管理员分配，用户不可自选） =====================
 const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
 const changingPwd = ref(false);
 const changePwd = async () => {
@@ -160,7 +122,6 @@ const saveAdminSettings = () => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  myScenarios.value = [...(currentUser.value?.scenario_ids ?? [])];
   if (isAdmin.value) await loadThresholds();
 });
 </script>
@@ -177,34 +138,7 @@ onMounted(async () => {
     </div>
 
     <!-- ==================== 普通用户：选场景（第一个区块） ==================== -->
-    <section v-if="!isAdmin" class="card settings-section settings-section--span">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Scenarios</p>
-          <h3>选择感兴趣的场景</h3>
-        </div>
-        <span class="perm-tip">可多选，至少选 1 个；保存后其它页面实时更新</span>
-      </div>
-      <div class="scenario-pick-grid">
-        <button
-          v-for="sc in ALL_SCENARIOS"
-          :key="sc.id"
-          class="scenario-pick"
-          :class="{ 'is-picked': myScenarios.includes(sc.id) }"
-          @click="toggleScenario(sc.id)"
-        >
-          <span class="scenario-pick__name">{{ sc.label }}</span>
-          <span class="scenario-pick__desc">{{ sc.desc }}</span>
-        </button>
-      </div>
-      <div class="scenario-pick__actions">
-        <button class="settings-btn settings-btn--primary" :disabled="savingScenarios" @click="saveMyScenarios">
-          {{ savingScenarios ? '保存中...' : '保存我关注的场景' }}
-        </button>
-      </div>
-    </section>
-
-    <!-- ==================== 普通用户：个人设置 ==================== -->
+    <!-- ==================== 普通用户：个人设置（场景由管理员分配，不可自选） ==================== -->
     <template v-if="!isAdmin">
       <section class="card settings-section settings-section--span">
         <div class="section-heading">

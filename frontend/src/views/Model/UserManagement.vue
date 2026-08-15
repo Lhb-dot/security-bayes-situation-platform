@@ -250,6 +250,7 @@ onMounted(async () => {
       :title="isSuperAdmin() ? '创建管理员账号' : '创建用户账号'"
       width="460px"
       append-to-body
+      lock-scroll
       :close-on-click-modal="false"
     >
       <div class="pwd-form" style="display: grid; gap: 14px">

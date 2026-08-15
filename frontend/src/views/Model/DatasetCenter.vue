@@ -64,12 +64,6 @@ const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
-/** 当前用户绑定场景名（管理员/用户固定场景，右上角展示） */
-const myScenarioName = computed(() => {
-  const id = currentUser.value?.scenario_ids?.[0];
-  return id ? SCENARIO_LABEL[id] ?? id : '';
-});
-
 // ===================== 上传数据集 / 创建新版本（需求 2.3.2 / 2.3.3） =====================
 const uploadDialogVisible = ref(false);
 /** 弹窗模式：upload=上传新数据集(v1)；newVersion=修改已用数据集→创建新版本（保留旧版本） */
@@ -304,10 +298,9 @@ onMounted(() => {
       <button v-if="isAdmin" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
     </div>
 
-    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
     <div class="dataset-center__toolbar">
       <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
-      <span v-else class="dataset-center__scenario-tag">当前场景：{{ myScenarioName }}</span>
       <span class="dataset-center__count">
         共 <strong>{{ filteredDatasets.length }}</strong> 个数据集
       </span>

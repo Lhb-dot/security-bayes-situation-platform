@@ -38,6 +38,20 @@ const roleLabel = computed(() => {
   return '用户';
 });
 
+/** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
+const myScenarioName = computed(() => {
+  if (isSuperAdmin.value) return '';
+  const id = userStore.currentUser?.scenario_ids?.[0];
+  if (!id) return '';
+  const map: Record<string, string> = {
+    network_security: '网络安全',
+    power_system: '电力系统',
+    geological_risk: '地质风险',
+    flightdeck_operation: '航母甲板',
+  };
+  return map[id] ?? id;
+});
+
 const handleLogout = async () => {
   await userStore.logout();
   router.push('/login');
@@ -175,7 +189,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/alerts/')) return '告警处置分析';
   if (route.path === '/overview') return '首页';
   if (route.path === '/scenarios') return '场景中心';
-  if (route.path.startsWith('/scenarios/')) return '场景大屏';
+  if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';
   if (route.path === '/datasets') return '数据集中心';
   if (route.path.startsWith('/datasets/')) return '数据集详情';
   if (route.path === '/models') return '模型中心';
@@ -248,7 +262,7 @@ const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER']
 const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
 
 const navItems: NavItem[] = [
-  { path: '/home', label: '首页', roles: ['SCENARIO_USER'], action: () => router.push({ path: '/home' }) },
+  // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard），不再单独显示 /home 入口
   { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview },
   { path: '/scenarios', label: '场景中心', roles: ALL_ROLES, action: goScenarioCenter },
   { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter },
@@ -324,6 +338,7 @@ const handleNavClick = (item: NavItem): void => {
           </button>
         </nav>
         <div class="topbar__user">
+          <div v-if="myScenarioName" class="topbar__user-scenario">{{ myScenarioName }}</div>
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
           <div class="topbar__user-pop">
             <span class="topbar__user-name">{{ currentUser?.display_name }}</span>
@@ -402,10 +417,23 @@ const handleNavClick = (item: NavItem): void => {
 .topbar__user {
   position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   margin-left: 16px;
   padding-left: 16px;
   border-left: 1px solid rgba(125, 201, 255, 0.15);
+}
+
+/* 当前场景名（管理员/用户，显示在头像上方） */
+.topbar__user-scenario {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 229, 200, 0.3);
+  background: rgba(83, 229, 200, 0.08);
+  color: #53e5c8;
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .topbar__user-avatar {
