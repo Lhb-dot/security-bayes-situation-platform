@@ -33,8 +33,13 @@ from app.services.constants import (
     DATASET_STATUS_ACTIVE,
     DATASET_STATUS_INACTIVE,
     DATASET_STATUSES,
+    DATASET_VISIBILITY_COMPANY,
+    DATASET_VISIBILITY_PERSONAL,
+    DATASET_VISIBILITY_PLATFORM,
+    DATASET_VISIBILITIES,
     MODEL_STATUS_PUBLISHED,
     ROLE_SCENARIO_ADMIN,
+    ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
 from app.utils.common import (
@@ -77,20 +82,36 @@ class DatasetService(ServiceBase):
     def _to_dict(dataset: Dataset) -> dict:
         return row_to_dict(dataset)
 
-    def _can_view_dataset(self, current_user, dataset: Dataset) -> bool:
-        """数据集可见性：SUPER_ADMIN 全部；SCENARIO_ADMIN 自己场景全部；SCENARIO_USER 仅已发布模型关联。"""
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SUPER_ADMIN:
-            return True
+    @staticmethod
+    def _default_visibility(role: Optional[str]) -> str:
+        """上传默认可见性：最外层=platform，场景管理员=company，场景用户=personal。"""
         if role == ROLE_SCENARIO_ADMIN:
-            return dataset.scenario_id == getattr(current_user, "scenario_id", None)
-        published = self.db.scalar(
-            select(func.count()).select_from(ModelVersion).where(
-                ModelVersion.dataset_id == dataset.id,
-                ModelVersion.status == MODEL_STATUS_PUBLISHED,
+            return DATASET_VISIBILITY_COMPANY
+        if role == ROLE_SCENARIO_USER:
+            return DATASET_VISIBILITY_PERSONAL
+        return DATASET_VISIBILITY_PLATFORM
+
+    def _can_view_dataset(self, current_user, dataset: Dataset) -> bool:
+        """数据集可见性（数据所有权分级）。
+
+        - SUPER_ADMIN：仅平台数据（platform）
+        - SCENARIO_ADMIN：自己场景的 平台+公司 数据
+        - SCENARIO_USER：自己场景的 平台+公司 数据 + 本人个人数据
+        """
+        role = getattr(current_user, "role", None)
+        vis = dataset.visibility or DATASET_VISIBILITY_PLATFORM
+        if role == ROLE_SUPER_ADMIN:
+            return vis == DATASET_VISIBILITY_PLATFORM
+        if role == ROLE_SCENARIO_ADMIN:
+            return (
+                dataset.scenario_id == getattr(current_user, "scenario_id", None)
+                and vis in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
             )
-        )
-        return bool(published)
+        if role == ROLE_SCENARIO_USER:
+            if vis == DATASET_VISIBILITY_PERSONAL:
+                return dataset.uploaded_by == getattr(current_user, "id", None)
+            return dataset.scenario_id == getattr(current_user, "scenario_id", None)
+        return False
 
     # ------------------------------------------------------------------
     # 查询（需求 2.3.1 / 6.5.2：查看列表与字段预览 → 允许/允许）
@@ -115,20 +136,24 @@ class DatasetService(ServiceBase):
         if scenario_id is not None:
             stmt = stmt.where(Dataset.scenario_id == scenario_id)
         if role == ROLE_SCENARIO_ADMIN:
+            # 场景管理员：自己场景的 平台+公司 数据
             stmt = stmt.where(Dataset.scenario_id == getattr(current_user, "scenario_id", None))
-        elif role != ROLE_SUPER_ADMIN:
-            # 场景用户：仅看到被分配场景 + 有已发布模型的数据集
+            stmt = stmt.where(Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)))
+        elif role == ROLE_SCENARIO_USER:
+            # 场景用户：自己场景的 平台+公司 数据 + 本人个人数据
             bound = getattr(current_user, "scenario_id", None)
             if bound is None:
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
-            stmt = stmt.where(Dataset.scenario_id == bound)
             stmt = stmt.where(
-                Dataset.id.in_(
-                    select(ModelVersion.dataset_id).where(
-                        ModelVersion.status == MODEL_STATUS_PUBLISHED
-                    )
+                (Dataset.scenario_id == bound)
+                & (
+                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY))
+                    | ((Dataset.visibility == DATASET_VISIBILITY_PERSONAL) & (Dataset.uploaded_by == getattr(current_user, "id", None)))
                 )
             )
+        elif role == ROLE_SUPER_ADMIN:
+            # 最外层管理员：仅平台数据
+            stmt = stmt.where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
         stmt = stmt.order_by(Dataset.logical_id, Dataset.version)
         result = paginate(self.db, stmt, page, page_size)
         result["items"] = [self._to_dict(d) for d in result["items"]]
@@ -169,9 +194,31 @@ class DatasetService(ServiceBase):
         file_path: str,
         fields_schema: List[Dict],
         label_field: str,
+        visibility: Optional[str] = None,
     ):
-        """上传数据集（管理级角色，场景管理员仅自己场景），版本号自动取最大值 + 1。"""
-        self.require_scenario_admin_of(current_user, scenario_id)
+        """上传数据集，版本号自动取最大值 + 1。可见性分级（数据所有权）：
+
+        - SUPER_ADMIN：平台数据 platform（默认），任意场景
+        - SCENARIO_ADMIN：公司数据 company（默认），仅自己场景
+        - SCENARIO_USER：个人数据 personal（强制），仅自己场景
+        """
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN:
+            self.require_scenario_admin_of(current_user, scenario_id)
+        elif role == ROLE_SCENARIO_USER:
+            if scenario_id != getattr(current_user, "scenario_id", None):
+                raise ServiceError(403, "场景用户只能在自己场景上传个人数据")
+        else:
+            self.require_login(current_user)
+
+        # 可见性：默认按角色；SCENARIO_USER 强制 personal；显式传入则校验合法
+        if role == ROLE_SCENARIO_USER:
+            visibility = DATASET_VISIBILITY_PERSONAL
+        else:
+            visibility = visibility or self._default_visibility(role)
+        if visibility not in DATASET_VISIBILITIES:
+            raise ServiceError(400, "可见性必须为 platform/company/personal")
+
         err = validate_required(
             {"logical_id": logical_id, "file_path": file_path, "label_field": label_field},
             ("logical_id", "file_path", "label_field"),
@@ -203,6 +250,8 @@ class DatasetService(ServiceBase):
             file_path=file_path,
             fields_schema=fields_schema,
             label_field=label_field,
+            visibility=visibility,
+            uploader_role=role,
             uploaded_by=current_user.id,
             uploaded_at=now,
             status=DATASET_STATUS_ACTIVE,

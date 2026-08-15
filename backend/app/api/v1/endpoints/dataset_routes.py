@@ -112,6 +112,7 @@ def create_dataset(
             file_path=payload.file_path,
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
+            visibility=payload.visibility,
         )
     )
 

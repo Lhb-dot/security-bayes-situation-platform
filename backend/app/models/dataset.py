@@ -26,6 +26,11 @@ class Dataset(Base):
     file_path: Mapped[str] = mapped_column(String(255), nullable=False)
     fields_schema: Mapped[list] = mapped_column(JSONB, nullable=False)
     label_field: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 数据可见性分级：platform（平台）/ company（公司）/ personal（个人）
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="platform", server_default="platform"
+    )
+    uploader_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     uploaded_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=False
     )

@@ -18,6 +18,10 @@ class DatasetCreate(BaseModel):
         ..., min_length=1, description="字段结构定义（含 label 与至少一个 feature）"
     )
     label_field: str = Field(..., min_length=1, max_length=64, description="标签字段名")
+    visibility: Optional[str] = Field(
+        None,
+        description="可见性（数据所有权分级）：platform=平台（最外层）/ company=公司（场景管理员）/ personal=个人（场景用户）。缺省按上传者角色",
+    )
 
 
 class DatasetUpdate(BaseModel):

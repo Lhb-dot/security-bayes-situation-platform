@@ -43,6 +43,16 @@ USERNAME_MAX_LEN = 64
 PASSWORD_HASH_MAX_LEN = 128
 PASSWORD_MIN_LEN = 6  # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
 
+# 数据可见性分级（三级角色数据所有权：平台/公司/个人）
+DATASET_VISIBILITY_PLATFORM = "platform"   # 平台数据：最外层管理员管理，各场景基线
+DATASET_VISIBILITY_COMPANY = "company"     # 公司数据：场景管理员上传，最外层不可见
+DATASET_VISIBILITY_PERSONAL = "personal"   # 个人数据：场景用户上传，上级都不可见
+DATASET_VISIBILITIES = (
+    DATASET_VISIBILITY_PLATFORM,
+    DATASET_VISIBILITY_COMPANY,
+    DATASET_VISIBILITY_PERSONAL,
+)
+
 # ---------------------------------------------------------------------------
 # 场景（数据库设计文档v2 2.2；需求文档 1/2）
 # ---------------------------------------------------------------------------
