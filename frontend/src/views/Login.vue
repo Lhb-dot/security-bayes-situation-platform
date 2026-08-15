@@ -97,10 +97,13 @@ const quickLogin = async (uname: string, pwd: string) => {
         <p class="login-demo__title">演示账号（密码均为 123456）</p>
         <div class="login-demo__btns">
           <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
-            管理员 admin
+            系统管理员 admin
+          </button>
+          <button class="login-demo__btn" @click="quickLogin('net_admin', '123456')">
+            场景管理员 net_admin
           </button>
           <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
-            普通用户 alice
+            场景用户 alice
           </button>
         </div>
       </div>
