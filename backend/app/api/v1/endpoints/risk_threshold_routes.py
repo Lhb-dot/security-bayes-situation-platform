@@ -6,7 +6,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -43,7 +43,7 @@ def update_risk_threshold(
     scenario_id: int,
     payload: RiskThresholdUpdate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         RiskThresholdService(db).update(

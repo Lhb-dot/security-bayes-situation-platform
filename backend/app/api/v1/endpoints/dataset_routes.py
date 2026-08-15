@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -102,7 +102,7 @@ def get_dataset_preview(
 def create_dataset(
     payload: DatasetCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).create(
@@ -125,7 +125,7 @@ def update_dataset(
     dataset_id: int,
     payload: DatasetUpdate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).update(
@@ -146,7 +146,7 @@ def update_dataset(
 def disable_dataset(
     dataset_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).disable(current_user=current_user, dataset_id=dataset_id)
@@ -161,7 +161,7 @@ def disable_dataset(
 def delete_dataset(
     dataset_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).delete(current_user=current_user, dataset_id=dataset_id)

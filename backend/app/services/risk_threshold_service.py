@@ -46,13 +46,13 @@ class RiskThresholdService(ServiceBase):
         medium_threshold: float,
         high_threshold: float,
     ):
-        """更新场景阈值（仅 ADMIN）。
+        """更新场景阈值（管理级角色，场景管理员仅自己场景）。
 
         - 校验 0 <= medium < high <= 1（需求 5.4.1.2）；
         - 单值表 upsert（无行则插入）；
         - 写 threshold_audit_log 审计（需求 5.4.1.5：操作人不得为空）。
         """
-        self.require_admin(current_user)
+        self.require_scenario_admin_of(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "场景不存在")

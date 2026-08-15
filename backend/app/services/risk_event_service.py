@@ -41,6 +41,8 @@ from app.services.constants import (
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
     ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
 )
 from app.utils.common import get_logger, paginate, row_to_dict
 
@@ -310,15 +312,20 @@ class RiskEventService(ServiceBase):
     ):
         """风险事件列表。
 
-        普通用户强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条，
-        不得只依赖前端隐藏）；管理员可查全部并按场景/状态过滤。
+        最外层管理员：全部事件（可按场景/状态过滤）；
+        场景管理员：自己场景内全部事件；
+        场景用户：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
         """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         stmt = select(RiskEvent)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if role == ROLE_SUPER_ADMIN:
+            if scenario_id is not None:
+                stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
+        elif role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(RiskEvent.scenario_id == getattr(current_user, "scenario_id", None))
+        else:
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
-        elif scenario_id is not None:
-            stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         if status is not None:
             stmt = stmt.where(RiskEvent.status == status)
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())

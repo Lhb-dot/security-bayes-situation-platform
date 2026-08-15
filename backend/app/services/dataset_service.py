@@ -34,7 +34,8 @@ from app.services.constants import (
     DATASET_STATUS_INACTIVE,
     DATASET_STATUSES,
     MODEL_STATUS_PUBLISHED,
-    ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
 )
 from app.utils.common import (
     get_logger,
@@ -76,6 +77,21 @@ class DatasetService(ServiceBase):
     def _to_dict(dataset: Dataset) -> dict:
         return row_to_dict(dataset)
 
+    def _can_view_dataset(self, current_user, dataset: Dataset) -> bool:
+        """数据集可见性：SUPER_ADMIN 全部；SCENARIO_ADMIN 自己场景全部；SCENARIO_USER 仅已发布模型关联。"""
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            return True
+        if role == ROLE_SCENARIO_ADMIN:
+            return dataset.scenario_id == getattr(current_user, "scenario_id", None)
+        published = self.db.scalar(
+            select(func.count()).select_from(ModelVersion).where(
+                ModelVersion.dataset_id == dataset.id,
+                ModelVersion.status == MODEL_STATUS_PUBLISHED,
+            )
+        )
+        return bool(published)
+
     # ------------------------------------------------------------------
     # 查询（需求 2.3.1 / 6.5.2：查看列表与字段预览 → 允许/允许）
     # ------------------------------------------------------------------
@@ -89,14 +105,19 @@ class DatasetService(ServiceBase):
     ):
         """数据集列表（按场景过滤可选）。
 
-        普通用户仅能看到与已发布模型有关的数据集（需求 2.3.1）。
+        - 最外层管理员：全部数据集
+        - 场景管理员：自己场景内全部数据集
+        - 场景用户：仅能看到已发布模型有关的数据集（需求 2.3.1）
         """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         stmt = select(Dataset)
         if scenario_id is not None:
             stmt = stmt.where(Dataset.scenario_id == scenario_id)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            # 需求 V3.0 §1.1.6：普通用户仅看到被分配场景的数据集
+        if role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(Dataset.scenario_id == getattr(current_user, "scenario_id", None))
+        elif role != ROLE_SUPER_ADMIN:
+            # 场景用户：仅看到被分配场景 + 有已发布模型的数据集
             bound = getattr(current_user, "scenario_id", None)
             if bound is None:
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
@@ -115,10 +136,17 @@ class DatasetService(ServiceBase):
 
     @service_call
     def get(self, current_user, dataset_id: int):
-        """数据集详情（含字段结构 fields_schema）。"""
+        """数据集详情（含字段结构 fields_schema）。
+
+        场景管理员可看自己场景任意数据集；场景用户仅看有已发布模型的数据集。
+        """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         dataset = self._get(dataset_id)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if role == ROLE_SCENARIO_ADMIN:
+            if dataset.scenario_id != getattr(current_user, "scenario_id", None):
+                raise ServiceError(403, "无权限操作")
+        elif role != ROLE_SUPER_ADMIN:
             published = self.db.scalar(
                 select(func.count()).select_from(ModelVersion).where(
                     ModelVersion.dataset_id == dataset_id,
@@ -142,8 +170,8 @@ class DatasetService(ServiceBase):
         fields_schema: List[Dict],
         label_field: str,
     ):
-        """上传数据集（仅 ADMIN），版本号自动取该 logical_id 的最大版本 + 1。"""
-        self.require_admin(current_user)
+        """上传数据集（管理级角色，场景管理员仅自己场景），版本号自动取最大值 + 1。"""
+        self.require_scenario_admin_of(current_user, scenario_id)
         err = validate_required(
             {"logical_id": logical_id, "file_path": file_path, "label_field": label_field},
             ("logical_id", "file_path", "label_field"),
@@ -192,13 +220,13 @@ class DatasetService(ServiceBase):
         fields_schema: Optional[List[Dict]] = None,
         label_field: Optional[str] = None,
     ):
-        """修改数据集（仅 ADMIN）。
+        """修改数据集（管理级角色，场景管理员仅自己场景）。
 
         需求 2.3.3：已产生模型版本的数据集不得直接覆盖——自动创建新版本
         （version+1）并保留旧版本；未被任何模型版本引用的可直接更新当前行。
         """
-        self.require_admin(current_user)
         dataset = self._get(dataset_id)
+        self.require_scenario_admin_of(current_user, dataset.scenario_id)
 
         if self._is_referenced(dataset_id):
             # 创建新版本：继承 logical_id / scenario，version+1
@@ -245,26 +273,26 @@ class DatasetService(ServiceBase):
 
     @service_call
     def disable(self, current_user, dataset_id: int):
-        """停用数据集（仅 ADMIN）。
+        """停用数据集（管理级角色，场景管理员仅自己场景）。
 
         需求 2.3.5/2.3.7：停用后不得用于新的模型训练，但历史模型、训练记录、
         评估结果、推理记录和风险事件仍保持可追溯（本方法不触碰历史数据）。
         """
-        self.require_admin(current_user)
         dataset = self._get(dataset_id)
+        self.require_scenario_admin_of(current_user, dataset.scenario_id)
         dataset.status = DATASET_STATUS_INACTIVE
         self.commit()
         return ok(data=self._to_dict(dataset), message="数据集已停用")
 
     @service_call
     def delete(self, current_user, dataset_id: int):
-        """物理删除数据集（仅 ADMIN）。
+        """物理删除数据集（管理级角色，场景管理员仅自己场景）。
 
         需求 2.3.5/2.3.6：被任何模型版本引用的数据集版本只能停用，不能物理删除；
         未被引用的可以物理删除。
         """
-        self.require_admin(current_user)
         dataset = self._get(dataset_id)
+        self.require_scenario_admin_of(current_user, dataset.scenario_id)
         if self._is_referenced(dataset_id):
             raise ServiceError(400, "数据集已被模型版本引用，禁止物理删除，只能停用")
         self.db.delete(dataset)
@@ -276,15 +304,8 @@ class DatasetService(ServiceBase):
         """字段预览（需求 3.1.4：字段名、字段类型、字段角色、样例值由上层提供）。"""
         self.require_login(current_user)
         dataset = self._get(dataset_id)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            published = self.db.scalar(
-                select(func.count()).select_from(ModelVersion).where(
-                    ModelVersion.dataset_id == dataset_id,
-                    ModelVersion.status == MODEL_STATUS_PUBLISHED,
-                )
-            )
-            if not published:
-                raise ServiceError(403, "无权限操作")
+        if not self._can_view_dataset(current_user, dataset):
+            raise ServiceError(403, "无权限操作")
         return ok(
             data={
                 "dataset_id": dataset.id,
@@ -312,15 +333,8 @@ class DatasetService(ServiceBase):
         if page_size > 50:
             page_size = 50  # 2.4.5 每页最多 50 条
         dataset = self._get(dataset_id)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            published = self.db.scalar(
-                select(func.count()).select_from(ModelVersion).where(
-                    ModelVersion.dataset_id == dataset_id,
-                    ModelVersion.status == MODEL_STATUS_PUBLISHED,
-                )
-            )
-            if not published:
-                raise ServiceError(403, "无权限操作")
+        if not self._can_view_dataset(current_user, dataset):
+            raise ServiceError(403, "无权限操作")
 
         from app.services.training_executor import resolve_dataset_path
         from app.utils.arff_reader import count_arff_rows, read_arff

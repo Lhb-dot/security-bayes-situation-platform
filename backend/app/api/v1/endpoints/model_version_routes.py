@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -97,7 +97,7 @@ def compare_model_versions(
 def create_model_version(
     payload: ModelVersionCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).create(
@@ -118,7 +118,7 @@ def create_model_version(
 def train_model_version(
     payload: ModelVersionCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).train_and_save(
@@ -153,7 +153,7 @@ def complete_model_training(
     model_id: int,
     payload: ModelVersionCompleteTraining,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).complete_training(
@@ -173,7 +173,7 @@ def fail_model_training(
     model_id: int,
     payload: ModelVersionFailTraining,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).fail_training(
@@ -192,7 +192,7 @@ def fail_model_training(
 def publish_model(
     model_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).publish(current_user=current_user, model_id=model_id)
@@ -207,7 +207,7 @@ def publish_model(
 def offline_model(
     model_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).offline(current_user=current_user, model_id=model_id)
@@ -222,7 +222,7 @@ def offline_model(
 def set_default_model(
     model_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).set_default(current_user=current_user, model_id=model_id)
@@ -237,7 +237,7 @@ def set_default_model(
 def clear_default_model(
     model_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).clear_default(
@@ -254,7 +254,7 @@ def clear_default_model(
 def delete_model_version(
     model_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         ModelVersionService(db).delete(current_user=current_user, model_id=model_id)
