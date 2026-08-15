@@ -24,31 +24,40 @@ const loading = ref(false);
 const scenarioStore = useScenarioStore();
 
 const isAdmin = () => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN';
+const isSuperAdmin = () => currentUser.value?.role === 'SUPER_ADMIN';
 
 /** 场景名称映射（表格只读展示用户自选场景） */
 const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
 
-// ========== 创建用户弹窗（场景由用户登录后在"设置"页自选，管理员不再分配） ==========
+// ========== 创建用户弹窗（最外层管理员建场景管理员/用户；场景管理员只在自己场景建用户） ==========
 const createOpen = ref(false);
 const createForm = ref({
   username: '',
   display_name: '',
   password: '',
   role: 'SCENARIO_USER' as UserRole,
+  scenario_id: '' as ScenarioId | '',
 });
 
 const openCreate = () => {
-  createForm.value = { username: '', display_name: '', password: '', role: 'SCENARIO_USER' };
+  // 场景管理员默认固定为自己场景；最外层管理员需手动选场景
+  const myScenario = isSuperAdmin() ? '' : (currentUser.value?.scenario_ids?.[0] ?? '');
+  createForm.value = { username: '', display_name: '', password: '', role: isSuperAdmin() ? 'SCENARIO_ADMIN' : 'SCENARIO_USER', scenario_id: myScenario as ScenarioId | '' };
   createOpen.value = true;
 };
 
 const submitCreate = async () => {
+  if (!createForm.value.scenario_id) {
+    ElMessage.warning('请选择绑定场景');
+    return;
+  }
   try {
     await createUser({
       username: createForm.value.username,
       display_name: createForm.value.display_name,
       password: createForm.value.password,
       role: createForm.value.role,
+      scenario_ids: [createForm.value.scenario_id],
     });
     ElMessage.success('账号创建成功');
     createOpen.value = false;
@@ -239,7 +248,7 @@ onMounted(async () => {
     <div v-if="createOpen" class="modal-mask" @click.self="createOpen = false">
       <div class="modal-card">
         <div class="modal-card__head">
-          <h3>创建普通用户账号</h3>
+          <h3>创建用户账号</h3>
           <button class="modal-close" @click="createOpen = false">✕</button>
         </div>
         <div class="modal-card__body">
@@ -255,16 +264,25 @@ onMounted(async () => {
             <label class="pwd-form__label">初始密码（至少 6 位）</label>
             <input v-model="createForm.password" type="password" class="pwd-form__input" placeholder="初始密码" />
           </div>
-          <div class="pwd-form__field">
+          <div v-if="isSuperAdmin()" class="pwd-form__field">
             <label class="pwd-form__label">角色</label>
             <select v-model="createForm.role" class="pwd-form__input">
-              <option value="USER">普通用户</option>
-              <option value="ADMIN">管理员</option>
+              <option value="SCENARIO_ADMIN">场景管理员</option>
+              <option value="SCENARIO_USER">场景用户</option>
             </select>
           </div>
-          <p v-if="createForm.role === 'SCENARIO_USER'" class="bind-tip">
-            场景由用户登录后在"设置"页自行选择，管理员无需分配
-          </p>
+          <div class="pwd-form__field">
+            <label class="pwd-form__label">绑定场景</label>
+            <select v-model="createForm.scenario_id" class="pwd-form__input" :disabled="!isSuperAdmin()">
+              <option v-if="!isSuperAdmin()" :value="currentUser?.scenario_ids?.[0]">
+                {{ scenarioName(currentUser?.scenario_ids?.[0] as ScenarioId) }}（当前场景）
+              </option>
+              <option v-for="sc in scenarioStore.activeScenarios" :key="sc.scenario_id" :value="sc.scenario_id">
+                {{ sc.name }}
+              </option>
+            </select>
+            <p v-if="!isSuperAdmin()" class="bind-tip">场景管理员只能在自己场景内创建场景用户</p>
+          </div>
         </div>
         <div class="modal-card__foot">
           <button class="users-btn" @click="createOpen = false">取消</button>

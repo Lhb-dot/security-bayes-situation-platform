@@ -793,14 +793,35 @@ export const changeOwnPassword = async (oldPassword: string, newPassword: string
   record.password = newPassword;
 };
 
-/** 用户列表（不含密码） */
+/** 管理级角色校验：最外层管理员 或 场景管理员 */
+const requireManagement = (): UserAccount => {
+  const user = requireLogin();
+  if (user.role !== 'SUPER_ADMIN' && user.role !== 'SCENARIO_ADMIN') {
+    throw new Error('仅管理级角色可执行此操作');
+  }
+  return user;
+};
+
+/** 场景管理员能否管理该用户（只能管理自己场景的用户） */
+const canManageUser = (operator: UserAccount, target: UserAccount): boolean => {
+  if (operator.role === 'SUPER_ADMIN') return true;
+  const bound = operator.scenario_ids?.[0];
+  if (!bound) return false;
+  return target.role !== 'SUPER_ADMIN' && (target.scenario_ids ?? []).includes(bound);
+};
+
+/** 用户列表（管理级角色；最外层全部，场景管理员仅自己场景） */
 export const getUserList = async (): Promise<UserAccount[]> =>
   simulateLatency((() => {
-    requireAdmin();
-    return userRecords.map(({ password: _pw, ...rest }) => rest);
+    const operator = requireManagement();
+    const list =
+      operator.role === 'SUPER_ADMIN'
+        ? userRecords
+        : userRecords.filter((u) => u.role !== 'SUPER_ADMIN' && canManageUser(operator, u));
+    return list.map(({ password: _pw, ...rest }) => rest);
   })());
 
-/** 管理员创建普通用户账号（需求 6.2） */
+/** 管理级角色创建账号（最外层建场景管理员/场景用户；场景管理员只在自己场景建场景用户） */
 export const createUser = async (params: {
   username: string;
   display_name: string;
@@ -809,7 +830,15 @@ export const createUser = async (params: {
   /** 初始绑定场景（需求 1.1.6 用户-场景绑定；缺省/空数组表示无可见场景） */
   scenario_ids?: ScenarioId[];
 }): Promise<UserAccount> => {
-  const operator = requireAdmin();
+  const operator = requireManagement();
+  if (params.role === 'SUPER_ADMIN') throw new Error('最外层管理员账号由平台引导创建');
+  if (operator.role === 'SCENARIO_ADMIN') {
+    if (params.role !== 'SCENARIO_USER') throw new Error('场景管理员只能创建场景用户');
+    const bound = operator.scenario_ids?.[0];
+    if (!bound || !(params.scenario_ids ?? []).includes(bound)) {
+      throw new Error('场景管理员只能在自己场景内创建用户');
+    }
+  }
   if (!params.username || !params.password) throw new Error('用户名和密码不能为空');
   if (params.password.length < 6) throw new Error('密码长度至少为 6 位');
   if (userRecords.some((u) => u.username === params.username)) throw new Error('该用户名已存在');
@@ -831,21 +860,23 @@ export const createUser = async (params: {
   return { ...record };
 };
 
-/** 管理员重置普通用户密码 */
+/** 管理级角色重置用户密码（场景管理员仅自己场景） */
 export const resetUserPassword = async (userId: string, newPassword: string): Promise<void> => {
-  requireAdmin();
+  const operator = requireManagement();
   const record = userRecords.find((u) => u.user_id === userId);
   if (!record) throw new Error('用户不存在');
+  if (!canManageUser(operator, record)) throw new Error('无权限管理该用户');
   if (!newPassword || newPassword.length < 6) throw new Error('新密码长度至少为 6 位');
   record.password = newPassword;
 };
 
-/** 管理员启用/禁用普通用户账号（不能禁用自己的账号） */
+/** 管理级角色启用/禁用账号（不能禁用自己的账号；场景管理员仅自己场景） */
 export const setUserStatus = async (userId: string, status: 'active' | 'disabled'): Promise<void> => {
-  const operator = requireAdmin();
+  const operator = requireManagement();
   if (userId === operator.user_id) throw new Error('不能禁用当前登录的管理员账号');
   const record = userRecords.find((u) => u.user_id === userId);
   if (!record) throw new Error('用户不存在');
+  if (!canManageUser(operator, record)) throw new Error('无权限管理该用户');
   record.status = status;
 };
 
