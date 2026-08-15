@@ -205,7 +205,7 @@ onMounted(() => {
           <p class="eyebrow">Home · Global Situation</p>
           <h2>欢迎回来，{{ userStore.currentUser?.display_name || '用户' }}</h2>
           <p class="home-welcome__sub">
-            {{ userStore.currentUser?.role === 'ADMIN' ? '管理员' : '普通用户' }}
+            {{ userStore.currentUser?.role === 'SUPER_ADMIN' ? '最外层管理员' : '场景用户' }}
             · 以下是您数据范围内的全局态势概览
           </p>
         </div>

@@ -23,7 +23,7 @@ const users = ref<UserAccount[]>([]);
 const loading = ref(false);
 const scenarioStore = useScenarioStore();
 
-const isAdmin = () => currentUser.value?.role === 'ADMIN';
+const isAdmin = () => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN';
 
 /** 场景名称映射（表格只读展示用户自选场景） */
 const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
@@ -34,11 +34,11 @@ const createForm = ref({
   username: '',
   display_name: '',
   password: '',
-  role: 'USER' as UserRole,
+  role: 'SCENARIO_USER' as UserRole,
 });
 
 const openCreate = () => {
-  createForm.value = { username: '', display_name: '', password: '', role: 'USER' };
+  createForm.value = { username: '', display_name: '', password: '', role: 'SCENARIO_USER' };
   createOpen.value = true;
 };
 
@@ -134,7 +134,7 @@ onMounted(async () => {
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
         <p class="users-page__desc">
-          当前登录：{{ currentUser?.display_name }}（{{ currentUser?.role === 'ADMIN' ? '管理员' : '普通用户' }}）
+          当前登录：{{ currentUser?.display_name }}（{{ currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'SCENARIO_ADMIN' ? '管理员' : '普通用户' }}）
         </p>
       </div>
       <button v-if="isAdmin()" class="users-btn users-btn--primary" @click="openCreate">+ 创建用户</button>
@@ -169,8 +169,8 @@ onMounted(async () => {
               <td>{{ user.username }}</td>
               <td>{{ user.display_name }}</td>
               <td>
-                <span class="role-badge" :class="user.role === 'ADMIN' ? 'role-badge--admin' : 'role-badge--user'">
-                  {{ user.role === 'ADMIN' ? '管理员' : '普通用户' }}
+                <span class="role-badge" :class="user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? 'role-badge--admin' : 'role-badge--user'">
+                  {{ user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? '管理员' : '场景用户' }}
                 </span>
               </td>
               <td>
@@ -262,7 +262,7 @@ onMounted(async () => {
               <option value="ADMIN">管理员</option>
             </select>
           </div>
-          <p v-if="createForm.role === 'USER'" class="bind-tip">
+          <p v-if="createForm.role === 'SCENARIO_USER'" class="bind-tip">
             场景由用户登录后在"设置"页自行选择，管理员无需分配
           </p>
         </div>

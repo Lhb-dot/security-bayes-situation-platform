@@ -704,13 +704,14 @@ interface UserRecord extends UserAccount {
 
 const SESSION_KEY = 'bayes_session_user_id';
 
-/** 预置账号：admin（管理员）/ alice、bob、carol（普通用户），密码均为 123456。
- * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐（admin=1/alice=2/bob=3）。 */
+/** 预置账号（三级角色）：SUPER_ADMIN（最外层）/ SCENARIO_ADMIN（场景管理员）/ SCENARIO_USER（场景用户）。
+ * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐。 */
 let userRecords: UserRecord[] = [
-  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
-  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'admin', scenario_ids: ['network_security'] },
-  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'admin', scenario_ids: ['power_system'] },
-  { user_id: 'user_000042', backend_id: 3, username: 'carol', display_name: '演示用户C', role: 'USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk', 'flightdeck_operation'] },
+  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
+  { user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'] },
+  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'] },
+  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'] },
+  { user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk', 'flightdeck_operation'] },
 ];
 
 let sessionUser: UserAccount | null = null;
@@ -749,7 +750,7 @@ const requireLogin = (): UserAccount => {
 /** 校验管理员权限 */
 const requireAdmin = (): UserAccount => {
   const user = requireLogin();
-  if (user.role !== 'ADMIN') throw new Error('仅管理员可执行此操作');
+  if (user.role !== 'SUPER_ADMIN') throw new Error('仅最外层管理员可执行此操作');
   return user;
 };
 
@@ -758,7 +759,7 @@ const requireAdmin = (): UserAccount => {
  * 注意：真实权限校验必须由后端完成，mock 层过滤仅为前端联调基线（需求 6.5.x）。
  */
 const canAccessScenario = (user: UserAccount, scenarioId: ScenarioId): boolean =>
-  user.role === 'ADMIN' || (user.scenario_ids ?? []).includes(scenarioId);
+  user.role === 'SUPER_ADMIN' || (user.scenario_ids ?? []).includes(scenarioId);
 
 /** 场景访问断言：无权访问时抛错 */
 const assertScenarioAccess = (user: UserAccount, scenarioId: ScenarioId): void => {
@@ -854,7 +855,7 @@ export const setUserStatus = async (userId: string, status: 'active' | 'disabled
  */
 export const updateMyScenarios = async (scenarioIds: ScenarioId[]): Promise<UserAccount> => {
   const user = requireLogin();
-  if (user.role === 'ADMIN') throw new Error('管理员可见全部场景，无需设置');
+  if (user.role === 'SUPER_ADMIN') throw new Error('最外层管理员可见全部场景，无需设置');
   const record = userRecords.find((u) => u.user_id === user.user_id);
   if (!record) throw new Error('用户不存在');
   record.scenario_ids = [...scenarioIds];
@@ -1002,7 +1003,7 @@ export const getDatasetList = async (scenarioId?: ScenarioId): Promise<Dataset[]
   if (scenarioId) assertScenarioAccess(user, scenarioId);
   let list = datasetVersions.filter((v) => v.dataset_version === latestDatasetVersion(v.dataset_id)?.dataset_version);
   if (scenarioId) list = list.filter((v) => v.scenario_id === scenarioId);
-  if (user.role === 'USER') {
+  if (user.role === 'SCENARIO_USER') {
     list = list.filter((v) =>
       canAccessScenario(user, v.scenario_id) &&
       v.enabled &&
@@ -1095,7 +1096,7 @@ export const getDatasetPreview = async (
   if (!v) throw new Error('数据集不存在');
   assertScenarioAccess(user, v.scenario_id);
   if (
-    user.role === 'USER' &&
+    user.role === 'SCENARIO_USER' &&
     !(v.enabled && modelVersions.some((m) => m.dataset_id === datasetId && m.status === 'PUBLISHED'))
   ) {
     throw new Error('无权访问该数据集');
@@ -1396,7 +1397,7 @@ export const getModelVersions = async (scenarioId?: ScenarioId, datasetId?: stri
   const user = requireLogin();
   if (scenarioId) assertScenarioAccess(user, scenarioId);
   let list = [...modelVersions];
-  if (user.role === 'USER') list = list.filter((m) => canAccessScenario(user, m.scenario_id) && m.status === 'PUBLISHED');
+  if (user.role === 'SCENARIO_USER') list = list.filter((m) => canAccessScenario(user, m.scenario_id) && m.status === 'PUBLISHED');
   if (scenarioId) list = list.filter((m) => m.scenario_id === scenarioId);
   if (datasetId) list = list.filter((m) => m.dataset_id === datasetId);
   return simulateLatency(list.sort((a, b) => b.trained_at.localeCompare(a.trained_at)));
@@ -1772,7 +1773,7 @@ const initInferenceAndEvents = (): void => {
 /** 过滤风险事件：普通用户强制按本人过滤，管理员查全平台（需求 5.2 访问控制 / 6.8） */
 const filterRiskEvents = (user: UserAccount, scenarioId?: ScenarioId, userId?: string): RiskEvent[] => {
   let list = [...riskEvents];
-  if (user.role === 'USER') {
+  if (user.role === 'SCENARIO_USER') {
     if (scenarioId) assertScenarioAccess(user, scenarioId);
     list = list.filter((e) => canAccessScenario(user, e.scenario_id));
     list = list.filter((e) => e.created_by_user_id === user.user_id);
@@ -1789,7 +1790,7 @@ export const getRiskEvents = async (scenarioId?: ScenarioId): Promise<RiskEvent[
 /** 过滤推理记录：普通用户仅本人，管理员全部或指定用户（需求 6.2 / 6.8） */
 const filterInferenceRecords = (user: UserAccount, scenarioId?: ScenarioId, userId?: string): InferenceRecord[] => {
   let list = [...inferenceRecords];
-  if (user.role === 'USER') {
+  if (user.role === 'SCENARIO_USER') {
     if (scenarioId) assertScenarioAccess(user, scenarioId);
     list = list.filter((r) => canAccessScenario(user, r.scenario_id));
     list = list.filter((r) => r.user_id === user.user_id);
@@ -1953,7 +1954,7 @@ export const getRiskEventById = async (eventId: string): Promise<RiskEvent> => {
   const event = riskEvents.find((e) => e.event_id === eventId);
   if (!event) throw new Error('风险事件不存在');
   assertScenarioAccess(user, event.scenario_id);
-  if (user.role === 'USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
+  if (user.role === 'SCENARIO_USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
   return event;
 };
 
@@ -1966,7 +1967,7 @@ export const getRiskEventByInferenceRecordId = async (recordId: string): Promise
   const event = riskEvents.find((e) => e.inference_record_id === recordId);
   if (!event) return null;
   assertScenarioAccess(user, event.scenario_id);
-  if (user.role === 'USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
+  if (user.role === 'SCENARIO_USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
   return event;
 };
 
@@ -2003,7 +2004,7 @@ const makeTrendPoint = (base: number, primaryType: string, label: string): Trend
 
 /** 按当前用户可见事件生成趋势基线 */
 const trendBaseOf = (events: RiskEvent[], user: UserAccount, defaultBase: number): number => {
-  if (events.length === 0) return user.role === 'ADMIN' ? defaultBase : Math.max(18, Math.round(defaultBase * 0.35));
+  if (events.length === 0) return user.role === 'SUPER_ADMIN' ? defaultBase : Math.max(18, Math.round(defaultBase * 0.35));
   const avg = events.reduce((s, e) => s + e.risk_score, 0) / events.length;
   return Math.max(18, Math.min(90, Math.round(avg * 100)));
 };
@@ -2092,7 +2093,7 @@ const generateReports = (user: UserAccount): Report[] =>
       title: `${meta.name}态势报告 - ${i === 0 ? '周报' : '月报'}`,
       scenario_id: meta.id,
       scenario_name: meta.name,
-      summary: `基于 ${user.role === 'ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
+      summary: `基于 ${user.role === 'SUPER_ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
       created_at: `2026-07-${String(20 - i * 3).padStart(2, '0')} ${String(random(8, 18)).padStart(2, '0')}:00`,
       format: sample(['markdown', 'html', 'pdf'] as const),
       status: 'completed' as const,
@@ -2166,7 +2167,7 @@ export const generateReport = async (params: {
   target_user_id?: string;
 }): Promise<Report> => {
   const user = requireLogin();
-  if (user.role === 'USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
+  if (user.role === 'SCENARIO_USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
   const meta = SCENARIO_META.find((s) => s.id === params.scenario_id);
   const events = filterRiskEvents(user, params.scenario_id, params.scope === 'user' ? params.target_user_id : undefined);
   const scopeLabel = params.scope === 'all' ? '全平台' : params.scope === 'user' ? `用户 ${params.target_user_id}` : '本人';

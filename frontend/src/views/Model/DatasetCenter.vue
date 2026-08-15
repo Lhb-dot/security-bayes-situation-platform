@@ -61,7 +61,7 @@ const isFlightdeckSelected = computed(() => selectedScenario.value === ('flightd
 
 /** 当前登录用户（需求 2.3.1：仅管理员可上传/修改/停用/删除数据集） */
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 // ===================== 上传数据集 / 创建新版本（需求 2.3.2 / 2.3.3） =====================
 const uploadDialogVisible = ref(false);
@@ -384,7 +384,7 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="240" align="center" fixed="right">
+        <el-table-column label="操作" width="260" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
               <el-button size="small" plain @click="openFieldPreview(row)">

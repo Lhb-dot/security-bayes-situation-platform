@@ -29,7 +29,7 @@ const scenarioStore = useScenarioStore();
 const scenarioFilter = ref<'' | ScenarioId>('');
 const userFilter = ref<string>('');
 
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 const userName = (id: string) => users.value.find((u) => u.user_id === id)?.username ?? id;

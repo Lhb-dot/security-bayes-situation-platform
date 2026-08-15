@@ -23,8 +23,14 @@ const routes = [
   },
   {
     path: '/',
-    // 按角色落地：ADMIN → 全局总览（首页）；USER → 首页 /home
-    redirect: () => (getCurrentUser()?.role === 'ADMIN' ? '/overview' : '/home'),
+    // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；其余 → /home
+    redirect: () => {
+      const role = getCurrentUser()?.role;
+      if (role === 'SUPER_ADMIN') return '/overview';
+      const bound = getCurrentUser()?.scenario_ids?.[0];
+      if (bound) return `/scenarios/${bound}/dashboard`;
+      return '/home';
+    },
     meta: { title: '首页' },
   },
   {
@@ -44,7 +50,8 @@ const routes = [
     path: '/risk',
     name: 'AI模型训练预测',
     component: RiskAnalysis,
-    meta: { title: 'AI模型训练预测', requiresAdmin: true, hiddenForUser: true },
+    // 管理级角色（最外层 + 场景管理员）可训练；场景管理员由后端校验仅自己场景
+    meta: { title: 'AI模型训练预测' },
   },
   // ===================== 多场景架构新增路由 =====================
   {
@@ -108,6 +115,13 @@ const routes = [
     name: 'Settings',
     component: () => import('@/views/Model/Settings.vue'),
     meta: { title: '系统设置' },
+  },
+  {
+    path: '/users',
+    name: '用户管理',
+    component: () => import('@/views/Model/UserManagement.vue'),
+    // 管理级角色（最外层管场景管理员/用户；场景管理员管自己场景用户）；权限由后端校验
+    meta: { title: '用户管理' },
   },
   {
     path: '/events/:eventId',

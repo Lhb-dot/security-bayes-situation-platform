@@ -316,8 +316,8 @@ export interface Report {
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================
 
-/** 角色：第一阶段只设 ADMIN 与 USER 两种 */
-export type UserRole = 'ADMIN' | 'USER';
+/** 角色（三级）：最外层管理员 / 场景管理员 / 场景用户 */
+export type UserRole = 'SUPER_ADMIN' | 'SCENARIO_ADMIN' | 'SCENARIO_USER';
 
 /** 用户账号 */
 export interface UserAccount {

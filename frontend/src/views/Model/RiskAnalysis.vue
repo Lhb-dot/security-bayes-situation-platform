@@ -24,7 +24,7 @@ const router = useRouter();
 
 // ===================== 权限 =====================
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 // ===================== 场景（数据库） =====================
 interface DbScenario {

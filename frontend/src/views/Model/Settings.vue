@@ -23,7 +23,7 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } fro
 
 const userStore = useUserStore();
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 // ===================== 普通用户：选择感兴趣的场景 =====================
 const ALL_SCENARIOS: Array<{ id: ScenarioId; label: string; desc: string }> = [

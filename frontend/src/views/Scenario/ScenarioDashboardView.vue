@@ -46,7 +46,7 @@ const loadData = async () => {
     if (!scenarioStore.scenarioById(id)) {
       notFound.value = true;
       // 需求 6.5：普通用户访问未绑定场景 → 无权访问；其余视为未知场景
-      denied.value = userStore.currentUser?.role === 'USER' && !userStore.visibleScenarioIds.includes(id);
+      denied.value = userStore.currentUser?.role === 'SCENARIO_USER' && !userStore.visibleScenarioIds.includes(id);
       return;
     }
     await Promise.all([

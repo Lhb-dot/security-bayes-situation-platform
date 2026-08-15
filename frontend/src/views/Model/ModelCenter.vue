@@ -28,7 +28,7 @@ const error = ref('');
 const selectedScenario = ref<ScenarioId | 'all'>('all');
 const selectedDataset = ref<string>('all');
 
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 

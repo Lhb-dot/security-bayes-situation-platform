@@ -22,9 +22,15 @@ declare module 'vue-router' {
   }
 }
 
-/** 角色落地页：管理员 → 全局总览（首页）；普通用户 → 首页 */
+/** 角色落地页：
+ * - SUPER_ADMIN（最外层）→ 全局总览 /overview（监控所有场景）
+ * - SCENARIO_ADMIN（场景管理员）→ 自己场景详情页
+ * - SCENARIO_USER（场景用户）→ 自己场景详情页
+ */
 const roleLanding = (user: UserAccount): string => {
-  if (user.role === 'ADMIN') return '/overview';
+  if (user.role === 'SUPER_ADMIN') return '/overview';
+  const bound = user.scenario_ids?.[0];
+  if (bound) return `/scenarios/${bound}/dashboard`;
   return '/home';
 };
 
@@ -42,13 +48,13 @@ export const setupRouterGuards = (router: Router): void => {
     if (!user) {
       return { path: '/login', query: { redirect: to.fullPath } };
     }
-    // 管理员专属页面：USER 访问 → 重定向本人落地页
-    if (to.meta.requiresAdmin && user.role !== 'ADMIN') {
+    // 最外层管理员专属页面（/overview、/risk）：非 SUPER_ADMIN → 落地页
+    if (to.meta.requiresAdmin && user.role !== 'SUPER_ADMIN') {
       return roleLanding(user);
     }
-    // 普通用户专属页面（如 /home）：ADMIN 访问 → 全局总览
-    if (to.meta.userOnly && user.role === 'ADMIN') {
-      return '/overview';
+    // 场景用户专属页面（如 /home）：管理级访问 → 落地页
+    if (to.meta.userOnly && (user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN')) {
+      return roleLanding(user);
     }
     // 根路径按角色落地（路由配置中也有函数式 redirect，此处双保险）
     if (to.path === '/') {

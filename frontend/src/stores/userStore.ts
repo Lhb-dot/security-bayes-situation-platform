@@ -26,10 +26,17 @@ export const useUserStore = defineStore('user', {
     loading: false,
   }),
   getters: {
-    isAdmin: (state): boolean => state.currentUser?.role === 'ADMIN',
-    /** 可见场景范围：管理员全部场景；普通用户仅绑定场景（Task 006 用于入口过滤） */
+    isAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
+    /** 最外层管理员（平台方） */
+    isSuperAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
+    /** 场景管理员 */
+    isScenarioAdmin: (state): boolean => state.currentUser?.role === 'SCENARIO_ADMIN',
+    /** 管理级角色（最外层 或 场景管理员） */
+    isManagement: (state): boolean =>
+      state.currentUser?.role === 'SUPER_ADMIN' || state.currentUser?.role === 'SCENARIO_ADMIN',
+    /** 可见场景范围：最外层管理员全部；场景管理员/场景用户仅绑定场景 */
     visibleScenarioIds: (state): ScenarioId[] =>
-      state.currentUser?.role === 'ADMIN'
+      state.currentUser?.role === 'SUPER_ADMIN'
         ? [...ALL_SCENARIO_IDS]
         : (state.currentUser?.scenario_ids ?? []),
   },

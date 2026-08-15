@@ -35,7 +35,7 @@ const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
 
 /** 需求 6.5.2/6.2：管理员用 tabs 切场景；普通用户用下拉框在感兴趣的场景中选择 */
-const isAdmin = computed(() => userStore.currentUser?.role === 'ADMIN');
+const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
 
 /** 场景选项：普通用户=感兴趣的场景（设置页自选），管理员=全部场景 */
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>

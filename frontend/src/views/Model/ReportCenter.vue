@@ -18,7 +18,7 @@ const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const scenarioStore = useScenarioStore();
 
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 const loadReports = async () => {
   loading.value = true;

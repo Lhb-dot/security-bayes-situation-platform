@@ -29,9 +29,17 @@ const handleLogin = async () => {
     await userStore.login(username.value.trim(), password.value);
     const user = userStore.currentUser;
     if (!user) throw new Error('登录失败');
-    ElMessage.success(`欢迎回来，${user.display_name}（${user.role === 'ADMIN' ? '管理员' : '普通用户'}）`);
-    // Task 007：登录成功按角色落地（ADMIN → 场景中心；USER → 首页 /home）
-    router.push(user.role === 'ADMIN' ? '/scenarios' : '/home');
+    const roleText =
+      user.role === 'SUPER_ADMIN' ? '最外层管理员' : user.role === 'SCENARIO_ADMIN' ? '场景管理员' : '场景用户';
+    ElMessage.success(`欢迎回来，${user.display_name}（${roleText}）`);
+    // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
+    if (user.role === 'SUPER_ADMIN') {
+      router.push('/overview');
+    } else if (user.scenario_ids?.[0]) {
+      router.push(`/scenarios/${user.scenario_ids[0]}/dashboard`);
+    } else {
+      router.push('/home');
+    }
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '登录失败';
   } finally {

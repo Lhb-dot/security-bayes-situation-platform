@@ -12,7 +12,7 @@ import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
 import { getAlertById, getAlerts, getDashboardSnapshot } from './services/mockApi';
-import type { AlertRecord, DashboardSnapshot, MetricHistory } from './types/security';
+import type { AlertRecord, DashboardSnapshot, MetricHistory, UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
 
 // 页面数据
@@ -28,7 +28,15 @@ const activeMetric = ref<MetricHistory | null>(null);
 // 登录/登出统一走 userStore，避免页面直连 mockApi 导致 Pinia 状态与守卫判断不同步
 const userStore = useUserStore();
 const currentUser = computed(() => userStore.currentUser);
-const isAdmin = computed(() => userStore.isAdmin);
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
+
+/** 当前角色中文名 */
+const roleLabel = computed(() => {
+  const role = userStore.currentUser?.role;
+  if (role === 'SUPER_ADMIN') return '最外层管理员';
+  if (role === 'SCENARIO_ADMIN') return '场景管理员';
+  return '场景用户';
+});
 
 const handleLogout = async () => {
   await userStore.logout();
@@ -51,10 +59,22 @@ const goOverview = () => {
 };
 
 /**
- * 跳转场景中心
+ * 跳转场景中心：最外层管理员 → 场景中心列表；场景管理员/用户 → 自己场景详情页
  */
 const goScenarioCenter = () => {
-  router.push({ path: '/scenarios' });
+  if (isSuperAdmin.value) {
+    router.push({ path: '/scenarios' });
+    return;
+  }
+  const bound = userStore.currentUser?.scenario_ids?.[0];
+  router.push(bound ? { path: `/scenarios/${bound}/dashboard` } : { path: '/scenarios' });
+};
+
+/**
+ * 跳转用户管理（最外层管理员管场景管理员/场景用户；场景管理员管自己场景用户）
+ */
+const goUsers = () => {
+  router.push({ path: '/users' });
 };
 
 /**
@@ -162,7 +182,7 @@ const pageTitle = computed(() => {
   if (route.path === '/inference') return '风险研判';
   if (route.path === '/inference-records') return '推理记录';
   if (route.path === '/reports') return '报告中心';
-  if (route.path === '/settings') return isAdmin ? '系统设置' : '设置';
+  if (route.path === '/settings') return isSuperAdmin.value ? '系统设置' : '设置';
   if (route.path.startsWith('/events/')) return '风险事件详情';
   return '态势感知与威胁可视化平台';
 });
@@ -175,9 +195,12 @@ const unregisterAfterEach = router.afterEach(() => {
 
 onMounted(async () => {
   await loadData();
-  // 落地页由路由 '/' 重定向处理（ADMIN → /overview；USER → /home）
+  // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；场景管理员/用户 → 自己场景）
   if (route.path === '/') {
-    router.push(isAdmin.value ? '/overview' : '/home');
+    if (isSuperAdmin.value) router.push('/overview');
+    else if (userStore.currentUser?.scenario_ids?.[0]) {
+      router.push(`/scenarios/${userStore.currentUser.scenario_ids[0]}/dashboard`);
+    } else router.push('/home');
   }
 });
 
@@ -210,44 +233,40 @@ const isNewRoutePage = computed(() => {
     || path === '/reports' || path === '/users' || path === '/settings' || path.startsWith('/events/');
 });
 
-// ===================== 顶部导航（Task 005：meta/角色驱动渲染） =====================
+// ===================== 顶部导航（三级角色驱动渲染） =====================
 // 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
 interface NavItem {
   path: string;
   label: string;
-  /** 仅管理员可见/可访问（与路由 meta.requiresAdmin 对应） */
-  requiresAdmin?: boolean;
-  /** 普通用户隐藏入口（与路由 meta.hiddenForUser 对应） */
-  hiddenForUser?: boolean;
-  /** 仅普通用户可见入口（与路由 meta.userOnly 对应；管理员隐藏，如 /home） */
-  userOnly?: boolean;
-  /** 点击动作：复用原导航跳转函数，保持既有行为（如首页重置图表并重载） */
+  /** 允许访问的角色列表（缺省=所有角色） */
+  roles?: UserRole[];
+  /** 点击动作：复用原导航跳转函数，保持既有行为 */
   action?: () => void;
 }
 
+const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER'];
+const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
+
 const navItems: NavItem[] = [
-  { path: '/home', label: '首页', userOnly: true },
-  { path: '/overview', label: '首页', requiresAdmin: true, hiddenForUser: true, action: goOverview },
-  { path: '/scenarios', label: '场景中心', action: goScenarioCenter },
-  { path: '/datasets', label: '数据集中心', action: goDatasetCenter },
-  { path: '/alerts', label: '告警中心', action: goAlertsList },
-  { path: '/risk', label: 'AI模型训练', requiresAdmin: true, hiddenForUser: true, action: goAiTrainPage },
-  { path: '/models', label: '模型中心', action: goModelCenter },
-  { path: '/inference', label: '风险研判', action: goRiskInference },
-  { path: '/inference-records', label: '推理记录', action: goInferenceRecords },
-  { path: '/reports', label: '报告中心', action: goReportCenter },
-  { path: '/settings', label: '设置', action: goSettings },
+  { path: '/home', label: '首页', roles: ['SCENARIO_USER'], action: () => router.push({ path: '/home' }) },
+  { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview },
+  { path: '/scenarios', label: '场景中心', roles: ALL_ROLES, action: goScenarioCenter },
+  { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter },
+  { path: '/alerts', label: '告警中心', roles: ALL_ROLES, action: goAlertsList },
+  { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage },
+  { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter },
+  { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference },
+  { path: '/inference-records', label: '推理记录', roles: ALL_ROLES, action: goInferenceRecords },
+  { path: '/reports', label: '报告中心', roles: ALL_ROLES, action: goReportCenter },
+  { path: '/users', label: '用户管理', roles: MGMT_ROLES, action: goUsers },
+  { path: '/settings', label: '设置', roles: ALL_ROLES, action: goSettings },
 ];
 
-/** 按当前角色过滤可见导航项（管理员全部；普通用户隐藏管理员专属入口） */
-const visibleNavItems = computed(() =>
-  navItems.filter((item) => {
-    if (item.requiresAdmin && !isAdmin.value) return false;
-    if (item.hiddenForUser && !isAdmin.value) return false;
-    if (item.userOnly && isAdmin.value) return false;
-    return true;
-  })
-);
+/** 按当前角色过滤可见导航项 */
+const visibleNavItems = computed(() => {
+  const role = userStore.currentUser?.role;
+  return navItems.filter((item) => !item.roles || (role ? item.roles.includes(role) : false));
+});
 
 /** 导航激活态：沿用原 isXxxPage 判断，保持既有高亮逻辑（含告警详情前缀高亮） */
 const isNavActive = (item: NavItem): boolean => {
@@ -298,14 +317,14 @@ const handleNavClick = (item: NavItem): void => {
             :class="{ 'is-active': isNavActive(item) }"
             @click="handleNavClick(item)"
           >
-            {{ item.path === '/settings' ? (isAdmin ? '系统设置' : '设置') : item.label }}
+            {{ item.path === '/settings' ? (isSuperAdmin ? '系统设置' : '设置') : item.label }}
           </button>
         </nav>
         <div class="topbar__user">
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
           <div class="topbar__user-pop">
             <span class="topbar__user-name">{{ currentUser?.display_name }}</span>
-            <span class="topbar__user-role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
+            <span class="topbar__user-role">{{ roleLabel }}</span>
             <button class="ghost-button ghost-button--logout" @click="handleLogout">退出登录</button>
           </div>
         </div>
