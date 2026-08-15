@@ -99,7 +99,13 @@ const SCENARIO_LABEL: Record<string, string> = {
   flightdeck_operation: '航母甲板作业',
   geological_risk: '地质风险',
 };
-const activeScenarios: ScenarioId[] = ['network_security', 'power_system', 'geological_risk'];
+/** 阈值可配置场景：系统管理员=全部；管理员=仅自己场景 */
+const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
+const activeScenarios = computed<ScenarioId[]>(() =>
+  isScenarioAdmin.value
+    ? [(currentUser.value?.scenario_ids?.[0] as ScenarioId) ?? 'network_security']
+    : ['network_security', 'power_system', 'geological_risk']
+);
 const thresholds = ref<ThresholdConfig[]>([]);
 const changeLogs = ref<ThresholdChangeLog[]>([]);
 const saving = ref(false);
@@ -351,7 +357,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card settings-section">
+        <section v-if="!isScenarioAdmin" class="card settings-section">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Scenarios</p>

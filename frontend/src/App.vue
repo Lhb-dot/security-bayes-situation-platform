@@ -33,9 +33,9 @@ const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 /** 当前角色中文名 */
 const roleLabel = computed(() => {
   const role = userStore.currentUser?.role;
-  if (role === 'SUPER_ADMIN') return '最外层管理员';
-  if (role === 'SCENARIO_ADMIN') return '场景管理员';
-  return '场景用户';
+  if (role === 'SUPER_ADMIN') return '系统管理员';
+  if (role === 'SCENARIO_ADMIN') return '管理员';
+  return '用户';
 });
 
 const handleLogout = async () => {
@@ -59,7 +59,7 @@ const goOverview = () => {
 };
 
 /**
- * 跳转场景中心：最外层管理员 → 场景中心列表；场景管理员/用户 → 自己场景详情页
+ * 跳转场景中心：系统管理员 → 场景中心列表；管理员/用户 → 自己场景详情页
  */
 const goScenarioCenter = () => {
   if (isSuperAdmin.value) {
@@ -71,7 +71,7 @@ const goScenarioCenter = () => {
 };
 
 /**
- * 跳转用户管理（最外层管理员管场景管理员/场景用户；场景管理员管自己场景用户）
+ * 跳转用户管理（系统管理员管管理员/用户；管理员管自己用户）
  */
 const goUsers = () => {
   router.push({ path: '/users' });
@@ -195,7 +195,7 @@ const unregisterAfterEach = router.afterEach(() => {
 
 onMounted(async () => {
   await loadData();
-  // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；场景管理员/用户 → 自己场景）
+  // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
   if (route.path === '/') {
     if (isSuperAdmin.value) router.push('/overview');
     else if (userStore.currentUser?.scenario_ids?.[0]) {

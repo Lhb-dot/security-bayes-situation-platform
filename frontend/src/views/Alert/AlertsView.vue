@@ -9,6 +9,7 @@ import { computed, onMounted, ref } from 'vue';
 import type { RiskEvent, ScenarioId } from '../../types/security';
 import { getRiskEvents } from '@/services/mockApi';
 import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 
 /** 风险事件列表 */
 const events = ref<RiskEvent[]>([]);
@@ -16,6 +17,7 @@ const loading = ref(true);
 const error = ref('');
 
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
 /** 筛选条件 */
 const selectedScenario = ref<ScenarioId | 'all'>('all');
@@ -30,11 +32,14 @@ const scenarioLabel: Record<string, string> = {
   flightdeck_operation: '航母甲板',
 };
 
-/** 场景选项（"所有场景" + 当前用户可见场景；管理员=全部，普通用户=自选/绑定） */
-const scenarioOptions = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => [
-  { value: 'all', label: '所有场景' },
-  ...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })),
-]);
+/** 场景选项（当前用户可见场景；管理员=全部+所有场景，场景管理员=仅自己场景，用户=自选/绑定） */
+const scenarioOptions = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
+  const role = userStore.currentUser?.role;
+  const list: { value: ScenarioId | 'all'; label: string }[] = [];
+  if (role !== 'SCENARIO_ADMIN') list.push({ value: 'all', label: '所有场景' });
+  list.push(...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })));
+  return list;
+});
 
 /** 风险等级选项 */
 const riskLevelOptions = [

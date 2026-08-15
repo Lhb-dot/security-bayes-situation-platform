@@ -9,6 +9,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { getScenarioList } from '@/services/mockApi';
 import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId } from '@/types/security';
 
 /**
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 }>();
 
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
 /** 场景列表：优先共享 store（与推理记录同源），空时用 getScenarioList 兜底 */
 const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
@@ -53,9 +55,14 @@ const syncScenarios = () => {
   }
 };
 
-/** 选项列表："所有场景"恒为第一项 + 场景列表（showAll 为 true 才加场景；默认 true） */
+/** 选项列表：默认"所有场景"为第一项 + 场景列表。
+ * 管理员（SCENARIO_ADMIN）只显示自己场景，不显示"所有场景"。 */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
-  const list: { value: ScenarioId | 'all'; label: string }[] = [{ value: 'all', label: '所有场景' }];
+  const role = userStore.currentUser?.role;
+  const list: { value: ScenarioId | 'all'; label: string }[] = [];
+  if (props.showAll !== false && role !== 'SCENARIO_ADMIN') {
+    list.push({ value: 'all', label: '所有场景' });
+  }
   if (props.showAll !== false) {
     for (const s of localScenarios.value) {
       list.push(s);

@@ -9,6 +9,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 import {
   getInferenceRecords,
   getUserList,
@@ -25,6 +26,10 @@ const currentUser = ref<UserAccount | null>(null);
 const loading = ref(false);
 const router = useRouter();
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
+
+/** 是否显示"所有场景"选项（管理员只显示自己场景） */
+const showAllScenario = computed(() => userStore.currentUser?.role !== 'SCENARIO_ADMIN');
 
 const scenarioFilter = ref<'' | ScenarioId>('');
 const userFilter = ref<string>('');
@@ -102,7 +107,7 @@ onMounted(async () => {
       <label class="filter-item">
         <span class="filter-item__label">场景</span>
         <select v-model="scenarioFilter" class="filter-select" @change="loadRecords">
-          <option value="">所有场景</option>
+          <option v-if="showAllScenario" value="">所有场景</option>
           <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
         </select>
       </label>
