@@ -311,14 +311,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 业务场景（数据库注册）：系统管理员可选全部；管理员固定自己场景 -->
-        <div class="form-group">
+        <!-- 业务场景（数据库注册）：系统管理员可选全部；管理员场景已固定（账号绑定），直接选数据集 -->
+        <div v-if="currentUser?.role !== 'SCENARIO_ADMIN'" class="form-group">
           <label class="form-label">业务场景（需求 1.1.2：训练前必须先确定场景）</label>
-          <div v-if="currentUser?.role === 'SCENARIO_ADMIN'" class="fixed-scenario">
-            {{ scenarioOptions[0]?.name || '—' }}
-          </div>
           <!-- 系统管理员（或用户信息未加载时兜底）：显示全部场景可选 -->
-          <div v-else class="scenario-tabs">
+          <div class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
               :key="sc.id"
@@ -601,18 +598,6 @@ onBeforeUnmount(() => {
 .form-hint--muted {
   color: rgba(220, 234, 255, 0.35);
   font-style: italic;
-}
-
-/* 场景固定显示（管理员：只训练自己场景） */
-.fixed-scenario {
-  display: inline-flex;
-  align-items: center;
-  padding: 8px 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(125, 201, 255, 0.18);
-  background: rgba(91, 166, 255, 0.08);
-  color: #9ad6ff;
-  font-size: 0.9rem;
 }
 
 /* 场景选择器 */

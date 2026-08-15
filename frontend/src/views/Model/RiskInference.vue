@@ -288,10 +288,10 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 场景选择 -->
-        <div class="form-group">
+        <!-- 场景选择（系统管理员 tabs 切换；管理员/用户场景已固定，直接选数据集） -->
+        <div v-if="isSuperAdmin" class="form-group">
           <label class="form-label">业务场景</label>
-          <div v-if="isSuperAdmin" class="scenario-tabs">
+          <div class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
               :key="sc.value"
@@ -302,11 +302,10 @@ onMounted(async () => {
               {{ sc.label }}
             </button>
           </div>
-          <p v-else-if="scenarioOptions.length" class="user-scenario-hint">
-            当前场景：{{ scenarioOptions.find((s) => s.value === selectedScenario)?.label ?? '—' }}
-          </p>
-          <p v-else class="no-model-tip">当前账号暂无可用场景，请在"设置"中选择感兴趣的场景</p>
         </div>
+        <p v-if="!isSuperAdmin && scenarioOptions.length === 0" class="no-model-tip">
+          当前账号暂无可用场景，请在"设置"中选择感兴趣的场景
+        </p>
 
         <!-- 数据集选择 -->
         <div class="form-group">
@@ -736,16 +735,6 @@ select.form-input option {
   color: rgba(255, 209, 102, 0.9);
   font-size: 0.84rem;
   line-height: 1.5;
-}
-
-.user-scenario-hint {
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(91, 166, 255, 0.08);
-  border: 1px solid rgba(91, 166, 255, 0.2);
-  color: #9ad6ff;
-  font-size: 0.86rem;
 }
 
 .infer-btn {

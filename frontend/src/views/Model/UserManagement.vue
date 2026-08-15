@@ -249,6 +249,7 @@ onMounted(async () => {
       v-model="createOpen"
       :title="isSuperAdmin() ? '创建管理员账号' : '创建用户账号'"
       width="460px"
+      align-center
       append-to-body
       lock-scroll
       :close-on-click-modal="false"

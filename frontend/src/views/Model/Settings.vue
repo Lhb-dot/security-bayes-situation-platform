@@ -61,7 +61,7 @@ const SCENARIO_LABEL: Record<string, string> = {
   flightdeck_operation: '航母甲板作业',
   geological_risk: '地质风险',
 };
-/** 阈值可配置场景：系统管理员=全部；管理员=仅自己场景 */
+/** 阈值可配置场景：系统管理员=全部（含预留能力）；管理员=仅自己场景 */
 const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
 const activeScenarios = computed<ScenarioId[]>(() =>
   isScenarioAdmin.value
@@ -81,7 +81,6 @@ const scenarioSwitches = ref([
   { id: 'network_security', label: '网络安全态势感知', enabled: true },
   { id: 'power_system', label: '电力系统风险态势感知', enabled: true },
   { id: 'geological_risk', label: '地质风险态势感知', enabled: true },
-  { id: 'flightdeck_operation', label: '航母甲板保障作业态势感知', enabled: true },
 ]);
 
 const loadThresholds = async () => {
@@ -93,6 +92,13 @@ const loadThresholds = async () => {
     editing.value[t.scenario_id] = { medium: t.medium_threshold, high: t.high_threshold };
   }
 };
+
+/** 变更记录按场景隔离：管理员只看自己场景（系统管理员看全部） */
+const visibleChangeLogs = computed(() =>
+  isScenarioAdmin.value
+    ? changeLogs.value.filter((log) => activeScenarios.value.includes(log.scenario_id))
+    : changeLogs.value
+);
 
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
@@ -245,16 +251,6 @@ onMounted(async () => {
                 </button>
               </div>
             </div>
-
-            <div class="threshold-card threshold-card--reserved">
-              <div class="threshold-card__head">
-                <h4>{{ SCENARIO_LABEL.flightdeck_operation }}</h4>
-                <span class="threshold-card__scene">flightdeck_operation</span>
-              </div>
-              <div class="threshold-card__form">
-                <p class="threshold-card__reserved-tip">第一阶段仅预留配置能力，不启用实际阈值计算。</p>
-              </div>
-            </div>
           </div>
 
           <div class="change-logs">
@@ -273,7 +269,7 @@ onMounted(async () => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="log in changeLogs" :key="log.log_id">
+                  <tr v-for="log in visibleChangeLogs" :key="log.log_id">
                     <td>{{ log.changed_at }}</td>
                     <td>{{ SCENARIO_LABEL[log.scenario_id] ?? log.scenario_id }}</td>
                     <td>{{ log.operator_id }}</td>
@@ -282,7 +278,7 @@ onMounted(async () => {
                     <td class="change-logs__new">{{ log.new_medium_threshold }}</td>
                     <td class="change-logs__new">{{ log.new_high_threshold }}</td>
                   </tr>
-                  <tr v-if="changeLogs.length === 0">
+                  <tr v-if="visibleChangeLogs.length === 0">
                     <td colspan="7" class="change-logs__empty">暂无变更记录</td>
                   </tr>
                 </tbody>
@@ -514,14 +510,6 @@ onMounted(async () => {
   margin: 0;
   font-size: 0.74rem;
   color: rgba(255, 209, 102, 0.7);
-}
-
-.threshold-card__reserved-tip {
-  margin: 0;
-  font-size: 0.85rem;
-  color: rgba(220, 234, 255, 0.45);
-  line-height: 1.6;
-  font-style: italic;
 }
 
 .change-logs {

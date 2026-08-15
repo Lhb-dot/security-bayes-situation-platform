@@ -1291,3 +1291,11 @@ button {
   background: #0b1628;
   color: #e8f1ff;
 }
+
+/* 弹窗不滑动：禁用 el-dialog 开合过渡动画（打开即固定显示） */
+.dialog-fade-enter-active,
+.dialog-fade-leave-active,
+.el-overlay {
+  transition: none !important;
+  animation: none !important;
+}

@@ -322,8 +322,12 @@ const handleNavClick = (item: NavItem): void => {
     <div class="app-shell__backdrop"></div>
     <header class="topbar">
       <div class="topbar__heading">
-        <p class="eyebrow">AI Security Operations Center</p>
-        <h1>{{ pageTitle }}</h1>
+        <div class="topbar__heading-left">
+          <p class="eyebrow">AI Security Operations Center</p>
+          <h1>{{ pageTitle }}</h1>
+        </div>
+        <!-- 当前场景（管理员/用户）：与标题同字号，放标题行最右 -->
+        <span v-if="myScenarioName" class="topbar__heading-scenario">{{ myScenarioName }}</span>
       </div>
       <div class="topbar__actions">
         <nav class="nav-tabs">
@@ -338,7 +342,6 @@ const handleNavClick = (item: NavItem): void => {
           </button>
         </nav>
         <div class="topbar__user">
-          <div v-if="myScenarioName" class="topbar__user-scenario">{{ myScenarioName }}</div>
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
           <div class="topbar__user-pop">
             <span class="topbar__user-name">{{ currentUser?.display_name }}</span>
@@ -407,33 +410,38 @@ const handleNavClick = (item: NavItem): void => {
   box-sizing: border-box;
 }
 
-/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡 */
+/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡。
+   左侧标题 + 右侧当前场景（管理员/用户）同字号大字，flex 两端对齐 */
 .topbar__heading {
   flex: 1 1 100%;
   min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.topbar__heading-left {
+  min-width: 0;
+}
+
+/* 当前场景大字（与页面标题同字号 clamp，标题行最右） */
+.topbar__heading-scenario {
+  flex-shrink: 0;
+  color: #9ad6ff;
+  font-size: clamp(1.6rem, 2vw, 2.6rem);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ===================== 用户区：仅头像，悬停弹出姓名/角色/退出 ===================== */
 .topbar__user {
   position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  align-items: center;
   margin-left: 16px;
   padding-left: 16px;
   border-left: 1px solid rgba(125, 201, 255, 0.15);
-}
-
-/* 当前场景名（管理员/用户，显示在头像上方） */
-.topbar__user-scenario {
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(83, 229, 200, 0.3);
-  background: rgba(83, 229, 200, 0.08);
-  color: #53e5c8;
-  font-size: 0.72rem;
-  white-space: nowrap;
 }
 
 .topbar__user-avatar {
