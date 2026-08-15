@@ -127,10 +127,14 @@ SCENARIO_DIR = {
 # 阈值兜底（每个场景配置一套）
 THRESHOLDS = [(0.5, 0.8)]  # (medium, high)
 
-# 测试账号：(username, password, role)
+# 测试账号：(username, password, role, scenario_code)
+# 三级角色：SUPER_ADMIN（最外层）/ SCENARIO_ADMIN（场景管理员）/ SCENARIO_USER（场景用户）
 TEST_USERS = [
-    ("admin", "admin123", "ADMIN"),
-    ("alice", "alice123", "USER"),
+    ("admin", "admin123", "SUPER_ADMIN", None),
+    ("net_admin", "net123456", "SCENARIO_ADMIN", "network_security"),
+    ("alice", "alice123", "SCENARIO_USER", "network_security"),
+    ("bob", "bob123456", "SCENARIO_USER", "power_system"),
+    ("carol", "carol123456", "SCENARIO_USER", "geological_risk"),
 ]
 
 
@@ -220,36 +224,55 @@ def parse_arff_fields(path: str, label_field: str):
 # 数据库写入（走 Service 层）
 # ---------------------------------------------------------------------------
 def get_or_create_admin(svc_user, db):
+    """最外层管理员（SUPER_ADMIN）：bootstrap 直接建 ORM，绕过 create 的 SUPER_ADMIN 创建限制。"""
     from sqlalchemy import select
     from app.models.app_user import AppUser
+    from app.utils.common import hash_password
+    from datetime import datetime, timezone
 
     admin = db.scalar(select(AppUser).where(AppUser.username == "admin"))
     if admin:
         return admin
 
-    class _Bootstrap:
-        id = 0
-        role = "ADMIN"
-        status = "ENABLED"
-
-    resp = svc_user.create(
-        current_user=_Bootstrap(), username="admin", password="admin123", role="ADMIN"
+    now = datetime.now(timezone.utc)
+    admin = AppUser(
+        username="admin",
+        password_hash=hash_password("admin123"),
+        role="SUPER_ADMIN",
+        status="ENABLED",
+        scenario_id=None,
+        created_at=now,
+        updated_at=now,
     )
-    print(f"  [user] admin 创建 -> code={resp.code} msg={resp.message}")
+    db.add(admin)
+    db.commit()
+    print("  [user] admin(SUPER_ADMIN) 引导创建")
     return db.scalar(select(AppUser).where(AppUser.username == "admin"))
 
 
-def ensure_user(svc_user, db, username, password, role):
+def ensure_user(svc_user, db, username, password, role, scenario_code=None):
     from sqlalchemy import select
     from app.models.app_user import AppUser
+    from app.models.scenario import Scenario
 
     exists = db.scalar(select(AppUser).where(AppUser.username == username))
     if exists:
         print(f"  [user] {username} 已存在，跳过")
         return
     admin = get_or_create_admin(svc_user, db)
+    scenario_id = None
+    if scenario_code:
+        sc = db.scalar(select(Scenario).where(Scenario.code == scenario_code))
+        scenario_id = sc.id if sc else None
+        if scenario_id is None:
+            print(f"  [user] {username}: 场景 {scenario_code} 不存在，跳过")
+            return
     resp = svc_user.create(
-        current_user=admin, username=username, password=password, role=role
+        current_user=admin,
+        username=username,
+        password=password,
+        role=role,
+        scenario_id=scenario_id,
     )
     print(f"  [user] {username}({role}) 创建 -> code={resp.code}")
 
@@ -353,8 +376,8 @@ def main():
 
         # 1. 测试账号
         print("\n[1/3] 测试账号")
-        for username, password, role in TEST_USERS:
-            ensure_user(svc_user, db, username, password, role)
+        for username, password, role, scenario_code in TEST_USERS:
+            ensure_user(svc_user, db, username, password, role, scenario_code)
         admin = get_or_create_admin(svc_user, db)
 
         # 2. 场景映射（按编码查库，不写死 id）
