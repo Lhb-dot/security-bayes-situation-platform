@@ -29,6 +29,13 @@ const selectedScenario = ref<ScenarioId | 'all'>('all');
 const selectedDataset = ref<string>('all');
 
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
+
+/** 当前用户绑定场景名（管理员/用户固定场景，右上角展示） */
+const myScenarioName = computed(() => {
+  const id = currentUser.value?.scenario_ids?.[0];
+  return id ? scenarioLabel[id] ?? id : '';
+});
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 
@@ -168,6 +175,11 @@ const isBest = (m: ModelVersionRecord, key: keyof EvaluationMetrics) => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
+  // 管理员/用户：默认固定自己场景（不显示场景下拉）
+  if (currentUser.value?.role !== 'SUPER_ADMIN') {
+    const bound = currentUser.value?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   algorithms.value = await getAlgorithms();
   await loadModels();
 });
@@ -185,10 +197,11 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景 -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
-        <ScenarioSelector v-model="selectedScenario" />
+        <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
+        <span v-else class="model-center__scenario-tag">当前场景：{{ myScenarioName }}</span>
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
@@ -417,6 +430,16 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.model-center__scenario-tag {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 229, 200, 0.3);
+  background: rgba(83, 229, 200, 0.08);
+  color: #53e5c8;
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 
 .model-filter-select {

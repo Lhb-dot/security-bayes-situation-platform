@@ -34,8 +34,8 @@ const modelStore = useModelStore();
 const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
 
-/** 需求 6.5.2/6.2：管理员用 tabs 切场景；普通用户用下拉框在感兴趣的场景中选择 */
-const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
+/** 需求 6.5.2/6.2：系统管理员用 tabs 切场景；管理员/用户场景固定（账号绑定，自动确定） */
+const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 
 /** 场景选项：普通用户=感兴趣的场景（设置页自选），管理员=全部场景 */
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
@@ -291,7 +291,7 @@ onMounted(async () => {
         <!-- 场景选择 -->
         <div class="form-group">
           <label class="form-label">业务场景</label>
-          <div v-if="isAdmin" class="scenario-tabs">
+          <div v-if="isSuperAdmin" class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
               :key="sc.value"
@@ -302,16 +302,9 @@ onMounted(async () => {
               {{ sc.label }}
             </button>
           </div>
-          <select
-            v-else-if="scenarioOptions.length"
-            v-model="selectedScenario"
-            class="form-input"
-          >
-            <option value="" disabled>-- 请选择场景 --</option>
-            <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">
-              {{ sc.label }}
-            </option>
-          </select>
+          <p v-else-if="scenarioOptions.length" class="user-scenario-hint">
+            当前场景：{{ scenarioOptions.find((s) => s.value === selectedScenario)?.label ?? '—' }}
+          </p>
           <p v-else class="no-model-tip">当前账号暂无可用场景，请在"设置"中选择感兴趣的场景</p>
         </div>
 

@@ -244,52 +244,53 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- 创建用户弹窗 -->
-    <div v-if="createOpen" class="modal-mask" @click.self="createOpen = false">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>创建用户账号</h3>
-          <button class="modal-close" @click="createOpen = false">✕</button>
+    <!-- 创建用户弹窗（el-dialog，append-to-body 暗色，背景固定；系统管理员只建管理员，管理员只建用户） -->
+    <el-dialog
+      v-model="createOpen"
+      :title="isSuperAdmin() ? '创建管理员账号' : '创建用户账号'"
+      width="460px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="pwd-form" style="display: grid; gap: 14px">
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">用户名（登录账号）</label>
+          <input v-model.trim="createForm.username" class="pwd-form__input" placeholder="如 zhangsan" />
         </div>
-        <div class="modal-card__body">
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">用户名（登录账号）</label>
-            <input v-model.trim="createForm.username" class="pwd-form__input" placeholder="如 zhangsan" />
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">显示名</label>
-            <input v-model.trim="createForm.display_name" class="pwd-form__input" placeholder="如 张三" />
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">初始密码（至少 6 位）</label>
-            <input v-model="createForm.password" type="password" class="pwd-form__input" placeholder="初始密码" />
-          </div>
-          <div v-if="isSuperAdmin()" class="pwd-form__field">
-            <label class="pwd-form__label">角色</label>
-            <select v-model="createForm.role" class="pwd-form__input">
-              <option value="SCENARIO_ADMIN">场景管理员</option>
-              <option value="SCENARIO_USER">场景用户</option>
-            </select>
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">绑定场景</label>
-            <select v-model="createForm.scenario_id" class="pwd-form__input" :disabled="!isSuperAdmin()">
-              <option v-if="!isSuperAdmin()" :value="currentUser?.scenario_ids?.[0]">
-                {{ scenarioName(currentUser?.scenario_ids?.[0] as ScenarioId) }}（当前场景）
-              </option>
-              <option v-for="sc in scenarioStore.activeScenarios" :key="sc.scenario_id" :value="sc.scenario_id">
-                {{ sc.name }}
-              </option>
-            </select>
-            <p v-if="!isSuperAdmin()" class="bind-tip">场景管理员只能在自己场景内创建场景用户</p>
-          </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">显示名</label>
+          <input v-model.trim="createForm.display_name" class="pwd-form__input" placeholder="如 张三" />
         </div>
-        <div class="modal-card__foot">
-          <button class="users-btn" @click="createOpen = false">取消</button>
-          <button class="users-btn users-btn--primary" @click="submitCreate">创建</button>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">初始密码（至少 6 位）</label>
+          <input v-model="createForm.password" type="password" class="pwd-form__input" placeholder="初始密码" />
+        </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">角色</label>
+          <select v-model="createForm.role" class="pwd-form__input" disabled>
+            <option :value="isSuperAdmin() ? 'SCENARIO_ADMIN' : 'SCENARIO_USER'">
+              {{ isSuperAdmin() ? '管理员' : '用户' }}
+            </option>
+          </select>
+        </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">绑定场景</label>
+          <select v-model="createForm.scenario_id" class="pwd-form__input" :disabled="!isSuperAdmin()">
+            <option v-if="!isSuperAdmin()" :value="currentUser?.scenario_ids?.[0]">
+              {{ scenarioName(currentUser?.scenario_ids?.[0] as ScenarioId) }}（当前场景）
+            </option>
+            <option v-for="sc in scenarioStore.activeScenarios" :key="sc.scenario_id" :value="sc.scenario_id">
+              {{ sc.name }}
+            </option>
+          </select>
+          <p v-if="!isSuperAdmin()" class="bind-tip">管理员只能在自己场景内创建用户</p>
         </div>
       </div>
-    </div>
+      <template #footer>
+        <el-button @click="createOpen = false">取消</el-button>
+        <el-button type="primary" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 重置密码弹窗 -->
     <div v-if="resetTarget" class="modal-mask" @click.self="resetTarget = null">

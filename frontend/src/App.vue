@@ -274,7 +274,10 @@ const isNavActive = (item: NavItem): boolean => {
     case '/home': return isHomePage.value;
     case '/dashboard': return isDashboardPage.value;
     case '/overview': return isOverviewPage.value;
-    case '/scenarios': return isScenarioCenterPage.value;
+    case '/scenarios':
+      // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
+      if (isSuperAdmin.value) return isScenarioCenterPage.value;
+      return route.path.startsWith('/scenarios/') || isScenarioCenterPage.value;
     case '/datasets': return isDatasetCenterPage.value;
     case '/alerts': return isAlertsListPage.value || isAlertDetailPage.value;
     case '/risk': return isRiskPage.value;
@@ -317,7 +320,7 @@ const handleNavClick = (item: NavItem): void => {
             :class="{ 'is-active': isNavActive(item) }"
             @click="handleNavClick(item)"
           >
-            {{ item.path === '/settings' ? (isSuperAdmin ? '系统设置' : '设置') : item.label }}
+            {{ item.path === '/settings' ? (isSuperAdmin ? '系统设置' : '设置') : (item.path === '/scenarios' ? (isSuperAdmin ? '场景中心' : '首页') : item.label) }}
           </button>
         </nav>
         <div class="topbar__user">

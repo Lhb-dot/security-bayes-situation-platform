@@ -19,6 +19,9 @@ const error = ref('');
 const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
 
+/** 是否系统管理员（管理员/用户固定自己场景） */
+const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
+
 /** 筛选条件 */
 const selectedScenario = ref<ScenarioId | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
@@ -99,8 +102,13 @@ const statusMap: Record<string, string> = {
   '已处置': '已处置',
 };
 
-onMounted(() => {
-  scenarioStore.fetchScenarioList();
+onMounted(async () => {
+  await scenarioStore.fetchScenarioList();
+  // 管理员/用户：默认固定自己场景（隐藏场景下拉）
+  if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
+    const bound = userStore.currentUser?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   loadEvents();
 });
 </script>
@@ -116,9 +124,9 @@ onMounted(() => {
       <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
     </div>
 
-    <!-- 筛选栏：下拉框选择，默认全部（样式与推理记录筛选框一致） -->
+    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉） -->
     <div class="risk-events-filters">
-      <label class="filter-item">
+      <label v-if="isSuperAdmin" class="filter-item">
         <span class="filter-item__label">场景</span>
         <select v-model="selectedScenario" class="filter-select">
           <option v-for="opt in scenarioOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>

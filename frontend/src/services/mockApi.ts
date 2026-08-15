@@ -810,18 +810,21 @@ const canManageUser = (operator: UserAccount, target: UserAccount): boolean => {
   return target.role !== 'SUPER_ADMIN' && (target.scenario_ids ?? []).includes(bound);
 };
 
-/** 用户列表（管理级角色；最外层全部，场景管理员仅自己场景） */
+/** 用户列表（管理级角色）。
+ * 系统管理员：只列管理员（SCENARIO_ADMIN）；管理员：只列自己场景的用户（SCENARIO_USER，不含自己）。 */
 export const getUserList = async (): Promise<UserAccount[]> =>
   simulateLatency((() => {
     const operator = requireManagement();
-    const list =
-      operator.role === 'SUPER_ADMIN'
-        ? userRecords
-        : userRecords.filter((u) => u.role !== 'SUPER_ADMIN' && canManageUser(operator, u));
+    let list: UserRecord[];
+    if (operator.role === 'SUPER_ADMIN') {
+      list = userRecords.filter((u) => u.role === 'SCENARIO_ADMIN');
+    } else {
+      list = userRecords.filter((u) => u.role === 'SCENARIO_USER' && canManageUser(operator, u) && u.user_id !== operator.user_id);
+    }
     return list.map(({ password: _pw, ...rest }) => rest);
   })());
 
-/** 管理级角色创建账号（最外层建场景管理员/场景用户；场景管理员只在自己场景建场景用户） */
+/** 管理级角色创建账号（系统管理员只建管理员；管理员只在自己场景建用户） */
 export const createUser = async (params: {
   username: string;
   display_name: string;
@@ -831,12 +834,14 @@ export const createUser = async (params: {
   scenario_ids?: ScenarioId[];
 }): Promise<UserAccount> => {
   const operator = requireManagement();
-  if (params.role === 'SUPER_ADMIN') throw new Error('最外层管理员账号由平台引导创建');
-  if (operator.role === 'SCENARIO_ADMIN') {
-    if (params.role !== 'SCENARIO_USER') throw new Error('场景管理员只能创建场景用户');
+  if (params.role === 'SUPER_ADMIN') throw new Error('系统管理员账号由平台引导创建');
+  if (operator.role === 'SUPER_ADMIN') {
+    if (params.role !== 'SCENARIO_ADMIN') throw new Error('系统管理员只能创建管理员账号');
+  } else {
+    if (params.role !== 'SCENARIO_USER') throw new Error('管理员只能创建用户账号');
     const bound = operator.scenario_ids?.[0];
     if (!bound || !(params.scenario_ids ?? []).includes(bound)) {
-      throw new Error('场景管理员只能在自己场景内创建用户');
+      throw new Error('管理员只能在自己场景内创建用户');
     }
   }
   if (!params.username || !params.password) throw new Error('用户名和密码不能为空');

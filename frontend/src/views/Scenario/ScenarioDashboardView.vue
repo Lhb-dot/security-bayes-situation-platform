@@ -5,7 +5,7 @@
  * 职责：获取 route.params.scenarioId → 调用 store 校验/加载 → 按场景分发子看板。
  * 数据链路：页面 → scenarioStore / situationStore → mockApi（页面不直接调用 mockApi）。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { useSituationStore } from '@/stores/situationStore';
@@ -60,6 +60,13 @@ const loadData = async () => {
     loading.value = false;
   }
 };
+
+// 场景切换（快捷跳转到另一场景）：清空旧数据并重新加载，避免残留上一场景数据
+watch(scenarioId, () => {
+  scenarioStore.resetDetail();
+  situationStore.situation = null;
+  loadData();
+});
 
 onMounted(loadData);
 </script>

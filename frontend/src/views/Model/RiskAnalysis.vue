@@ -317,7 +317,8 @@ onBeforeUnmount(() => {
           <div v-if="currentUser?.role === 'SCENARIO_ADMIN'" class="fixed-scenario">
             {{ scenarioOptions[0]?.name || '—' }}
           </div>
-          <div v-else-if="currentUser?.role === 'SUPER_ADMIN'" class="scenario-tabs">
+          <!-- 系统管理员（或用户信息未加载时兜底）：显示全部场景可选 -->
+          <div v-else class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
               :key="sc.id"

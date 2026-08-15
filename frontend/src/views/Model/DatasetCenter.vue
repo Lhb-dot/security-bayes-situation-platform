@@ -62,6 +62,13 @@ const isFlightdeckSelected = computed(() => selectedScenario.value === ('flightd
 /** 当前登录用户（需求 2.3.1：仅管理员可上传/修改/停用/删除数据集） */
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
+
+/** 当前用户绑定场景名（管理员/用户固定场景，右上角展示） */
+const myScenarioName = computed(() => {
+  const id = currentUser.value?.scenario_ids?.[0];
+  return id ? SCENARIO_LABEL[id] ?? id : '';
+});
 
 // ===================== 上传数据集 / 创建新版本（需求 2.3.2 / 2.3.3） =====================
 const uploadDialogVisible = ref(false);
@@ -276,6 +283,11 @@ const goDatasetDetail = (dataset: Dataset) => {
 // ===================== 生命周期 =====================
 onMounted(() => {
   currentUser.value = getCurrentUser();
+  // 管理员/用户：默认固定自己场景（不显示下拉）
+  if (currentUser.value?.role !== 'SUPER_ADMIN') {
+    const bound = currentUser.value?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   loadDatasets();
 });
 </script>
@@ -292,9 +304,10 @@ onMounted(() => {
       <button v-if="isAdmin" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景 -->
     <div class="dataset-center__toolbar">
-      <ScenarioSelector v-model="selectedScenario" />
+      <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
+      <span v-else class="dataset-center__scenario-tag">当前场景：{{ myScenarioName }}</span>
       <span class="dataset-center__count">
         共 <strong>{{ filteredDatasets.length }}</strong> 个数据集
       </span>
@@ -643,6 +656,16 @@ onMounted(() => {
 .dataset-center__count {
   font-size: 0.88rem;
   color: rgba(220, 234, 255, 0.6);
+  white-space: nowrap;
+}
+
+.dataset-center__scenario-tag {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 229, 200, 0.3);
+  background: rgba(83, 229, 200, 0.08);
+  color: #53e5c8;
+  font-size: 0.85rem;
   white-space: nowrap;
 }
 
