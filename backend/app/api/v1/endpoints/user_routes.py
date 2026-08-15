@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -32,7 +32,7 @@ router = APIRouter(prefix="/users", tags=["用户管理"])
 )
 def list_users(
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
     keyword: Optional[str] = Query(None, description="用户名模糊搜索"),
@@ -73,7 +73,7 @@ def get_user(
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         UserService(db).create(
@@ -95,7 +95,7 @@ def update_user_scenario(
     user_id: int,
     payload: UserUpdateScenario,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         UserService(db).update_scenario(
@@ -136,7 +136,7 @@ def reset_user_password(
     user_id: int,
     payload: UserUpdatePassword,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         UserService(db).update_password(
@@ -156,7 +156,7 @@ def update_user_status(
     user_id: int,
     payload: UserUpdateStatus,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         UserService(db).update_status(
@@ -173,6 +173,6 @@ def update_user_status(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(UserService(db).delete(current_user=current_user, user_id=user_id))

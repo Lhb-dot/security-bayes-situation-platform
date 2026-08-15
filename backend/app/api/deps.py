@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.app_user import AppUser
-from app.services.constants import ROLE_ADMIN, USER_STATUS_ENABLED
+from app.services.constants import (
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
+    USER_STATUS_ENABLED,
+)
 
 
 def _resolve_user(db: Session, x_user_id: str) -> AppUser | None:
@@ -42,7 +46,14 @@ def get_current_user(
 
 
 def require_admin(current_user: AppUser = Depends(get_current_user)) -> AppUser:
-    """管理员专用接口依赖：非 ADMIN → 403。"""
-    if current_user.role != ROLE_ADMIN:
+    """最外层管理员（SUPER_ADMIN）专用接口依赖：非 SUPER_ADMIN → 403。"""
+    if current_user.role != ROLE_SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="无权限操作")
+    return current_user
+
+
+def require_scenario_admin(current_user: AppUser = Depends(get_current_user)) -> AppUser:
+    """管理级角色（最外层管理员 或 场景管理员）接口依赖。"""
+    if current_user.role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
         raise HTTPException(status_code=403, detail="无权限操作")
     return current_user

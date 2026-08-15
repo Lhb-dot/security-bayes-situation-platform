@@ -21,6 +21,9 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     PASSWORD_MIN_LEN,
     ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SCENARIO_USER,
+    ROLE_SUPER_ADMIN,
     ROLE_USER,
     ROLES,
     USER_STATUS_ENABLED,
@@ -60,14 +63,15 @@ class UserService(ServiceBase):
     # ------------------------------------------------------------------
     @service_call
     def get(self, current_user: Optional[AppUser], user_id: int):
-        """查看用户详情：ADMIN 可查任意用户；USER 仅本人。"""
+        """查看用户详情：SUPER_ADMIN 可查任意；SCENARIO_ADMIN 仅自己场景；其余仅本人。"""
         self.require_login(current_user)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and getattr(current_user, "id", None) != user_id
-        ):
-            raise ServiceError(403, "无权限操作")
         user = self._get(user_id)
+        role = getattr(current_user, "role", None)
+        is_mgmt = role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
+        if not is_mgmt and getattr(current_user, "id", None) != user_id:
+            raise ServiceError(403, "无权限操作")
+        if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "无权限操作")
         return ok(data=self._safe(user))
 
     @service_call
@@ -84,9 +88,14 @@ class UserService(ServiceBase):
         page_size: int = 10,
         keyword: Optional[str] = None,
     ):
-        """用户列表（仅 ADMIN；USER 无查看他人账号权限）。"""
-        self.require_admin(current_user)
+        """用户列表（管理级角色）。
+
+        SUPER_ADMIN 看全部用户；SCENARIO_ADMIN 只看自己场景的用户；SCENARIO_USER 无列表权限。
+        """
+        self.require_scenario_admin(current_user)
         stmt = select(AppUser)
+        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(AppUser.scenario_id == getattr(current_user, "scenario_id", None))
         if keyword:
             stmt = stmt.where(AppUser.username.ilike(f"%{keyword}%"))
         stmt = stmt.order_by(AppUser.id)
@@ -106,12 +115,14 @@ class UserService(ServiceBase):
         role: str = ROLE_USER,
         scenario_id: Optional[int] = None,
     ):
-        """创建用户账号（仅 ADMIN）。默认状态 ENABLED。
+        """创建用户账号（管理级角色）。默认状态 ENABLED。
 
-        需求 V3.0 §1.1.6：管理员创建账号时可为普通用户指定绑定场景；
-        普通用户登录后只看到该场景。管理员不绑定（scenario_id=None）。
+        三级角色创建规则：
+        - SUPER_ADMIN（最外层管理员）：可创建 SCENARIO_ADMIN（必须绑定场景）与 SCENARIO_USER
+        - SCENARIO_ADMIN（场景管理员）：只能在自己场景内创建 SCENARIO_USER
+        - SUPER_ADMIN 角色只能由引导/种子创建，不通过此接口创建
         """
-        self.require_admin(current_user)
+        self.require_scenario_admin(current_user)
         err = validate_required(
             {"username": username, "password": password}, ("username", "password")
         )
@@ -127,8 +138,21 @@ class UserService(ServiceBase):
         err = validate_enum(role, ROLES, "role")
         if err:
             raise ServiceError(400, err)
+
+        if role == ROLE_SUPER_ADMIN:
+            raise ServiceError(400, "最外层管理员账号由平台引导创建，不可在此创建")
+        if role in (ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER) and scenario_id is None:
+            raise ServiceError(400, "场景管理员/场景用户必须绑定场景")
         if scenario_id is not None and self.db.get(Scenario, scenario_id) is None:
             raise ServiceError(404, "绑定场景不存在")
+
+        creator_role = getattr(current_user, "role", None)
+        if creator_role == ROLE_SCENARIO_ADMIN:
+            # 场景管理员只能在自己场景内创建场景用户
+            if role != ROLE_SCENARIO_USER:
+                raise ServiceError(403, "场景管理员只能创建场景用户")
+            if getattr(current_user, "scenario_id", None) != scenario_id:
+                raise ServiceError(403, "场景管理员只能在自己场景内创建用户")
 
         exists = self.db.scalar(
             select(AppUser).where(AppUser.username == username)
@@ -142,7 +166,7 @@ class UserService(ServiceBase):
             password_hash=hash_password(password),
             role=role,
             status=USER_STATUS_ENABLED,
-            scenario_id=scenario_id if role == ROLE_USER else None,
+            scenario_id=scenario_id if role != ROLE_SUPER_ADMIN else None,
             created_at=now,
             updated_at=now,
         )
@@ -157,14 +181,17 @@ class UserService(ServiceBase):
         user_id: int,
         scenario_id: Optional[int],
     ):
-        """分配/修改用户绑定场景（仅 ADMIN，V3.0 §1.1.6）。
+        """分配/修改用户绑定场景（管理级角色）。
 
-        传 None 解除绑定（普通用户将看不到任何场景）；管理员账号不绑定场景。
+        SUPER_ADMIN 可改任意场景管理员/场景用户；SCENARIO_ADMIN 只能改自己场景的用户。
         """
-        self.require_admin(current_user)
+        self.require_scenario_admin(current_user)
         user = self._get(user_id)
-        if user.role == ROLE_ADMIN:
-            raise ServiceError(400, "管理员不绑定场景，无需分配")
+        if user.role == ROLE_SUPER_ADMIN:
+            raise ServiceError(400, "最外层管理员不绑定场景，无需分配")
+        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
+            if user.scenario_id != getattr(current_user, "scenario_id", None):
+                raise ServiceError(403, "场景管理员只能管理自己场景的用户")
         if scenario_id is not None:
             scenario = self.db.get(Scenario, scenario_id)
             if scenario is None:
@@ -188,8 +215,13 @@ class UserService(ServiceBase):
         - 管理员重置（/reset-password）：不传 old_password，跳过旧密码校验。
         """
         self.require_login(current_user)
-        is_admin = getattr(current_user, "role", None) == ROLE_ADMIN
-        if not is_admin and getattr(current_user, "id", None) != user_id:
+        user = self._get(user_id)
+        role = getattr(current_user, "role", None)
+        is_mgmt = role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
+        if not is_mgmt and getattr(current_user, "id", None) != user_id:
+            raise ServiceError(403, "无权限操作")
+        # 场景管理员只能重置自己场景用户的密码
+        if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "无权限操作")
         err = validate_length(
             new_password, "new_password", 128, min_len=PASSWORD_MIN_LEN
@@ -197,7 +229,6 @@ class UserService(ServiceBase):
         if err:
             raise ServiceError(400, err)
 
-        user = self._get(user_id)
         if old_password is not None:
             if not verify_password(old_password, user.password_hash):
                 raise ServiceError(400, "旧密码不正确")
@@ -213,12 +244,14 @@ class UserService(ServiceBase):
         user_id: int,
         status: str,
     ):
-        """启用/禁用账号（仅 ADMIN）。禁用后历史数据保留（需求 5.2）。"""
-        self.require_admin(current_user)
+        """启用/禁用账号（管理级角色）。禁用后历史数据保留（需求 5.2）。"""
+        self.require_scenario_admin(current_user)
         err = validate_enum(status, USER_STATUSES, "status")
         if err:
             raise ServiceError(400, err)
         user = self._get(user_id)
+        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "场景管理员只能管理自己场景的用户")
         if user.id == current_user.id and status != USER_STATUS_ENABLED:
             raise ServiceError(400, "不能禁用当前登录账号")
         user.status = status
@@ -228,14 +261,16 @@ class UserService(ServiceBase):
 
     @service_call
     def delete(self, current_user: Optional[AppUser], user_id: int):
-        """删除用户（仅 ADMIN）。
+        """删除用户（管理级角色）。
 
         说明：需求文档仅要求"禁用"账号，未要求删除；为满足 CRUD 提供此方法。
         用户存在任何关联业务数据（推理/事件/处置/报告/数据集/模型/阈值等）时
         禁止物理删除，提示改用禁用（保证历史数据可追溯，需求 5.2）。
         """
-        self.require_admin(current_user)
+        self.require_scenario_admin(current_user)
         user = self._get(user_id)
+        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "场景管理员只能管理自己场景的用户")
         if user.id == current_user.id:
             raise ServiceError(400, "不能删除当前登录账号")
 

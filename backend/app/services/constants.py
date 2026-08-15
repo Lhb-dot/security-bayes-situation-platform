@@ -16,10 +16,23 @@ DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的业务数据字
 
 # ---------------------------------------------------------------------------
 # 用户与角色（数据库设计文档v2 2.1；需求文档 6.5.1）
+#
+# 三级角色（多场景复杂系统：最外层管理员 / 场景管理员 / 场景用户）：
+# - SUPER_ADMIN（最外层管理员）：平台方，管所有场景运行、平台数据/模型、创建场景管理员
+# - SCENARIO_ADMIN（场景管理员）：绑定一个场景，场景内最高权限（数据集/模型/训练/阈值/创建场景用户）
+# - SCENARIO_USER（场景用户）：绑定一个场景，使用已发布模型推理、看本人数据
 # ---------------------------------------------------------------------------
-ROLE_ADMIN = "ADMIN"
-ROLE_USER = "USER"
-ROLES = (ROLE_ADMIN, ROLE_USER)
+ROLE_SUPER_ADMIN = "SUPER_ADMIN"
+ROLE_SCENARIO_ADMIN = "SCENARIO_ADMIN"
+ROLE_SCENARIO_USER = "SCENARIO_USER"
+ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER)
+
+# 兼容别名（旧两级模型）：旧"管理员"=最外层管理员，旧"普通用户"=场景用户
+ROLE_ADMIN = ROLE_SUPER_ADMIN
+ROLE_USER = ROLE_SCENARIO_USER
+
+# 管理级角色集合（能做管理操作的角色）
+ADMIN_ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
 
 USER_STATUS_ENABLED = "ENABLED"
 USER_STATUS_DISABLED = "DISABLED"
