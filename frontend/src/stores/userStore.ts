@@ -9,7 +9,7 @@
  */
 import { defineStore } from 'pinia';
 import * as mockApi from '@/services/mockApi';
-import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { PlatformUserStats, ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 /** 四场景全集（管理员可见范围；普通用户以 currentUser.scenario_ids 为准） */
 const ALL_SCENARIO_IDS = [
@@ -23,6 +23,7 @@ export const useUserStore = defineStore('user', {
   state: () => ({
     currentUser: mockApi.getCurrentUser() as UserAccount | null,
     users: [] as UserAccount[],
+    platformStats: null as PlatformUserStats | null,
     loading: false,
   }),
   getters: {
@@ -64,6 +65,9 @@ export const useUserStore = defineStore('user', {
       } finally {
         this.loading = false;
       }
+    },
+    async fetchPlatformStats(): Promise<void> {
+      this.platformStats = await mockApi.getPlatformUserStats();
     },
     async createUser(params: {
       username: string;

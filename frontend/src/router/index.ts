@@ -57,9 +57,9 @@ const routes = [
   {
     path: '/overview',
     name: '管理员首页',
-    component: () => import('@/views/Model/OverviewView.vue'),
+    component: () => import('@/views/Admin/AdminOverviewView.vue'),
     // 管理员首页（原全局总览）：全平台跨用户态势，仅管理员可访问；普通用户的首页是 /home
-    meta: { title: '首页', requiresAdmin: true, hiddenForUser: true },
+    meta: { title: '平台运行总览', requiresAdmin: true, hiddenForUser: true },
   },
   {
     path: '/scenarios',

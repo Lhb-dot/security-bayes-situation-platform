@@ -27,6 +27,7 @@ import type {
   InferenceRecord,
   ModelVersionRecord,
   ModelStatus,
+  PlatformUserStats,
   EvaluationMetrics,
   ThresholdConfig,
   ThresholdChangeLog,
@@ -817,12 +818,34 @@ export const getUserList = async (): Promise<UserAccount[]> =>
     const operator = requireManagement();
     let list: UserRecord[];
     if (operator.role === 'SUPER_ADMIN') {
-      list = userRecords.filter((u) => u.role === 'SCENARIO_ADMIN');
+      list = [...userRecords];
     } else {
-      list = userRecords.filter((u) => u.role === 'SCENARIO_USER' && canManageUser(operator, u) && u.user_id !== operator.user_id);
+      const bound = operator.scenario_ids?.[0];
+      if (!bound) return [];
+      list = userRecords.filter(
+        (u) => u.role !== 'SUPER_ADMIN' && (u.scenario_ids ?? []).includes(bound)
+      );
     }
     return list.map(({ password: _pw, ...rest }) => rest);
   })());
+
+/** Platform account statistics (SUPER_ADMIN only, for the operations overview). */
+export const getPlatformUserStats = async (): Promise<PlatformUserStats> => {
+  requireAdmin();
+  const byScenario = SCENARIO_META.map((meta) => ({
+    scenario_id: meta.id,
+    name: meta.name,
+    user_count: userRecords.filter((u) => (u.scenario_ids ?? []).includes(meta.id)).length,
+  }));
+  return simulateLatency({
+    total: userRecords.length,
+    super_admins: userRecords.filter((u) => u.role === 'SUPER_ADMIN').length,
+    scenario_admins: userRecords.filter((u) => u.role === 'SCENARIO_ADMIN').length,
+    scenario_users: userRecords.filter((u) => u.role === 'SCENARIO_USER').length,
+    disabled: userRecords.filter((u) => u.status === 'disabled').length,
+    by_scenario: byScenario,
+  });
+};
 
 /** 管理级角色创建账号（系统管理员只建管理员；管理员只在自己场景建用户） */
 export const createUser = async (params: {
@@ -836,13 +859,18 @@ export const createUser = async (params: {
   const operator = requireManagement();
   if (params.role === 'SUPER_ADMIN') throw new Error('系统管理员账号由平台引导创建');
   if (operator.role === 'SUPER_ADMIN') {
-    if (params.role !== 'SCENARIO_ADMIN') throw new Error('系统管理员只能创建管理员账号');
+    if (params.role !== 'SCENARIO_ADMIN' && params.role !== 'SCENARIO_USER') {
+      throw new Error('系统管理员只能创建场景管理员或场景用户账号');
+    }
   } else {
-    if (params.role !== 'SCENARIO_USER') throw new Error('管理员只能创建用户账号');
+    if (params.role !== 'SCENARIO_USER') throw new Error('场景管理员只能创建场景用户账号');
     const bound = operator.scenario_ids?.[0];
     if (!bound || !(params.scenario_ids ?? []).includes(bound)) {
-      throw new Error('管理员只能在自己场景内创建用户');
+      throw new Error('场景管理员只能在自己场景内创建用户');
     }
+  }
+  if (params.role === 'SCENARIO_ADMIN' || params.role === 'SCENARIO_USER') {
+    if (!params.scenario_ids?.length) throw new Error('场景管理员/场景用户必须绑定场景');
   }
   if (!params.username || !params.password) throw new Error('用户名和密码不能为空');
   if (params.password.length < 6) throw new Error('密码长度至少为 6 位');

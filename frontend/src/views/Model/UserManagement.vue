@@ -29,6 +29,20 @@ const isSuperAdmin = () => currentUser.value?.role === 'SUPER_ADMIN';
 /** 场景名称映射（表格只读展示用户自选场景） */
 const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
 
+/** 角色名称（区分系统管理员 / 场景管理员 / 场景用户） */
+const roleLabel = (role: UserRole | undefined): string => {
+  if (role === 'SUPER_ADMIN') return '系统管理员';
+  if (role === 'SCENARIO_ADMIN') return '场景管理员';
+  if (role === 'SCENARIO_USER') return '场景用户';
+  return '未登录';
+};
+
+const roleBadgeClass = (role: UserRole | undefined): string => {
+  if (role === 'SUPER_ADMIN') return 'role-badge--super';
+  if (role === 'SCENARIO_ADMIN') return 'role-badge--admin';
+  return 'role-badge--user';
+};
+
 // ========== 创建用户弹窗（最外层管理员建场景管理员/用户；场景管理员只在自己场景建用户） ==========
 const createOpen = ref(false);
 const createForm = ref({
@@ -143,10 +157,12 @@ onMounted(async () => {
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
         <p class="users-page__desc">
-          当前登录：{{ currentUser?.display_name }}（{{ currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'SCENARIO_ADMIN' ? '管理员' : '普通用户' }}）
+          当前登录：{{ currentUser?.display_name }}（{{ roleLabel(currentUser?.role) }}）
         </p>
       </div>
-      <button v-if="isAdmin()" class="users-btn users-btn--primary" @click="openCreate">+ 创建用户</button>
+      <button v-if="isAdmin()" class="users-btn users-btn--primary" @click="openCreate">
+        + 创建{{ isSuperAdmin() ? '账号' : '场景用户' }}
+      </button>
     </div>
 
     <!-- 普通用户无权查看用户列表，仅可修改本人密码 -->
@@ -178,8 +194,8 @@ onMounted(async () => {
               <td>{{ user.username }}</td>
               <td>{{ user.display_name }}</td>
               <td>
-                <span class="role-badge" :class="user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? 'role-badge--admin' : 'role-badge--user'">
-                  {{ user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? '管理员' : '场景用户' }}
+                <span class="role-badge" :class="roleBadgeClass(user.role)">
+                  {{ roleLabel(user.role) }}
                 </span>
               </td>
               <td>
@@ -244,10 +260,10 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- 创建用户弹窗（el-dialog，append-to-body 暗色，背景固定；系统管理员只建管理员，管理员只建用户） -->
+    <!-- 创建账号弹窗（系统管理员可建场景管理员/场景用户；场景管理员只在自己场景建场景用户） -->
     <el-dialog
       v-model="createOpen"
-      :title="isSuperAdmin() ? '创建管理员账号' : '创建用户账号'"
+      title="创建账号"
       width="460px"
       align-center
       append-to-body
@@ -269,10 +285,9 @@ onMounted(async () => {
         </div>
         <div class="pwd-form__field">
           <label class="pwd-form__label">角色</label>
-          <select v-model="createForm.role" class="pwd-form__input" disabled>
-            <option :value="isSuperAdmin() ? 'SCENARIO_ADMIN' : 'SCENARIO_USER'">
-              {{ isSuperAdmin() ? '管理员' : '用户' }}
-            </option>
+          <select v-model="createForm.role" class="pwd-form__input" :disabled="!isSuperAdmin()">
+            <option v-if="isSuperAdmin()" value="SCENARIO_ADMIN">场景管理员</option>
+            <option value="SCENARIO_USER">场景用户</option>
           </select>
         </div>
         <div class="pwd-form__field">
@@ -285,7 +300,9 @@ onMounted(async () => {
               {{ sc.name }}
             </option>
           </select>
-          <p v-if="!isSuperAdmin()" class="bind-tip">管理员只能在自己场景内创建用户</p>
+          <p class="bind-tip">
+            {{ isSuperAdmin() ? '系统管理员可创建场景管理员或场景用户，均需绑定场景' : '场景管理员只能在自己场景内创建场景用户' }}
+          </p>
         </div>
       </div>
       <template #footer>
@@ -473,14 +490,22 @@ onMounted(async () => {
   font-size: 0.78rem;
 }
 
+.role-badge--super {
+  background: rgba(255, 183, 77, 0.16);
+  color: #ffc37d;
+  border: 1px solid rgba(255, 183, 77, 0.3);
+}
+
 .role-badge--admin {
   background: rgba(167, 139, 250, 0.18);
   color: #c4b5fd;
+  border: 1px solid rgba(167, 139, 250, 0.28);
 }
 
 .role-badge--user {
   background: rgba(91, 166, 255, 0.16);
   color: #9ad6ff;
+  border: 1px solid rgba(91, 166, 255, 0.28);
 }
 
 .status-badge--on {
