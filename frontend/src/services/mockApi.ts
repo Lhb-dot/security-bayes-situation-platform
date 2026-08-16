@@ -1542,6 +1542,23 @@ let riskEvents: RiskEvent[] = [];
 let inferSeq = 1;
 let eventSeq = 1;
 
+// 报告持久化：存 localStorage，刷新不丢（支持定时报告的管理）
+const REPORTS_KEY = 'bayes_reports';
+let reports: Report[] = (() => {
+  try {
+    return JSON.parse(window.localStorage.getItem(REPORTS_KEY) || '[]') as Report[];
+  } catch {
+    return [];
+  }
+})();
+const saveReports = () => {
+  try {
+    window.localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+  } catch {
+    // 存储失败忽略
+  }
+};
+
 /** 场景风险类型映射（需求 5.3） */
 const riskTypeOf = (scenario_id: ScenarioId): string =>
   scenario_id === 'network_security'
@@ -2124,17 +2141,23 @@ const generateSituationData = (meta: typeof SCENARIO_META[number], user: UserAcc
 /** 报告列表（P1：可基于本人/全局/指定用户数据生成） */
 const generateReports = (user: UserAccount): Report[] =>
   SCENARIO_META.filter((m) => m.id !== 'flightdeck_operation').flatMap((meta) =>
-    Array.from({ length: random(1, 2) }, (_, i) => ({
-      report_id: `RPT-${meta.id}-${String(i + 1).padStart(3, '0')}`,
-      title: `${meta.name}态势报告 - ${i === 0 ? '周报' : '月报'}`,
-      scenario_id: meta.id,
-      scenario_name: meta.name,
-      summary: `基于 ${user.role === 'SUPER_ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
-      created_at: `2026-07-${String(20 - i * 3).padStart(2, '0')} ${String(random(8, 18)).padStart(2, '0')}:00`,
-      format: sample(['markdown', 'html', 'pdf'] as const),
-      status: 'completed' as const,
-      file_url: i === 0 ? `/reports/${meta.id}-report.pdf` : undefined,
-    }))
+    Array.from({ length: random(1, 2) }, (_, i) => {
+      const scheduled = i === 0;
+      return {
+        report_id: `RPT-${meta.id}-${String(i + 1).padStart(3, '0')}`,
+        title: `${meta.name}态势报告 - ${i === 0 ? '周报' : '月报'}`,
+        scenario_id: meta.id,
+        scenario_name: meta.name,
+        summary: `基于 ${user.role === 'SUPER_ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
+        created_at: `2026-07-${String(20 - i * 3).padStart(2, '0')} ${String(random(8, 18)).padStart(2, '0')}:00`,
+        format: sample(['markdown', 'html', 'pdf'] as const),
+        status: 'completed' as const,
+        file_url: i === 0 ? `/reports/${meta.id}-report.pdf` : undefined,
+        scheduled,
+        interval_days: scheduled ? 7 : undefined,
+        generated_by: 'demo',
+      };
+    })
   );
 
 /** 生成或刷新全部场景模拟数据 */
@@ -2189,10 +2212,28 @@ export const getSituationData = async (scenarioId: ScenarioId): Promise<Situatio
   return simulateLatency(generateSituationData(meta, user));
 };
 
-/** 获取报告列表 */
+/** 获取报告列表（按角色隔离，数据共享自同一 reports 存储）：
+ * - 系统管理员 SUPER_ADMIN：全部报告
+ * - 场景管理员 SCENARIO_ADMIN：自己场景下的所有报告（含该场景用户生成的）
+ * - 场景用户 SCENARIO_USER：仅自己生成的报告
+ */
 export const getReportList = async (): Promise<Report[]> => {
   ensureScenarioCache();
-  return simulateLatency(generateReports(requireLogin()));
+  const user = requireLogin();
+  const demo = generateReports(user);
+  let list: Report[];
+  if (user.role === 'SUPER_ADMIN') {
+    list = [...reports, ...demo];
+  } else if (user.role === 'SCENARIO_ADMIN') {
+    const myScenarios = user.scenario_ids ?? [];
+    list = [
+      ...reports.filter((r) => myScenarios.includes(r.scenario_id)),
+      ...demo.filter((r) => myScenarios.includes(r.scenario_id)),
+    ];
+  } else {
+    list = reports.filter((r) => r.generated_by === user.user_id);
+  }
+  return simulateLatency(list);
 };
 
 /** 依据指定数据范围生成态势报告（P1） */
@@ -2201,21 +2242,45 @@ export const generateReport = async (params: {
   title: string;
   scope: 'self' | 'all' | 'user';
   target_user_id?: string;
+  format?: 'markdown' | 'html' | 'pdf';
+  scheduled?: boolean;
+  interval_days?: number;
 }): Promise<Report> => {
   const user = requireLogin();
   if (user.role === 'SCENARIO_USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
   const meta = SCENARIO_META.find((s) => s.id === params.scenario_id);
   const events = filterRiskEvents(user, params.scenario_id, params.scope === 'user' ? params.target_user_id : undefined);
   const scopeLabel = params.scope === 'all' ? '全平台' : params.scope === 'user' ? `用户 ${params.target_user_id}` : '本人';
-  return simulateLatency({
+  const report: Report = {
     report_id: `RPT-${params.scenario_id}-${String(random(100, 999))}`,
     title: params.title,
     scenario_id: params.scenario_id,
     scenario_name: meta?.name ?? params.scenario_id,
     summary: `基于 ${scopeLabel} 数据生成，共统计 ${events.length} 条风险事件`,
     created_at: nowStr(),
-    format: 'markdown',
+    format: params.format ?? 'markdown',
+    scheduled: params.scheduled ?? false,
+    interval_days: params.scheduled ? params.interval_days : undefined,
     status: 'completed',
     file_url: undefined,
-  });
+    generated_by: user.user_id,
+  };
+  reports.unshift(report);
+  saveReports();
+  return simulateLatency(report);
+};
+
+/** 修改报告的定时设置（开启/关闭定时、修改周期天数），刷新后仍保留 */
+export const updateReportSchedule = async (
+  reportId: string,
+  scheduled: boolean,
+  intervalDays?: number,
+): Promise<void> => {
+  requireLogin();
+  const report = reports.find((r) => r.report_id === reportId);
+  if (!report) throw new Error('报告不存在');
+  report.scheduled = scheduled;
+  report.interval_days = scheduled ? intervalDays : undefined;
+  saveReports();
+  return simulateLatency(undefined);
 };

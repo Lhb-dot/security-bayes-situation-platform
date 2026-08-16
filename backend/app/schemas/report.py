@@ -8,6 +8,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 ReportType = Literal["SCENE_SNAPSHOT", "USER_SNAPSHOT"]
+ReportFormat = Literal["markdown", "html", "pdf"]
 
 
 class ReportCreate(BaseModel):
@@ -19,3 +20,9 @@ class ReportCreate(BaseModel):
         None, description="目标用户 ID（普通用户只能为空或本人）"
     )
     file_path: Optional[str] = Field(None, description="报告文件路径")
+    scenario_id: Optional[int] = Field(None, description="所属场景 ID（用于场景隔离）")
+    format: ReportFormat = Field("markdown", description="报告格式")
+    scheduled: bool = Field(False, description="是否定时生成")
+    interval_days: Optional[int] = Field(
+        None, ge=1, description="定时生成周期（天），定时时必填"
+    )

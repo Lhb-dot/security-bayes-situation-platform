@@ -245,4 +245,5 @@ HANDLING_ACTION_MAX_LEN = 32
 # 报告（数据库设计文档v2 2.10；需求文档 6.2 报告生成 P1）
 # ---------------------------------------------------------------------------
 REPORT_TYPES = ("SCENE_SNAPSHOT", "USER_SNAPSHOT")
+REPORT_FORMATS = ("markdown", "html", "pdf")
 REPORT_TYPE_MAX_LEN = 16

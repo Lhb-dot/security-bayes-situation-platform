@@ -16,13 +16,18 @@ report 表承载，此处 ReportService 即"实验记录/报表"能力的实现�
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import false, or_, select
 
 from app.models.app_user import AppUser
 from app.models.report import Report
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
-from app.services.constants import REPORT_TYPES, ROLE_ADMIN
+from app.services.constants import (
+    REPORT_FORMATS,
+    REPORT_TYPES,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
+)
 from app.utils.common import (
     get_logger,
     paginate,
@@ -61,21 +66,37 @@ class ReportService(ServiceBase):
         content: str,
         target_user_id: Optional[int] = None,
         file_path: Optional[str] = None,
+        scenario_id: Optional[int] = None,
+        format: str = "markdown",
+        scheduled: bool = False,
+        interval_days: Optional[int] = None,
     ):
         """生成态势报告。
 
         - 普通用户：只能基于本人数据（target_user_id 必须为空或本人），否则 403。
-        - 管理员：可生成全平台（target_user_id=None）或指定用户报告。
+        - 系统管理员：可生成全平台或指定用户报告，可指定任意场景。
+        - 场景管理员/用户：scenario_id 强制为本人绑定场景。
+        - 格式 / 定时：format 取值 markdown/html/pdf；定时时 interval_days 必填。
         """
         self.require_login(current_user)
         err = validate_enum(report_type, REPORT_TYPES, "report_type")
         if err:
             raise ServiceError(400, err)
+        err = validate_enum(format, REPORT_FORMATS, "format")
+        if err:
+            raise ServiceError(400, err)
         err = validate_required({"content": content}, ("content",))
         if err:
             raise ServiceError(400, err)
+        if scheduled and (interval_days is None or interval_days < 1):
+            raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
 
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        role = getattr(current_user, "role", None)
+        if role != ROLE_SUPER_ADMIN:
+            # 场景管理员/用户：只能生成自己绑定场景的报告
+            if scenario_id is not None and scenario_id != current_user.scenario_id:
+                raise ServiceError(403, "只能生成本人绑定场景的报告")
+            scenario_id = current_user.scenario_id
             if target_user_id is not None and target_user_id != current_user.id:
                 raise ServiceError(403, "普通用户只能基于本人数据生成报告")
         elif target_user_id is not None:
@@ -89,6 +110,10 @@ class ReportService(ServiceBase):
             target_user_id=target_user_id,
             content=content,
             file_path=file_path,
+            scenario_id=scenario_id,
+            format=format,
+            scheduled=scheduled,
+            interval_days=interval_days if scheduled else None,
             generated_at=datetime.now(timezone.utc),
         )
         self.db.add(report)
@@ -106,22 +131,31 @@ class ReportService(ServiceBase):
         page: int = 1,
         page_size: int = 10,
     ):
-        """报告列表。
+        """报告列表（按三级角色隔离）。
 
-        普通用户：本人生成的或定向给自己的报告；
-        管理员：全部报告，可按 target_user_id 过滤（需求 6.8.4）。
+        系统管理员：全部报告，可按 target_user_id 过滤；
+        场景管理员：自己绑定场景下的报告；
+        场景用户：本人生成的或定向给自己的报告。
         """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         stmt = select(Report)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if role == ROLE_SUPER_ADMIN:
+            if target_user_id is not None:
+                stmt = stmt.where(Report.target_user_id == target_user_id)
+        elif role == ROLE_SCENARIO_ADMIN:
+            scid = getattr(current_user, "scenario_id", None)
+            if scid is None:
+                stmt = stmt.where(false())  # 未绑定场景：看不到任何报告
+            else:
+                stmt = stmt.where(Report.scenario_id == scid)
+        else:
             stmt = stmt.where(
                 or_(
                     Report.generated_by == current_user.id,
                     Report.target_user_id == current_user.id,
                 )
             )
-        elif target_user_id is not None:
-            stmt = stmt.where(Report.target_user_id == target_user_id)
         stmt = stmt.order_by(Report.generated_at.desc())
         result = paginate(self.db, stmt, page, page_size)
         result["items"] = [row_to_dict(r) for r in result["items"]]
