@@ -5,6 +5,8 @@ $root    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backend = "$root\backend"
 $frontend= "$root\frontend"
 $jar     = "$backend\lib\pmwnb-service.jar"
+$java25  = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe"
+$javaBin = if (Test-Path $java25) { $java25 } else { "java" }
 
 $javaPid = $null; $pyPid = $null; $vuePid = $null
 
@@ -54,7 +56,7 @@ else { Write-Host ":5432  FAIL (数据库不可用, /api/v1 接口将报错; 旧
 
 # ---- Java PMWNB ----
 Write-Host "  Java PMWNB    " -NoNewline
-$p = Start-Process -FilePath "java" -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
+$p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
     -WorkingDirectory $backend -WindowStyle Hidden -PassThru
 if ($p) { $javaPid = $p.Id }
 $ok = $false

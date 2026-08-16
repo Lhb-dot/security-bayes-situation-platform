@@ -8,7 +8,7 @@
 import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
 import { useScenarioStore } from '@/stores/scenarioStore';
-import { getReportList, generateReport, getCurrentUser, getUserList } from '@/services/mockApi';
+import { getReportList, generateReport, getCurrentUser, getUserList, updateReportSchedule } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
 const reports = ref<Report[]>([]);
@@ -84,10 +84,13 @@ const genForm = ref({
   scenario_id: '' as ScenarioId | '',
   scope: 'self' as 'self' | 'all' | 'user',
   target_user_id: '',
+  format: 'markdown' as 'markdown' | 'html' | 'pdf',
+  scheduled: false,
+  interval_days: 7,
 });
 
 const openGenerate = () => {
-  genForm.value = { title: '', scenario_id: '', scope: isAdmin.value ? 'all' : 'self', target_user_id: '' };
+  genForm.value = { title: '', scenario_id: '', scope: isAdmin.value ? 'all' : 'self', target_user_id: '', format: 'markdown', scheduled: false, interval_days: 7 };
   genVisible.value = true;
 };
 
@@ -110,6 +113,9 @@ const submitGenerate = async () => {
       title: genForm.value.title.trim(),
       scope: genForm.value.scope,
       target_user_id: genForm.value.target_user_id || undefined,
+      format: genForm.value.format,
+      scheduled: genForm.value.scheduled,
+      interval_days: genForm.value.scheduled ? genForm.value.interval_days : undefined,
     });
     ElMessage.success(`报告生成成功：${created.report_id}`);
     genVisible.value = false;
@@ -117,6 +123,52 @@ const submitGenerate = async () => {
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '生成失败');
   }
+};
+
+// ===================== 定时设置（修改/取消定时） =====================
+const scheduleVisible = ref(false);
+const scheduleTarget = ref<Report | null>(null);
+const scheduleForm = ref({
+  scheduled: false,
+  interval_days: 7,
+});
+
+const openSchedule = (report: Report) => {
+  scheduleTarget.value = report;
+  scheduleForm.value = {
+    scheduled: report.scheduled ?? false,
+    interval_days: report.interval_days ?? 7,
+  };
+  scheduleVisible.value = true;
+};
+
+const submitSchedule = async () => {
+  if (!scheduleTarget.value) return;
+  if (scheduleForm.value.scheduled && (!scheduleForm.value.interval_days || scheduleForm.value.interval_days < 1)) {
+    ElMessage.warning('请填写正确的生成周期（至少 1 天）');
+    return;
+  }
+  try {
+    await updateReportSchedule(
+      scheduleTarget.value.report_id,
+      scheduleForm.value.scheduled,
+      scheduleForm.value.scheduled ? scheduleForm.value.interval_days : undefined,
+    );
+    ElMessage.success(
+      scheduleForm.value.scheduled
+        ? `已设为每 ${scheduleForm.value.interval_days} 天自动生成`
+        : '已取消定时生成',
+    );
+    scheduleVisible.value = false;
+    await loadReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '定时设置失败');
+  }
+};
+
+/** 输入框聚焦时全选，避免在原数字后追加导致拼接（如 7 变 78） */
+const selectAll = (e: Event) => {
+  (e.target as HTMLInputElement)?.select();
 };
 
 const statusLabel: Record<string, string> = {
@@ -213,6 +265,13 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
+        <el-table-column label="定时" width="120" align="center">
+          <template #default="{ row }: { row: Report }">
+            <span v-if="row.scheduled" class="report-table__schedule">每 {{ row.interval_days ?? '-' }} 天</span>
+            <span v-else class="report-table__schedule report-table__schedule--off">—</span>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="created_at" label="创建时间" width="160" align="center" />
 
         <el-table-column label="状态" width="100" align="center">
@@ -226,12 +285,13 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="200" align="center" fixed="right">
+        <el-table-column label="操作" width="300" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
               <el-button size="small" @click="handleDownload(row)">下载</el-button>
-              <el-button size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
+              <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="success" plain @click="openSchedule(row)">定时</el-button>
+              <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
             </div>
           </template>
         </el-table-column>
@@ -272,10 +332,60 @@ onMounted(async () => {
               <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
             </select>
           </div>
+          <div class="gen-field">
+            <label class="gen-field__label">报告格式</label>
+            <select v-model="genForm.format" class="gen-field__input">
+              <option value="markdown">Markdown</option>
+              <option value="html">HTML</option>
+              <option value="pdf">PDF</option>
+            </select>
+          </div>
+          <div class="gen-field">
+            <label class="gen-field__label">定时生成</label>
+            <div class="gen-schedule">
+              <el-switch v-model="genForm.scheduled" />
+              <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
+            </div>
+          </div>
+          <div v-if="genForm.scheduled" class="gen-field">
+            <label class="gen-field__label">生成周期（天）</label>
+            <input v-model.number="genForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
+          </div>
         </div>
         <div class="modal-card__foot">
           <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
           <button class="gen-btn" @click="submitGenerate">生成报告</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 定时设置弹窗 -->
+    <div v-if="scheduleVisible" class="modal-mask" @click.self="scheduleVisible = false">
+      <div class="modal-card">
+        <div class="modal-card__head">
+          <h3>定时设置</h3>
+          <button class="modal-close" @click="scheduleVisible = false">✕</button>
+        </div>
+        <div class="modal-card__body">
+          <div class="gen-field">
+            <label class="gen-field__label">报告</label>
+            <div class="gen-field__static">{{ scheduleTarget?.title }}</div>
+          </div>
+          <div class="gen-field">
+            <label class="gen-field__label">定时生成</label>
+            <div class="gen-schedule">
+              <el-switch v-model="scheduleForm.scheduled" />
+              <span class="gen-schedule__hint">{{ scheduleForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
+            </div>
+          </div>
+          <div v-if="scheduleForm.scheduled" class="gen-field">
+            <label class="gen-field__label">生成周期（天）</label>
+            <input v-model.number="scheduleForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
+          </div>
+        </div>
+        <div class="modal-card__foot">
+          <button class="gen-btn gen-btn--ghost" @click="scheduleVisible = false">取消</button>
+          <button class="gen-btn" @click="submitSchedule">保存</button>
         </div>
       </div>
     </div>
@@ -394,6 +504,20 @@ onMounted(async () => {
   color: #6fe8d0;
 }
 
+.report-table__schedule {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: rgba(255, 177, 107, 0.12);
+  color: #ffc37d;
+}
+
+.report-table__schedule--off {
+  color: rgba(220, 234, 255, 0.35);
+  background: transparent;
+}
+
 .report-table__actions {
   display: flex;
   gap: 4px;
@@ -402,9 +526,9 @@ onMounted(async () => {
 
 /* 生成按钮 */
 .gen-btn {
-  padding: 10px 20px;
+  padding: 10px 22px;
   border: none;
-  border-radius: 10px;
+  border-radius: 999px;
   background: linear-gradient(135deg, #5ba6ff, #407acc);
   color: #fff;
   font-size: 0.9rem;
@@ -518,6 +642,27 @@ onMounted(async () => {
   background: #0b1628;
   color: #e8f1ff;
 }
+
+.gen-schedule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.gen-schedule__hint {
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.55);
+}
+
+.gen-field__static {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  background: rgba(8, 17, 31, 0.4);
+  color: #cfe2ff;
+  font-size: 0.88rem;
+}
 </style>
 
 <style>
@@ -578,5 +723,9 @@ onMounted(async () => {
   --el-button-hover-bg-color: rgba(220, 234, 255, 0.15) !important;
   --el-button-hover-border-color: rgba(220, 234, 255, 0.35) !important;
   --el-button-hover-text-color: #fff !important;
+}
+
+.report-center .el-button {
+  border-radius: 999px;
 }
 </style>

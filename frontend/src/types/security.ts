@@ -312,6 +312,12 @@ export interface Report {
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';
   file_url?: string;
+  /** 是否定时生成 */
+  scheduled?: boolean;
+  /** 定时生成周期（天） */
+  interval_days?: number;
+  /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
+  generated_by?: string;
 }
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================

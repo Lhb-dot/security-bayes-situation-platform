@@ -72,6 +72,10 @@ def create_report(
             content=payload.content,
             target_user_id=payload.target_user_id,
             file_path=payload.file_path,
+            scenario_id=payload.scenario_id,
+            format=payload.format,
+            scheduled=payload.scheduled,
+            interval_days=payload.interval_days,
         )
     )
 
