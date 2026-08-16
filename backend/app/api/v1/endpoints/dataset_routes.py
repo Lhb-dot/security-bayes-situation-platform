@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -60,7 +60,7 @@ def get_dataset(
 @router.get(
     "/{dataset_id}/fields-schema",
     response_model=ResponseModel,
-    summary="字段预览（需求 3.1.4：字段名/类型/角色，供推理表单生成）",
+    summary="字段预览（需求 3.1.4：字段名/类型/角色/样例值，供推理表单生成）",
 )
 def get_dataset_fields_schema(
     dataset_id: int,
@@ -74,13 +74,35 @@ def get_dataset_fields_schema(
     )
 
 
+@router.get(
+    "/{dataset_id}/preview",
+    response_model=ResponseModel,
+    summary="数据内容预览（需求 2.4：前 N 条数据/分页/标签列标记）",
+)
+def get_dataset_preview(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(50, ge=1, le=50, description="每页条数（最多 50）"),
+):
+    return unwrap(
+        DatasetService(db).get_preview(
+            current_user=current_user,
+            dataset_id=dataset_id,
+            page=page,
+            page_size=page_size,
+        )
+    )
+
+
 @router.post(
     "", response_model=ResponseModel, summary="上传数据集（仅管理员，版本号自动生成）"
 )
 def create_dataset(
     payload: DatasetCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).create(
@@ -90,6 +112,7 @@ def create_dataset(
             file_path=payload.file_path,
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
+            visibility=payload.visibility,
         )
     )
 
@@ -103,7 +126,7 @@ def update_dataset(
     dataset_id: int,
     payload: DatasetUpdate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).update(
@@ -124,7 +147,7 @@ def update_dataset(
 def disable_dataset(
     dataset_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).disable(current_user=current_user, dataset_id=dataset_id)
@@ -139,7 +162,7 @@ def disable_dataset(
 def delete_dataset(
     dataset_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
         DatasetService(db).delete(current_user=current_user, dataset_id=dataset_id)

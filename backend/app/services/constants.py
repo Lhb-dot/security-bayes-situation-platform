@@ -16,10 +16,23 @@ DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的业务数据字
 
 # ---------------------------------------------------------------------------
 # 用户与角色（数据库设计文档v2 2.1；需求文档 6.5.1）
+#
+# 三级角色（多场景复杂系统：最外层管理员 / 场景管理员 / 场景用户）：
+# - SUPER_ADMIN（最外层管理员）：平台方，管所有场景运行、平台数据/模型、创建场景管理员
+# - SCENARIO_ADMIN（场景管理员）：绑定一个场景，场景内最高权限（数据集/模型/训练/阈值/创建场景用户）
+# - SCENARIO_USER（场景用户）：绑定一个场景，使用已发布模型推理、看本人数据
 # ---------------------------------------------------------------------------
-ROLE_ADMIN = "ADMIN"
-ROLE_USER = "USER"
-ROLES = (ROLE_ADMIN, ROLE_USER)
+ROLE_SUPER_ADMIN = "SUPER_ADMIN"
+ROLE_SCENARIO_ADMIN = "SCENARIO_ADMIN"
+ROLE_SCENARIO_USER = "SCENARIO_USER"
+ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER)
+
+# 兼容别名（旧两级模型）：旧"管理员"=最外层管理员，旧"普通用户"=场景用户
+ROLE_ADMIN = ROLE_SUPER_ADMIN
+ROLE_USER = ROLE_SCENARIO_USER
+
+# 管理级角色集合（能做管理操作的角色）
+ADMIN_ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
 
 USER_STATUS_ENABLED = "ENABLED"
 USER_STATUS_DISABLED = "DISABLED"
@@ -29,6 +42,16 @@ USER_STATUSES = (USER_STATUS_ENABLED, USER_STATUS_DISABLED)
 USERNAME_MAX_LEN = 64
 PASSWORD_HASH_MAX_LEN = 128
 PASSWORD_MIN_LEN = 6  # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
+
+# 数据可见性分级（三级角色数据所有权：平台/公司/个人）
+DATASET_VISIBILITY_PLATFORM = "platform"   # 平台数据：最外层管理员管理，各场景基线
+DATASET_VISIBILITY_COMPANY = "company"     # 公司数据：场景管理员上传，最外层不可见
+DATASET_VISIBILITY_PERSONAL = "personal"   # 个人数据：场景用户上传，上级都不可见
+DATASET_VISIBILITIES = (
+    DATASET_VISIBILITY_PLATFORM,
+    DATASET_VISIBILITY_COMPANY,
+    DATASET_VISIBILITY_PERSONAL,
+)
 
 # ---------------------------------------------------------------------------
 # 场景（数据库设计文档v2 2.2；需求文档 1/2）

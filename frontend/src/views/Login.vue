@@ -7,9 +7,10 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { login } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
+const userStore = useUserStore();
 
 const username = ref('');
 const password = ref('');
@@ -24,9 +25,21 @@ const handleLogin = async () => {
   loading.value = true;
   errorMsg.value = '';
   try {
-    const user = await login(username.value.trim(), password.value);
-    ElMessage.success(`欢迎回来，${user.display_name}（${user.role === 'ADMIN' ? '管理员' : '普通用户'}）`);
-    router.push('/overview');
+    // 登录态统一走 Pinia userStore，与路由守卫同源，避免登录后仍被当作未登录而重定向回登录页
+    await userStore.login(username.value.trim(), password.value);
+    const user = userStore.currentUser;
+    if (!user) throw new Error('登录失败');
+    const roleText =
+      user.role === 'SUPER_ADMIN' ? '系统管理员' : user.role === 'SCENARIO_ADMIN' ? '管理员' : '用户';
+    ElMessage.success(`欢迎回来，${user.display_name}（${roleText}）`);
+    // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
+    if (user.role === 'SUPER_ADMIN') {
+      router.push('/overview');
+    } else if (user.scenario_ids?.[0]) {
+      router.push(`/scenarios/${user.scenario_ids[0]}/dashboard`);
+    } else {
+      router.push('/home');
+    }
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '登录失败';
   } finally {
@@ -48,7 +61,7 @@ const quickLogin = async (uname: string, pwd: string) => {
       <div class="login-card__head">
         <p class="eyebrow">Bayes Situation Awareness Platform</p>
         <h1>多场景贝叶斯分类态势感知系统</h1>
-        <p class="login-card__sub">网络 · 电力 · 航母甲板保障作业</p>
+        <p class="login-card__sub">网络 · 电力 · 地质 · 航母甲板保障作业</p>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">
@@ -84,10 +97,13 @@ const quickLogin = async (uname: string, pwd: string) => {
         <p class="login-demo__title">演示账号（密码均为 123456）</p>
         <div class="login-demo__btns">
           <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
-            管理员 admin
+            系统管理员 admin
+          </button>
+          <button class="login-demo__btn" @click="quickLogin('net_admin', '123456')">
+            管理员 net_admin
           </button>
           <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
-            普通用户 alice
+            用户 alice
           </button>
         </div>
       </div>

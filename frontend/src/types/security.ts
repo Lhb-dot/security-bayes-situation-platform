@@ -119,8 +119,8 @@ export interface DashboardSnapshot {
 
 // ===================== 多场景架构新增类型（不修改以上已有类型） =====================
 
-/** 三大场景标识 */
-export type ScenarioId = 'network_security' | 'power_system' | 'flightdeck_operation';
+/** 四场景标识（V3.0：新增地质风险场景） */
+export type ScenarioId = 'network_security' | 'power_system' | 'geological_risk' | 'flightdeck_operation';
 
 /** 场景定义 */
 export interface Scenario {
@@ -251,7 +251,23 @@ export interface ModelVersionRecord {
   is_default: boolean;         // 是否为"场景＋数据集"默认推荐模型
 }
 
-/** 风险事件（统一封装，适配三场景 — 符合需求 5.2 最小字段结构，v2.0 补齐必填字段） */
+/** 风险等级（大写枚举：风险事件/推理记录使用；历史大小写双轨，统一走 toRiskLevel 转换） */
+export type RiskLevelUpper = 'HIGH' | 'MEDIUM' | 'LOW';
+
+/**
+ * 风险等级大小写双轨转换工具（历史包袱：RiskEvent/InferenceRecord 为大写，
+ * Scenario/GlobalOverview 为小写）。改造期间统一入口，禁止用 as any 绕过。
+ * - 'critical' 归并为 'HIGH'
+ * - 无法识别的值兜底为 'LOW'
+ */
+export function toRiskLevel(level: string): RiskLevelUpper {
+  const normalized = level.toUpperCase();
+  if (normalized === 'HIGH' || normalized === 'MEDIUM' || normalized === 'LOW') return normalized;
+  if (normalized === 'CRITICAL') return 'HIGH';
+  return 'LOW';
+}
+
+/** 风险事件（统一封装，适配四场景 — 符合需求 5.2 最小字段结构，v2.0 补齐必填字段） */
 export interface RiskEvent {
   event_id: string;
   inference_record_id: string;      // 来源推理记录编号（需求 5.2）
@@ -263,8 +279,12 @@ export interface RiskEvent {
   model_version_id: string;
   original_label: string;
   risk_type: string;
-  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
+  risk_level: RiskLevelUpper;
   risk_score: number;
+  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  fault_position_x?: number | null;
+  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  fault_position_y?: number | null;
   occurred_at: string;
   status: '待处置' | '处理中' | '已处置';
   raw_features: Record<string, unknown>;
@@ -296,8 +316,8 @@ export interface Report {
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================
 
-/** 角色：第一阶段只设 ADMIN 与 USER 两种 */
-export type UserRole = 'ADMIN' | 'USER';
+/** 角色（三级）：最外层管理员 / 场景管理员 / 场景用户 */
+export type UserRole = 'SUPER_ADMIN' | 'SCENARIO_ADMIN' | 'SCENARIO_USER';
 
 /** 用户账号 */
 export interface UserAccount {
@@ -309,6 +329,8 @@ export interface UserAccount {
   created_at: string;
   created_by: string;
   last_login_at?: string;
+  /** 绑定可见场景（需求 1.1.6 用户-场景绑定；缺省表示未绑定，由管理员分配） */
+  scenario_ids?: ScenarioId[];
 }
 
 // ===================== v2.0 算法注册（需求 6.6） =====================
@@ -350,7 +372,7 @@ export interface InferenceRecord {
   input_features: Record<string, unknown>;
   original_label: string;                                 // 数据集原始预测标签
   risk_type: string;                                      // 风险类为映射后的统一类型，正常类为空
-  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';                  // 正常类为 LOW 占位
+  risk_level: RiskLevelUpper;                             // 正常类为 LOW 占位
   risk_score: number;                                     // 模型对风险类的输出概率
   is_risk: boolean;                                       // 是否为风险类
   occurred_at: string;
@@ -377,4 +399,60 @@ export interface ThresholdChangeLog {
   old_high_threshold: number;
   new_medium_threshold: number;
   new_high_threshold: number;
+}
+
+// ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================
+
+/** 数据预览行（需求 2.4：单元格为字符串或数值） */
+export type DataRow = Record<string, string | number>;
+
+/** 数据集数据预览（需求 2.4：只读分页浏览；后端单次最大返回 100 条，前端每页最多 50） */
+export interface DataPreview {
+  total: number;
+  page: number;
+  page_size: number;
+  rows: DataRow[];
+  label_field: string;
+}
+
+/** 航母甲板方向角对比点（需求 7.4：按时间步对比双机方向角，单位：度） */
+export interface RadarComparePoint {
+  step: number;
+  plane1_dir_angle_deg: number;
+  plane2_dir_angle_deg: number;
+}
+
+/** 场景看板特有图表数据（Task 009 各场景看板消费；字段缺失时图表空态降级） */
+export interface ScenarioDashboardCharts {
+  /** 网络安全（需求 7.1）：TOP 端口 / 流量分布 */
+  network?: {
+    top_ports: RankingItem[];
+    flow_distribution: TypeDistribution[];
+  };
+  /** 电力系统（需求 7.2）：设备健康度 / IssueType 分布 */
+  power?: {
+    device_health: RankingItem[];
+    issue_type_distribution: TypeDistribution[];
+  };
+  /** 地质风险（需求 7.3）：区域风险 / 数据集风险占比 / 关键因子贡献 */
+  geological?: {
+    region_risk: TypeDistribution[];
+    dataset_risk_share: TypeDistribution[];
+    factor_contribution: RankingItem[];
+  };
+  /** 航母甲板（需求 7.4）：间距变化折线 / 方向角对比雷达 */
+  flightdeck?: {
+    distance_trend: TrendPoint[];
+    radar_compare: RadarComparePoint[];
+  };
+}
+
+/** 场景看板聚合数据（需求第 7 节：三区布局数据源） */
+export interface ScenarioDashboardData {
+  scenario_id: ScenarioId;
+  metrics: MetricItem[];                  // 顶部指标行
+  trend_data: TrendPoint[];               // 通用趋势
+  risk_distribution: TypeDistribution[];  // 风险等级/类型分布
+  recent_events: RiskEvent[];             // 风险事件列表/时间线
+  charts: ScenarioDashboardCharts;        // 场景特有图表数据
 }

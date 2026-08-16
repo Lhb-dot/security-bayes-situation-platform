@@ -17,6 +17,7 @@
    默认模型下线时自动清除默认状态（需求 6.7.4.5）。
 4. 发布和下线必须记录操作管理员及操作时间（published_by / published_at）。
 """
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -39,7 +40,8 @@ from app.services.constants import (
     MODEL_STATUS_PUBLISHED,
     MODEL_STATUS_TRAINING,
     MODEL_STATUS_TRANSITIONS,
-    ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
 )
 from app.utils.common import (
@@ -65,6 +67,57 @@ class ModelVersionService(ServiceBase):
     @staticmethod
     def _to_dict(model: ModelVersion) -> dict:
         return row_to_dict(model)
+
+    def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
+        """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
+
+        检查项（任一失败 → 返回错误信息，禁止训练）：
+        - 字段重名：实际文件出现同名两列
+        - 标签字段缺失：label_field 不在实际文件中
+        - 字段缺失：注册 schema 定义的字段必须全部存在于实际文件
+        - 类型不匹配：注册类型（numeric/enum/string）与实际文件类型不一致
+        只读 ARFF 头部（1 行），对大文件开销可忽略。
+        """
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import read_arff
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            return f"数据集文件不存在: {path}"
+        try:
+            actual_fields, _ = read_arff(path, max_rows=1)
+        except Exception as exc:  # noqa: BLE001
+            return f"数据集文件解析失败: {exc}"
+
+        actual_names = [f["name"] for f in actual_fields]
+        seen: set = set()
+        for name in actual_names:
+            if name in seen:
+                return f"数据集文件字段重名: {name}，禁止训练"
+            seen.add(name)
+
+        if dataset.label_field not in actual_names:
+            return f"标签字段 {dataset.label_field} 缺失，缺少标签无法监督训练，禁止训练"
+
+        schema = dataset.fields_schema or []
+        schema_names = [f["name"] for f in schema]
+        missing = [name for name in schema_names if name not in actual_names]
+        if missing:
+            shown = "、".join(missing[:5])
+            suffix = " 等" if len(missing) > 5 else ""
+            return f"数据集缺少注册字段: {shown}{suffix}，禁止训练"
+
+        actual_type = {f["name"]: f["type"] for f in actual_fields}
+        for field in schema:
+            expect = field.get("type")
+            got = actual_type.get(field["name"])
+            if expect == "numeric" and got != "numeric":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+            if expect == "enum" and got != "enum":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+            if expect == "string" and got != "string":
+                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
+        return None
 
     def _transition(
         self, model: ModelVersion, to_status: str, operator_id: Optional[int] = None
@@ -93,12 +146,12 @@ class ModelVersionService(ServiceBase):
         algorithm_id: int,
         training_parameters: Dict[str, Any],
     ):
-        """启动训练：生成 TRAINING 状态的模型版本（仅 ADMIN）。
+        """启动训练：生成 TRAINING 状态的模型版本（管理级角色，场景管理员仅自己场景）。
 
         校验：场景存在；数据集属于所选场景（需求 1.1.3/2.2.3 禁止跨场景混合训练）；
         数据集 ACTIVE；算法 AVAILABLE；training_parameters 必须完整（需求 6.6.3.4）。
         """
-        self.require_admin(current_user)
+        self.require_scenario_admin_of(current_user, scenario_id)
 
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
@@ -126,6 +179,12 @@ class ModelVersionService(ServiceBase):
         err = validate_params_schema(algorithm.param_schema, training_parameters)
         if err:
             raise ServiceError(400, err)
+
+        # 训练数据与注册字段结构一致性校验（需求 3.1.1/3.1.2）：
+        # 字段缺失 / 重名 / 类型不匹配 / 标签字段缺失 → 禁止训练。
+        file_err = self._validate_dataset_file(dataset)
+        if file_err:
+            raise ServiceError(400, file_err)
 
         now = datetime.now(timezone.utc)
         model = ModelVersion(
@@ -204,10 +263,10 @@ class ModelVersionService(ServiceBase):
         self, current_user, model_id: int, evaluation_metrics: Dict[str, Any]
     ):
         """训练成功：TRAINING → DRAFT，保存评估指标（需求 6.7.2 转换条件）。"""
-        self.require_admin(current_user)
         if not isinstance(evaluation_metrics, dict):
             raise ServiceError(400, "evaluation_metrics 必须是 JSON 对象")
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         self._transition(model, MODEL_STATUS_DRAFT)
         model.evaluation_metrics = evaluation_metrics
         self.commit()
@@ -218,8 +277,8 @@ class ModelVersionService(ServiceBase):
         self, current_user, model_id: int, error_message: Optional[str] = None
     ):
         """训练失败：TRAINING → FAILED。"""
-        self.require_admin(current_user)
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         self._transition(model, MODEL_STATUS_FAILED)
         if error_message:
             metrics = dict(model.evaluation_metrics or {})
@@ -234,8 +293,8 @@ class ModelVersionService(ServiceBase):
     @service_call
     def publish(self, current_user, model_id: int):
         """发布模型：DRAFT → PUBLISHED；OFFLINE → PUBLISHED（重新发布，需求 6.7.5.7）。"""
-        self.require_admin(current_user)
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
         self.commit()
         return ok(data=self._to_dict(model), message="模型已发布")
@@ -246,8 +305,8 @@ class ModelVersionService(ServiceBase):
 
         需求 6.7.4.5：默认模型被下线时，系统必须同时取消其默认状态（is_default=False）。
         """
-        self.require_admin(current_user)
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         self._transition(model, MODEL_STATUS_OFFLINE)
         if model.is_default:
             model.is_default = False
@@ -261,8 +320,8 @@ class ModelVersionService(ServiceBase):
         约束：必须 PUBLISHED；每个"场景＋数据集"最多一个默认模型（先清除同范围旧默认，
         与 uk_mv_default 部分唯一索引保持一致）。
         """
-        self.require_admin(current_user)
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         if model.status != MODEL_STATUS_PUBLISHED:
             raise ServiceError(400, "只有已发布模型才能设为默认推荐模型")
         others = self.db.scalars(
@@ -281,9 +340,9 @@ class ModelVersionService(ServiceBase):
 
     @service_call
     def clear_default(self, current_user, model_id: int):
-        """取消默认推荐状态（仅 ADMIN）。"""
-        self.require_admin(current_user)
+        """取消默认推荐状态（管理级角色，仅场景内）。"""
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         if not model.is_default:
             raise ServiceError(400, "该模型不是默认推荐模型")
         model.is_default = False
@@ -305,13 +364,22 @@ class ModelVersionService(ServiceBase):
     ):
         """模型版本列表。
 
-        - 普通用户：仅返回 PUBLISHED（需求 6.7.3.4 / 6.7.5.1），忽略 status 过滤。
-        - 管理员：全部模型版本，可按状态过滤。
+        - 最外层管理员：全部模型版本，可按状态过滤。
+        - 场景管理员：自己场景内全部模型版本（管理视角）。
+        - 场景用户：仅已发布模型（需求 6.7.3.4 / 6.7.5.1）。
         """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         stmt = select(ModelVersion)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(ModelVersion.scenario_id == getattr(current_user, "scenario_id", None))
+        elif role != ROLE_SUPER_ADMIN:
+            # 场景用户：仅看到被分配场景的已发布模型
             stmt = stmt.where(ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES))
+            bound = getattr(current_user, "scenario_id", None)
+            if bound is None:
+                return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
+            stmt = stmt.where(ModelVersion.scenario_id == bound)
         elif status:
             stmt = stmt.where(ModelVersion.status == status)
         if scenario_id is not None:
@@ -323,15 +391,21 @@ class ModelVersionService(ServiceBase):
         result["items"] = [self._to_dict(m) for m in result["items"]]
         return ok(data=result)
 
+    def _can_view_model(self, current_user, model: ModelVersion) -> bool:
+        """模型可见性：SUPER_ADMIN 全部；SCENARIO_ADMIN 自己场景全部；SCENARIO_USER 仅已发布。"""
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            return True
+        if role == ROLE_SCENARIO_ADMIN:
+            return model.scenario_id == getattr(current_user, "scenario_id", None)
+        return model.status in USER_VISIBLE_MODEL_STATUSES
+
     @service_call
     def get(self, current_user, model_id: int):
         """模型版本详情（含评估指标）。"""
         self.require_login(current_user)
         model = self._get(model_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and model.status not in USER_VISIBLE_MODEL_STATUSES
-        ):
+        if not self._can_view_model(current_user, model):
             raise ServiceError(403, "无权限操作")
         return ok(data=self._to_dict(model))
 
@@ -350,16 +424,13 @@ class ModelVersionService(ServiceBase):
         )
         if model is None:
             return ok(data=None, message="当前范围暂无默认推荐模型")
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and model.status not in USER_VISIBLE_MODEL_STATUSES
-        ):
+        if not self._can_view_model(current_user, model):
             return ok(data=None, message="当前范围暂无可用默认推荐模型")
         return ok(data=self._to_dict(model))
 
     @service_call
     def compare(self, current_user, model_ids: List[int]):
-        """模型版本对比（需求 6.2 P1）：普通用户只比较已发布模型。
+        """模型版本对比（需求 6.2 P1）：场景用户只比较已发布模型。
 
         返回每个模型的评估指标（evaluation_metrics），供前端横向对比。
         """
@@ -369,10 +440,7 @@ class ModelVersionService(ServiceBase):
         results: List[dict] = []
         for model_id in model_ids:
             model = self._get(model_id)
-            if (
-                getattr(current_user, "role", None) != ROLE_ADMIN
-                and model.status not in USER_VISIBLE_MODEL_STATUSES
-            ):
+            if not self._can_view_model(current_user, model):
                 raise ServiceError(403, "无权限操作")
             results.append(
                 {
@@ -392,13 +460,13 @@ class ModelVersionService(ServiceBase):
     # ------------------------------------------------------------------
     @service_call
     def delete(self, current_user, model_id: int):
-        """删除模型版本（仅 ADMIN）。
+        """删除模型版本（管理级角色，仅场景内）。
 
         已被推理记录或风险事件引用的模型禁止删除，保持历史可追溯
         （需求 6.7.3.5 / 5.2.4）。
         """
-        self.require_admin(current_user)
         model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
         ir_count = self.db.scalar(
             select(func.count()).select_from(InferenceRecord).where(
                 InferenceRecord.model_version_id == model_id

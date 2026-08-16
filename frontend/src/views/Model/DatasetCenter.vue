@@ -6,6 +6,7 @@
  * 支持按场景筛选、数据集列表展示、数据集字段预览
  */
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { Dataset, DatasetField, DatasetVersion, ScenarioId, UserAccount } from '@/types/security';
 import {
@@ -20,10 +21,13 @@ import {
 } from '@/services/mockApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 
+const router = useRouter();
+
 /** 场景名称映射 */
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
@@ -57,7 +61,8 @@ const isFlightdeckSelected = computed(() => selectedScenario.value === ('flightd
 
 /** 当前登录用户（需求 2.3.1：仅管理员可上传/修改/停用/删除数据集） */
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
 // ===================== 上传数据集 / 创建新版本（需求 2.3.2 / 2.3.3） =====================
 const uploadDialogVisible = ref(false);
@@ -264,9 +269,19 @@ const closeFieldPreview = () => {
   fieldDialogFields.value = [];
 };
 
+/** 跳转数据集详情页（数据内容预览，需求 2.4） */
+const goDatasetDetail = (dataset: Dataset) => {
+  router.push({ path: `/datasets/${dataset.dataset_id}` });
+};
+
 // ===================== 生命周期 =====================
 onMounted(() => {
   currentUser.value = getCurrentUser();
+  // 管理员/用户：默认固定自己场景（不显示下拉）
+  if (currentUser.value?.role !== 'SUPER_ADMIN') {
+    const bound = currentUser.value?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   loadDatasets();
 });
 </script>
@@ -283,9 +298,9 @@ onMounted(() => {
       <button v-if="isAdmin" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
     <div class="dataset-center__toolbar">
-      <ScenarioSelector v-model="selectedScenario" />
+      <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
       <span class="dataset-center__count">
         共 <strong>{{ filteredDatasets.length }}</strong> 个数据集
       </span>
@@ -375,23 +390,16 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="170" align="center" fixed="right">
+        <el-table-column label="操作" width="260" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                @click="openFieldPreview(row)"
-              >
+              <el-button size="small" plain @click="openFieldPreview(row)">
                 字段预览
               </el-button>
-              <el-button
-                v-if="isAdmin"
-                size="small"
-                plain
-                @click="openVersionDialog(row)"
-              >
+              <el-button size="small" plain @click="goDatasetDetail(row)">
+                数据预览
+              </el-button>
+              <el-button v-if="isAdmin" size="small" plain @click="openVersionDialog(row)">
                 版本管理
               </el-button>
             </div>
@@ -400,12 +408,13 @@ onMounted(() => {
       </el-table>
     </div>
 
-    <!-- 字段预览弹窗 -->
+    <!-- 字段预览弹窗（append-to-body：逃出页面容器层叠上下文，不被 topbar 遮挡） -->
     <el-dialog
       v-model="fieldDialogVisible"
       :title="fieldDialogTitle"
       width="760px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
       @close="closeFieldPreview"
     >
@@ -418,6 +427,7 @@ onMounted(() => {
         v-else
         :data="fieldDialogFields"
         stripe
+        max-height="62vh"
         style="width: 100%"
         empty-text="该数据集暂无字段信息"
       >
@@ -454,12 +464,13 @@ onMounted(() => {
       </el-table>
     </el-dialog>
 
-    <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3） -->
+    <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="uploadDialogVisible"
       :title="uploadDialogMode === 'newVersion' ? `创建新版本 - ${newVersionTarget?.name ?? ''}` : '上传数据集'"
       width="680px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
     >
       <div class="upload-form">
@@ -478,6 +489,7 @@ onMounted(() => {
             <option value="network_security">网络安全</option>
             <option value="power_system">电力系统</option>
             <option value="flightdeck_operation">航母甲板作业</option>
+            <option value="geological_risk">地质风险</option>
           </select>
         </div>
         <div class="upload-form__row upload-form__row--split">
@@ -522,12 +534,13 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6） -->
+    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="versionDialogVisible"
       :title="versionDialogTitle"
       width="720px"
       top="6vh"
+      append-to-body
       :close-on-click-modal="false"
     >
       <div class="version-dialog-toolbar">
@@ -545,6 +558,7 @@ onMounted(() => {
       <el-table
         :data="versionList"
         stripe
+        max-height="62vh"
         style="width: 100%"
         empty-text="暂无版本记录"
       >
@@ -635,6 +649,16 @@ onMounted(() => {
 .dataset-center__count {
   font-size: 0.88rem;
   color: rgba(220, 234, 255, 0.6);
+  white-space: nowrap;
+}
+
+.dataset-center__scenario-tag {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 229, 200, 0.3);
+  background: rgba(83, 229, 200, 0.08);
+  color: #53e5c8;
+  font-size: 0.85rem;
   white-space: nowrap;
 }
 
@@ -835,6 +859,20 @@ onMounted(() => {
   align-items: center;
 }
 
+/* 三个操作按钮：暗色背景 + 圆角 */
+.dataset-ops .el-button {
+  border-radius: 999px;
+  border: 1px solid rgba(91, 166, 255, 0.35);
+  background: rgba(91, 166, 255, 0.14);
+  color: #9ad6ff;
+  font-size: 0.78rem;
+}
+.dataset-ops .el-button:hover {
+  background: rgba(91, 166, 255, 0.26);
+  border-color: rgba(91, 166, 255, 0.55);
+  color: #fff;
+}
+
 /* 版本徽章 */
 .version-badge {
   display: inline-block;
@@ -910,6 +948,9 @@ onMounted(() => {
 .upload-fields {
   display: grid;
   gap: 8px;
+  max-height: 45vh; /* 字段较多时列表内部竖向滚动，标题/X/底部按钮始终可见 */
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .upload-field-row {

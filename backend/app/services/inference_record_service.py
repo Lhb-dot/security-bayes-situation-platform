@@ -27,6 +27,8 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     INFERENCE_ALLOWED_MODEL_STATUSES,
     ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
@@ -145,10 +147,17 @@ class InferenceRecordService(ServiceBase):
         page: int = 1,
         page_size: int = 10,
     ):
-        """推理记录列表。普通用户强制按 user_id 过滤（后端强制，需求 6.8.2）。"""
+        """推理记录列表。
+
+        最外层管理员：全部记录；场景管理员：自己场景全部记录；
+        场景用户：强制按 user_id 过滤（后端强制，需求 6.8.2）。
+        """
         self.require_login(current_user)
+        role = getattr(current_user, "role", None)
         stmt = select(InferenceRecord)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(InferenceRecord.scenario_id == getattr(current_user, "scenario_id", None))
+        elif role != ROLE_SUPER_ADMIN:
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         if model_version_id is not None:
             stmt = stmt.where(InferenceRecord.model_version_id == model_version_id)

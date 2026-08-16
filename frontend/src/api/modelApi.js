@@ -1,3 +1,10 @@
+/**
+ * modelApi.js — 旧版接口（/api/model/*）
+ *
+ * @deprecated 已废弃：V3.0 起新代码禁止引用本模块，
+ * 请改用 src/api/*.ts（与后端 /api/v1 对齐的模块）或经 store 访问数据。
+ * 现有调用方（DashboardView 大屏）暂保留兼容，后续随旧大屏下线移除。
+ */
 import request from '@/utils/request'
 
 // 1. 获取数据集列表 GET /api/model/dataset-list

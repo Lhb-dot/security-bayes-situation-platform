@@ -2,6 +2,8 @@ import type {
   AlertRecord,
   AttackFlow,
   DashboardSnapshot,
+  DataPreview,
+  DataRow,
   HistoryPoint,
   MetricHistory,
   RankingItem,
@@ -59,6 +61,7 @@ let cache: { dashboard: DashboardSnapshot; alerts: AlertRecord[] } | null = null
 const random = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 const sample = <T>(list: T[]): T => list[random(0, list.length - 1)];
 const createIp = () => `${random(14, 223)}.${random(0, 255)}.${random(0, 255)}.${random(1, 254)}`;
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const projectWorld = (lon: number, lat: number) => ({
   x: ((lon + 180) / 360) * 100,
   y: ((90 - lat) / 180) * 100,
@@ -331,7 +334,93 @@ export const refreshMockData = () => {
 
 // ===================== 多场景 Mock 数据 =====================
 
-/** 三个场景元信息定义 — 数据集字段结构严格匹配需求第3节 ARFF 文件定义 */
+/**
+ * 航母甲板 279/281 字段生成器（需求 3.5.1 字段族）。
+ * 278 个输入特征程序化生成（禁止手写），+ Collision 标签 = 279；
+ * paired 版额外插入 PlaneID1/PlaneID2 = 281。字段名严格按字段族命名。
+ */
+const buildCarrierFields = (withPlaneIds: boolean): Omit<DatasetField, 'nullable' | 'field_role'>[] => {
+  /** 按步数生成等间隔时间步字段（如 Plane1_dir_angle_deg_1..49） */
+  const stepFields = (
+    name: string,
+    count: number,
+    description: string,
+    sample: string
+  ): Omit<DatasetField, 'nullable' | 'field_role'>[] =>
+    Array.from({ length: count }, (_, index) => ({
+      field_name: `${name}_${index + 1}`,
+      field_type: 'float',
+      description: `${description} ${index + 1}`,
+      sample_value: sample,
+    }));
+
+  const fields: Omit<DatasetField, 'nullable' | 'field_role'>[] = [
+    // 1/2 号机 49 步航向角
+    ...stepFields('Plane1_dir_angle_deg', 49, '1 号机第 N 步航向角（度）', '135.2'),
+    ...stepFields('Plane2_dir_angle_deg', 49, '2 号机第 N 步航向角（度）', '118.7'),
+    // 单机航向角统计量（5+5）
+    { field_name: 'Plane1_dir_mean_deg', field_type: 'float', description: '1 号机航向角均值（度）', sample_value: '126.8' },
+    { field_name: 'Plane1_dir_std_deg', field_type: 'float', description: '1 号机航向角标准差（度）', sample_value: '12.4' },
+    { field_name: 'Plane1_dir_max_deg', field_type: 'float', description: '1 号机航向角最大值（度）', sample_value: '158.0' },
+    { field_name: 'Plane1_dir_min_deg', field_type: 'float', description: '1 号机航向角最小值（度）', sample_value: '101.0' },
+    { field_name: 'Plane1_dir_range_deg', field_type: 'float', description: '1 号机航向角极差（度）', sample_value: '57.0' },
+    { field_name: 'Plane2_dir_mean_deg', field_type: 'float', description: '2 号机航向角均值（度）', sample_value: '112.4' },
+    { field_name: 'Plane2_dir_std_deg', field_type: 'float', description: '2 号机航向角标准差（度）', sample_value: '11.8' },
+    { field_name: 'Plane2_dir_max_deg', field_type: 'float', description: '2 号机航向角最大值（度）', sample_value: '149.0' },
+    { field_name: 'Plane2_dir_min_deg', field_type: 'float', description: '2 号机航向角最小值（度）', sample_value: '96.0' },
+    { field_name: 'Plane2_dir_range_deg', field_type: 'float', description: '2 号机航向角极差（度）', sample_value: '53.0' },
+    // 两机相对角度 49 步
+    ...stepFields('relative_angle_deg', 49, '两机第 N 步相对角度（度）', '32.5'),
+    // 相对角度统计量（4）
+    { field_name: 'relative_angle_mean_deg', field_type: 'float', description: '相对角度均值（度）', sample_value: '24.1' },
+    { field_name: 'relative_angle_std_deg', field_type: 'float', description: '相对角度标准差（度）', sample_value: '8.6' },
+    { field_name: 'relative_angle_max_deg', field_type: 'float', description: '相对角度最大值（度）', sample_value: '46.0' },
+    { field_name: 'relative_angle_min_deg', field_type: 'float', description: '相对角度最小值（度）', sample_value: '3.2' },
+    // 两机间距 50 步
+    ...stepFields('inter_distance', 50, '两机第 N 步间距', '185.4'),
+    // 间距统计量（6）
+    { field_name: 'inter_dist_mean', field_type: 'float', description: '两机间距均值', sample_value: '168.2' },
+    { field_name: 'inter_dist_std', field_type: 'float', description: '两机间距标准差', sample_value: '42.7' },
+    { field_name: 'inter_dist_min', field_type: 'float', description: '两机最小间距', sample_value: '12.5' },
+    { field_name: 'inter_dist_max', field_type: 'float', description: '两机最大间距', sample_value: '246.0' },
+    { field_name: 'inter_dist_range', field_type: 'float', description: '两机间距极差', sample_value: '233.5' },
+    { field_name: 'inter_dist_median', field_type: 'float', description: '两机间距中位数', sample_value: '170.0' },
+    // 起止间距与总体距离变化（4）
+    { field_name: 'start_dist', field_type: 'float', description: '起始间距', sample_value: '240.0' },
+    { field_name: 'end_dist', field_type: 'float', description: '结束间距', sample_value: '48.0' },
+    { field_name: 'dist_change', field_type: 'float', description: '总体距离变化量', sample_value: '-192.0' },
+    { field_name: 'dist_change_ratio', field_type: 'float', description: '总体距离变化率', sample_value: '-0.8' },
+    // 逐时间步距离变化量 49 步
+    ...stepFields('dist_change_step', 49, '第 N 步距离变化量', '-3.2'),
+    // 距离变化统计量（4）
+    { field_name: 'dist_change_mean_step', field_type: 'float', description: '逐时间步距离变化均值', sample_value: '-3.9' },
+    { field_name: 'dist_change_std_step', field_type: 'float', description: '逐时间步距离变化标准差', sample_value: '6.4' },
+    { field_name: 'dist_change_max_step', field_type: 'float', description: '逐时间步距离变化最大值', sample_value: '4.1' },
+    { field_name: 'dist_change_min_step', field_type: 'float', description: '逐时间步距离变化最小值', sample_value: '-12.6' },
+    // 单机总航程及差值、比值（4）
+    { field_name: 'Plane1_total_distance', field_type: 'float', description: '1 号机总航程', sample_value: '2820.5' },
+    { field_name: 'Plane2_total_distance', field_type: 'float', description: '2 号机总航程', sample_value: '2695.2' },
+    { field_name: 'total_dist_diff', field_type: 'float', description: '两机总航程差值', sample_value: '125.3' },
+    { field_name: 'total_dist_ratio', field_type: 'float', description: '两机总航程比值', sample_value: '1.0465' },
+  ];
+
+  if (withPlaneIds) {
+    fields.push(
+      { field_name: 'PlaneID1', field_type: 'string', description: '1 号机标识', sample_value: 'A01' },
+      { field_name: 'PlaneID2', field_type: 'string', description: '2 号机标识', sample_value: 'B02' },
+    );
+  }
+  fields.push({ field_name: 'Collision', field_type: 'string', description: '分类标签：0=未碰撞，1=发生碰撞', sample_value: '0' });
+
+  // 断言字段数量：278 输入 + Collision = 279；paired 版 + PlaneID1/2 = 281
+  const expected = withPlaneIds ? 281 : 279;
+  if (fields.length !== expected) {
+    throw new Error(`航母甲板字段生成数量异常：${fields.length}（期望 ${expected}）`);
+  }
+  return fields;
+};
+
+/** 四场景元信息定义 — 数据集字段结构严格匹配需求第3节 ARFF 文件定义 */
 const SCENARIO_META: Array<{
   id: ScenarioId;
   name: string;
@@ -473,10 +562,134 @@ const SCENARIO_META: Array<{
   {
     id: 'flightdeck_operation',
     name: '航母甲板保障作业态势感知',
-    description: '第一阶段仅预留接口，暂不配置实际数据集，不开展真实训练、推理和风险事件生成',
+    description: '识别舰载机双机协同作业轨迹中的碰撞风险，第一阶段进行二分类（Collision 0/1）',
     risk_level: 'high',
-    datasets: [],
+    datasets: [
+      {
+        name: 'Carrier Feature2 Biaoqian',
+        desc: '航母双机作业轨迹清洗标记版 Feature2_Cleaning_biaoqian，ARFF 格式，279 维特征',
+        format: 'arff',
+        fields: buildCarrierFields(false),
+      },
+      {
+        name: 'Carrier Feature2 Lisan',
+        desc: '航母双机作业轨迹清洗离散化版 Feature2_Cleaning_lisan，ARFF 格式，279 维特征',
+        format: 'arff',
+        fields: buildCarrierFields(false),
+      },
+      {
+        name: 'Carrier Paired Trail Biaoqian',
+        desc: '航母双机作业轨迹 paired_TrailData_feature2_biaoqian，ARFF 格式，281 维特征（含 PlaneID1/PlaneID2）',
+        format: 'arff',
+        fields: buildCarrierFields(true),
+      },
+    ],
     risk_types: ['FLIGHT_DECK_OPERATION_RISK'],
+  },
+  {
+    id: 'geological_risk',
+    name: '地质风险态势感知',
+    description: '识别区域滑坡风险，统一以"是否形成滑坡风险"为业务目标，风险样本为正类',
+    risk_level: 'high',
+    datasets: [
+      {
+        name: 'DIS_raw_data',
+        desc: '滑坡风险基础数据集 DIS_raw_data，ARFF 格式，19 维特征，5000 样本',
+        format: 'arff',
+        fields: [
+          { field_name: 'Lithology', field_type: 'string', description: '岩性类型（编码）', sample_value: '1' },
+          { field_name: 'Landuse', field_type: 'string', description: '土地利用类型（编码）', sample_value: '2' },
+          { field_name: 'Aspect', field_type: 'float', description: '坡向（度）', sample_value: '215.0' },
+          { field_name: 'Slope', field_type: 'float', description: '坡度（度）', sample_value: '28.5' },
+          { field_name: 'EVI', field_type: 'float', description: '增强型植被指数', sample_value: '0.42' },
+          { field_name: 'Elevation', field_type: 'float', description: '高程（m）', sample_value: '1250.0' },
+          { field_name: 'Roughness', field_type: 'float', description: '地表粗糙度', sample_value: '1.8' },
+          { field_name: 'Slope_roughness', field_type: 'float', description: '坡度粗糙度', sample_value: '0.35' },
+          { field_name: 'G_curvature', field_type: 'float', description: '总曲率', sample_value: '0.02' },
+          { field_name: 'Pla_curvature', field_type: 'float', description: '平面曲率', sample_value: '0.01' },
+          { field_name: 'Pro_curvature', field_type: 'float', description: '剖面曲率', sample_value: '0.015' },
+          { field_name: 'Relief', field_type: 'float', description: '地形起伏度', sample_value: '85.0' },
+          { field_name: 'LS', field_type: 'float', description: '坡度长度因子', sample_value: '3.2' },
+          { field_name: 'SPI', field_type: 'float', description: '水流功率指数', sample_value: '4.5' },
+          { field_name: 'TWI', field_type: 'float', description: '地形湿度指数', sample_value: '6.8' },
+          { field_name: 'Dis2roads', field_type: 'float', description: '距道路距离', sample_value: '120.0' },
+          { field_name: 'Dis2fault', field_type: 'float', description: '距断层距离', sample_value: '350.0' },
+          { field_name: 'Dis2river', field_type: 'float', description: '距河流距离', sample_value: '80.0' },
+          { field_name: 'Label', field_type: 'string', description: '分类标签：0=无滑坡风险，1=有滑坡风险', sample_value: '0' },
+        ],
+      },
+      {
+        name: 'DIS_Landslides',
+        desc: '滑坡发生记录数据集 DIS_Landslides，ARFF 格式，9 维特征，5185 样本',
+        format: 'arff',
+        fields: [
+          { field_name: 'dist_roads', field_type: 'float', description: '距道路距离', sample_value: '150.0' },
+          { field_name: 'DEM', field_type: 'float', description: '数字高程模型（高程）', sample_value: '980.0' },
+          { field_name: 'TWI', field_type: 'float', description: '地形湿度指数', sample_value: '7.1' },
+          { field_name: 'plan_curvature', field_type: 'float', description: '平面曲率', sample_value: '0.008' },
+          { field_name: 'profil_curvature', field_type: 'float', description: '剖面曲率', sample_value: '0.012' },
+          { field_name: 'Slope', field_type: 'float', description: '坡度（度）', sample_value: '32.0' },
+          { field_name: 'Geology', field_type: 'string', description: '地质岩组类型（编码）', sample_value: '2' },
+          { field_name: 'LandCover', field_type: 'string', description: '土地覆盖类型（编码）', sample_value: '3' },
+          { field_name: 'LS', field_type: 'string', description: '分类标签：0=未发生滑坡，1=发生滑坡', sample_value: '0' },
+        ],
+      },
+      {
+        name: 'DIS_Landslide_Causative_Factors',
+        desc: '滑坡致灾因子数据集 DIS_Landslide_Causative_Factors，ARFF 格式，13 维特征，5000 样本（类别高度不平衡）',
+        format: 'arff',
+        fields: [
+          { field_name: 'Aspect', field_type: 'string', description: '坡向（编码 1-8）', sample_value: '3' },
+          { field_name: 'DF', field_type: 'float', description: '距断层密度', sample_value: '0.45' },
+          { field_name: 'DR', field_type: 'float', description: '距道路密度', sample_value: '0.32' },
+          { field_name: 'DW', field_type: 'float', description: '距水系密度', sample_value: '0.28' },
+          { field_name: 'LULC', field_type: 'string', description: '土地利用与覆盖（编码）', sample_value: '4' },
+          { field_name: 'Lithology', field_type: 'string', description: '岩性类型（编码）', sample_value: '2' },
+          { field_name: 'NDVI', field_type: 'float', description: '归一化植被指数', sample_value: '0.38' },
+          { field_name: 'PC', field_type: 'float', description: '剖面曲率', sample_value: '0.01' },
+          { field_name: 'Precip', field_type: 'float', description: '降水量', sample_value: '1450.0' },
+          { field_name: 'TPI', field_type: 'float', description: '地形位置指数', sample_value: '0.6' },
+          { field_name: 'TWI', field_type: 'float', description: '地形湿度指数', sample_value: '6.5' },
+          { field_name: 'Temp', field_type: 'float', description: '温度', sample_value: '18.4' },
+          { field_name: 'landslides', field_type: 'string', description: '分类标签：观测到的滑坡数量（0 表示无滑坡，>0 表示有滑坡）', sample_value: '0' },
+        ],
+      },
+      {
+        name: 'DIS_Global_Landslide_Catalog_Export',
+        desc: '全球滑坡编目数据集 DIS_Global_Landslide_Catalog_Export，ARFF 格式，12 维特征，1000 样本（编目数据，不参与二分类训练）',
+        format: 'arff',
+        fields: [
+          { field_name: 'location_accuracy', field_type: 'string', description: '位置精度（如 exact、5km）', sample_value: 'exact' },
+          { field_name: 'landslide_category', field_type: 'string', description: '滑坡类别（如 landslide、mudslide）', sample_value: 'landslide' },
+          { field_name: 'landslide_trigger', field_type: 'string', description: '触发因素（如 rain、earthquake）', sample_value: 'rain' },
+          { field_name: 'landslide_setting', field_type: 'string', description: '滑坡环境（如 urban、natural_slope）', sample_value: 'natural_slope' },
+          { field_name: 'fatality_count', field_type: 'float', description: '死亡人数（区间）', sample_value: '0' },
+          { field_name: 'injury_count', field_type: 'float', description: '受伤人数（区间）', sample_value: '2' },
+          { field_name: 'country_name', field_type: 'string', description: '国家名称', sample_value: 'China' },
+          { field_name: 'admin_division_population', field_type: 'float', description: '行政区人口（区间）', sample_value: '500000' },
+          { field_name: 'gazeteer_distance', field_type: 'float', description: '距最近地名距离', sample_value: '1200.0' },
+          { field_name: 'longitude', field_type: 'float', description: '经度', sample_value: '103.8' },
+          { field_name: 'latitude', field_type: 'float', description: '纬度', sample_value: '30.5' },
+          { field_name: 'landslide_size', field_type: 'string', description: '分类标签：滑坡规模（small/medium/large/very_large/catastrophic/unknown）', sample_value: 'small' },
+        ],
+      },
+      {
+        name: 'DIS_guaruja_random',
+        desc: 'Guaruja 随机采样数据集 DIS_guaruja_random，ARFF 格式，8 维特征，200 样本',
+        format: 'arff',
+        fields: [
+          { field_name: 'twi', field_type: 'float', description: '地形湿度指数', sample_value: '6.2' },
+          { field_name: 'curvature', field_type: 'float', description: '曲率', sample_value: '0.015' },
+          { field_name: 'slope', field_type: 'float', description: '坡度（度）', sample_value: '25.0' },
+          { field_name: 'elevation', field_type: 'float', description: '高程', sample_value: '420.0' },
+          { field_name: 'aspect', field_type: 'float', description: '坡向', sample_value: '180.0' },
+          { field_name: 'lithology', field_type: 'string', description: '岩性类型（编码）', sample_value: '2' },
+          { field_name: 'land_use', field_type: 'string', description: '土地利用类型（编码）', sample_value: '3' },
+          { field_name: 'class', field_type: 'string', description: '分类标签：0=未发生滑坡，1=发生滑坡', sample_value: '0' },
+        ],
+      },
+    ],
+    risk_types: ['GEOLOGICAL_RISK'],
   },
 ];
 
@@ -491,13 +704,14 @@ interface UserRecord extends UserAccount {
 
 const SESSION_KEY = 'bayes_session_user_id';
 
-/** 预置账号：admin（管理员）/ alice、bob、carol（普通用户），密码均为 123456。
- * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐（admin=1/alice=2/bob=3）。 */
+/** 预置账号（三级角色）：SUPER_ADMIN（最外层）/ SCENARIO_ADMIN（场景管理员）/ SCENARIO_USER（场景用户）。
+ * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐。 */
 let userRecords: UserRecord[] = [
-  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
-  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '张梦琪', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'admin' },
-  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '李文昊', role: 'USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'admin' },
-  { user_id: 'user_000042', backend_id: 3, username: 'carol', display_name: '陈晓宇', role: 'USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin' },
+  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
+  { user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'] },
+  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'] },
+  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'] },
+  { user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk', 'flightdeck_operation'] },
 ];
 
 let sessionUser: UserAccount | null = null;
@@ -536,8 +750,20 @@ const requireLogin = (): UserAccount => {
 /** 校验管理员权限 */
 const requireAdmin = (): UserAccount => {
   const user = requireLogin();
-  if (user.role !== 'ADMIN') throw new Error('仅管理员可执行此操作');
+  if (user.role !== 'SUPER_ADMIN') throw new Error('仅最外层管理员可执行此操作');
   return user;
+};
+
+/**
+ * 场景访问校验（需求 1.1.6 / 6.5：普通用户仅可见绑定场景；管理员可见全部）。
+ * 注意：真实权限校验必须由后端完成，mock 层过滤仅为前端联调基线（需求 6.5.x）。
+ */
+const canAccessScenario = (user: UserAccount, scenarioId: ScenarioId): boolean =>
+  user.role === 'SUPER_ADMIN' || (user.scenario_ids ?? []).includes(scenarioId);
+
+/** 场景访问断言：无权访问时抛错 */
+const assertScenarioAccess = (user: UserAccount, scenarioId: ScenarioId): void => {
+  if (!canAccessScenario(user, scenarioId)) throw new Error('无权访问该场景');
 };
 
 /** 登录 */
@@ -567,18 +793,57 @@ export const changeOwnPassword = async (oldPassword: string, newPassword: string
   record.password = newPassword;
 };
 
-/** 用户列表（不含密码） */
-export const getUserList = async (): Promise<UserAccount[]> =>
-  simulateLatency(userRecords.map(({ password: _pw, ...rest }) => rest));
+/** 管理级角色校验：最外层管理员 或 场景管理员 */
+const requireManagement = (): UserAccount => {
+  const user = requireLogin();
+  if (user.role !== 'SUPER_ADMIN' && user.role !== 'SCENARIO_ADMIN') {
+    throw new Error('仅管理级角色可执行此操作');
+  }
+  return user;
+};
 
-/** 管理员创建普通用户账号（需求 6.2） */
+/** 场景管理员能否管理该用户（只能管理自己场景的用户） */
+const canManageUser = (operator: UserAccount, target: UserAccount): boolean => {
+  if (operator.role === 'SUPER_ADMIN') return true;
+  const bound = operator.scenario_ids?.[0];
+  if (!bound) return false;
+  return target.role !== 'SUPER_ADMIN' && (target.scenario_ids ?? []).includes(bound);
+};
+
+/** 用户列表（管理级角色）。
+ * 系统管理员：只列管理员（SCENARIO_ADMIN）；管理员：只列自己场景的用户（SCENARIO_USER，不含自己）。 */
+export const getUserList = async (): Promise<UserAccount[]> =>
+  simulateLatency((() => {
+    const operator = requireManagement();
+    let list: UserRecord[];
+    if (operator.role === 'SUPER_ADMIN') {
+      list = userRecords.filter((u) => u.role === 'SCENARIO_ADMIN');
+    } else {
+      list = userRecords.filter((u) => u.role === 'SCENARIO_USER' && canManageUser(operator, u) && u.user_id !== operator.user_id);
+    }
+    return list.map(({ password: _pw, ...rest }) => rest);
+  })());
+
+/** 管理级角色创建账号（系统管理员只建管理员；管理员只在自己场景建用户） */
 export const createUser = async (params: {
   username: string;
   display_name: string;
   password: string;
   role: UserRole;
+  /** 初始绑定场景（需求 1.1.6 用户-场景绑定；缺省/空数组表示无可见场景） */
+  scenario_ids?: ScenarioId[];
 }): Promise<UserAccount> => {
-  const operator = requireAdmin();
+  const operator = requireManagement();
+  if (params.role === 'SUPER_ADMIN') throw new Error('系统管理员账号由平台引导创建');
+  if (operator.role === 'SUPER_ADMIN') {
+    if (params.role !== 'SCENARIO_ADMIN') throw new Error('系统管理员只能创建管理员账号');
+  } else {
+    if (params.role !== 'SCENARIO_USER') throw new Error('管理员只能创建用户账号');
+    const bound = operator.scenario_ids?.[0];
+    if (!bound || !(params.scenario_ids ?? []).includes(bound)) {
+      throw new Error('管理员只能在自己场景内创建用户');
+    }
+  }
   if (!params.username || !params.password) throw new Error('用户名和密码不能为空');
   if (params.password.length < 6) throw new Error('密码长度至少为 6 位');
   if (userRecords.some((u) => u.username === params.username)) throw new Error('该用户名已存在');
@@ -594,27 +859,44 @@ export const createUser = async (params: {
     password: params.password,
     created_at: nowStr(),
     created_by: operator.user_id,
+    scenario_ids: params.scenario_ids ?? [],
   };
   userRecords.push(record);
   return { ...record };
 };
 
-/** 管理员重置普通用户密码 */
+/** 管理级角色重置用户密码（场景管理员仅自己场景） */
 export const resetUserPassword = async (userId: string, newPassword: string): Promise<void> => {
-  requireAdmin();
+  const operator = requireManagement();
   const record = userRecords.find((u) => u.user_id === userId);
   if (!record) throw new Error('用户不存在');
+  if (!canManageUser(operator, record)) throw new Error('无权限管理该用户');
   if (!newPassword || newPassword.length < 6) throw new Error('新密码长度至少为 6 位');
   record.password = newPassword;
 };
 
-/** 管理员启用/禁用普通用户账号（不能禁用自己的账号） */
+/** 管理级角色启用/禁用账号（不能禁用自己的账号；场景管理员仅自己场景） */
 export const setUserStatus = async (userId: string, status: 'active' | 'disabled'): Promise<void> => {
-  const operator = requireAdmin();
+  const operator = requireManagement();
   if (userId === operator.user_id) throw new Error('不能禁用当前登录的管理员账号');
   const record = userRecords.find((u) => u.user_id === userId);
   if (!record) throw new Error('用户不存在');
+  if (!canManageUser(operator, record)) throw new Error('无权限管理该用户');
   record.status = status;
+};
+
+/**
+ * 当前用户更新自己关注的场景（V3.0 需求：账号不被管理员分配场景，由用户自选）。
+ * 同步更新 userRecords 与会话中的当前用户，供其它页面实时读取。
+ */
+export const updateMyScenarios = async (scenarioIds: ScenarioId[]): Promise<UserAccount> => {
+  const user = requireLogin();
+  if (user.role === 'SUPER_ADMIN') throw new Error('最外层管理员可见全部场景，无需设置');
+  const record = userRecords.find((u) => u.user_id === user.user_id);
+  if (!record) throw new Error('用户不存在');
+  record.scenario_ids = [...scenarioIds];
+  sessionUser = { ...record };
+  return { ...record };
 };
 
 // ===================== v2.0 数据集版本（需求 2.3） =====================
@@ -631,6 +913,14 @@ const DATASET_DEF: Array<{
   { dataset_id: 'kdd_train_20_percent', name: 'KDDTrain+ 20 Percent', desc: '经典网络入侵检测数据集 KDDTrain+_20Percent0503，ARFF 格式，41 维特征', format: 'arff', scenario_id: 'network_security', record_count: 7556 },
   { dataset_id: 'nf_unsw_nb15_v2', name: 'NF-UNSW-NB15-v2', desc: '现代网络攻击数据集 NF-UNSW-NB15-v20503，ARFF 格式，41 维特征', format: 'arff', scenario_id: 'network_security', record_count: 23897 },
   { dataset_id: 'powergrid_knowledgebase', name: 'PowerGrid Knowledgebase', desc: '电力设备与监测系统知识库 powergrid_knowledgebase_dataset0503，ARFF 格式，9 维特征', format: 'arff', scenario_id: 'power_system', record_count: 2000 },
+  { dataset_id: 'dis_raw_data', name: 'DIS_raw_data', desc: '滑坡风险基础数据集 DIS_raw_data，ARFF 格式，19 维特征', format: 'arff', scenario_id: 'geological_risk', record_count: 5000 },
+  { dataset_id: 'dis_landslides', name: 'DIS_Landslides', desc: '滑坡发生记录数据集 DIS_Landslides，ARFF 格式，9 维特征', format: 'arff', scenario_id: 'geological_risk', record_count: 5185 },
+  { dataset_id: 'dis_causative_factors', name: 'DIS_Landslide_Causative_Factors', desc: '滑坡致灾因子数据集 DIS_Landslide_Causative_Factors，ARFF 格式，13 维特征', format: 'arff', scenario_id: 'geological_risk', record_count: 5000 },
+  { dataset_id: 'dis_global_catalog', name: 'DIS_Global_Landslide_Catalog_Export', desc: '全球滑坡编目数据集 DIS_Global_Landslide_Catalog_Export，ARFF 格式，12 维特征（编目数据，不参与二分类训练）', format: 'arff', scenario_id: 'geological_risk', record_count: 1000 },
+  { dataset_id: 'dis_guaruja_random', name: 'DIS_guaruja_random', desc: 'Guaruja 随机采样数据集 DIS_guaruja_random，ARFF 格式，8 维特征', format: 'arff', scenario_id: 'geological_risk', record_count: 200 },
+  { dataset_id: 'carrier_feature2_biaoqian', name: 'Carrier Feature2 Biaoqian', desc: '航母双机作业轨迹清洗标记版 Feature2_Cleaning_biaoqian，ARFF 格式，279 维特征', format: 'arff', scenario_id: 'flightdeck_operation', record_count: 507 },
+  { dataset_id: 'carrier_feature2_lisan', name: 'Carrier Feature2 Lisan', desc: '航母双机作业轨迹清洗离散化版 Feature2_Cleaning_lisan，ARFF 格式，279 维特征', format: 'arff', scenario_id: 'flightdeck_operation', record_count: 507 },
+  { dataset_id: 'carrier_paired_trail_biaoqian', name: 'Carrier Paired Trail Biaoqian', desc: '航母双机作业轨迹 paired_TrailData_feature2_biaoqian，ARFF 格式，281 维特征（含 PlaneID1/PlaneID2）', format: 'arff', scenario_id: 'flightdeck_operation', record_count: 507 },
 ];
 
 let datasetVersions: DatasetVersion[] = [];
@@ -663,6 +953,46 @@ const ENUM_VALUES: Record<string, Record<string, string[]>> = {
     SystemName: ['Load Balancing System', 'Fault Detection System', 'Topology Mapping Unit', 'Power Quality Analyzer'],
     IssueType: ['Data Loss', 'Harmonic Distortion', 'Unexpected Trip', 'Current Spike', 'Voltage Sag', 'Frequency Drift'],
     Target_Event: ['0', '1'],
+  },
+  dis_raw_data: {
+    Lithology: ['1', '2', '3', '4', '5'],
+    Landuse: ['1', '2', '3', '4'],
+    Label: ['0', '1'],
+  },
+  dis_landslides: {
+    Geology: ['1', '2', '3'],
+    LandCover: ['1', '2', '3', '4'],
+    LS: ['0', '1'],
+  },
+  dis_causative_factors: {
+    Aspect: ['1', '2', '3', '4', '5', '6', '7', '8'],
+    LULC: ['1', '2', '3', '4', '5'],
+    Lithology: ['1', '2', '3', '4', '5'],
+    landslides: ['0', '1'],
+  },
+  dis_global_catalog: {
+    location_accuracy: ['exact', '5km', '10km'],
+    landslide_category: ['landslide', 'mudslide', 'debris_flow', 'rock_fall'],
+    landslide_trigger: ['rain', 'earthquake', 'anthropogenic', 'snowmelt'],
+    landslide_setting: ['urban', 'natural_slope', 'agricultural'],
+    country_name: ['China', 'India', 'Nepal', 'Japan', 'USA'],
+    landslide_size: ['small', 'medium', 'large', 'very_large', 'catastrophic', 'unknown'],
+  },
+  dis_guaruja_random: {
+    lithology: ['1', '2', '3'],
+    land_use: ['1', '2', '3', '4'],
+    class: ['0', '1'],
+  },
+  carrier_feature2_biaoqian: {
+    Collision: ['0', '1'],
+  },
+  carrier_feature2_lisan: {
+    Collision: ['0', '1'],
+  },
+  carrier_paired_trail_biaoqian: {
+    PlaneID1: ['A01', 'A02', 'B01'],
+    PlaneID2: ['A01', 'A02', 'B01'],
+    Collision: ['0', '1'],
   },
 };
 
@@ -706,10 +1036,15 @@ const latestDatasetVersion = (datasetId: string): DatasetVersion | undefined =>
 /** 数据集列表（需求 6.2 数据集列表与字段预览；普通用户只看与已发布模型有关且启用的数据集） */
 export const getDatasetList = async (scenarioId?: ScenarioId): Promise<Dataset[]> => {
   const user = requireLogin();
+  if (scenarioId) assertScenarioAccess(user, scenarioId);
   let list = datasetVersions.filter((v) => v.dataset_version === latestDatasetVersion(v.dataset_id)?.dataset_version);
   if (scenarioId) list = list.filter((v) => v.scenario_id === scenarioId);
-  if (user.role === 'USER') {
-    list = list.filter((v) => v.enabled && modelVersions.some((m) => m.dataset_id === v.dataset_id && m.status === 'PUBLISHED'));
+  if (user.role === 'SCENARIO_USER') {
+    list = list.filter((v) =>
+      canAccessScenario(user, v.scenario_id) &&
+      v.enabled &&
+      modelVersions.some((m) => m.dataset_id === v.dataset_id && m.status === 'PUBLISHED')
+    );
   }
   return simulateLatency(
     list.map((v) => ({
@@ -732,14 +1067,91 @@ export const getDatasetList = async (scenarioId?: ScenarioId): Promise<Dataset[]
 };
 
 /** 获取数据集字段详情（当前启用版本的固定字段） */
-export const getDatasetFields = async (datasetId: string): Promise<DatasetField[]> => {
-  const v = latestDatasetVersion(datasetId);
+export const getDatasetFields = async (datasetId: string, datasetVersion?: string): Promise<DatasetField[]> => {
+  const user = requireLogin();
+  const v = datasetVersion
+    ? datasetVersions.find((item) => item.dataset_id === datasetId && item.dataset_version === datasetVersion)
+    : latestDatasetVersion(datasetId);
+  if (v) assertScenarioAccess(user, v.scenario_id);
   return simulateLatency(v?.fields ?? []);
+};
+
+/** 数据集预览行确定性种子（需求 2.4：跨分页稳定，禁止 Math.random） */
+const previewSeedOf = (datasetId: string, index: number): number => {
+  let h = 0;
+  for (let i = 0; i < datasetId.length; i++) {
+    h = (h * 31 + datasetId.charCodeAt(i)) % 2147483647;
+  }
+  return (h + index * 1103515245 + 12345) % 2147483647;
+};
+
+/** 预览标签列取值：按 mock 35% 风险率口径判风险类，优先取标签枚举值域 */
+const previewLabelValue = (f: DatasetField, seed: number): string => {
+  const isRisk = seed % 100 < 35;
+  if (f.enum_values && f.enum_values.length > 0) {
+    if (f.enum_values.length === 2) return f.enum_values[isRisk ? 1 : 0];
+    return f.enum_values[seed % f.enum_values.length];
+  }
+  return isRisk ? '1' : '0';
+};
+
+/** 按数据集字段定义生成一行预览数据（需求 2.4：确定性生成，跨分页稳定） */
+const buildPreviewRow = (v: DatasetVersion, index: number, labelField: string): DataRow => {
+  const seed = previewSeedOf(v.dataset_id, index);
+  const row: DataRow = {};
+  for (const f of v.fields) {
+    if (f.field_name === labelField) {
+      row[f.field_name] = previewLabelValue(f, seed);
+    } else if (f.enum_values && f.enum_values.length > 0) {
+      row[f.field_name] = f.enum_values[seed % f.enum_values.length];
+    } else if (f.field_type === 'int') {
+      const base = Number(f.sample_value);
+      row[f.field_name] = Number.isFinite(base) ? Math.max(0, base + (seed % 21) - 10) : seed % 100;
+    } else if (f.field_type === 'float') {
+      const base = Number(f.sample_value);
+      const value = Number.isFinite(base) ? base + ((seed % 2001) - 1000) / 100 : (seed % 1000) / 100;
+      row[f.field_name] = Number(value.toFixed(2));
+    } else {
+      row[f.field_name] = f.sample_value || `${f.field_name}_${index}`;
+    }
+  }
+  return row;
+};
+
+/**
+ * 数据集数据内容预览（需求 2.4：只读分页浏览；后端单次最大返回 100 条，前端每页最多 50）。
+ * 访问控制：普通用户仅可预览"与已发布模型关联且启用"的数据集。
+ * 注意：真实权限校验必须由后端完成，mock 层过滤仅为前端联调基线（需求 6.5.x）。
+ */
+export const getDatasetPreview = async (
+  datasetId: string,
+  params: { page: number; page_size: number }
+): Promise<DataPreview> => {
+  const user = requireLogin();
+  const v = latestDatasetVersion(datasetId);
+  if (!v) throw new Error('数据集不存在');
+  assertScenarioAccess(user, v.scenario_id);
+  if (
+    user.role === 'SCENARIO_USER' &&
+    !(v.enabled && modelVersions.some((m) => m.dataset_id === datasetId && m.status === 'PUBLISHED'))
+  ) {
+    throw new Error('无权访问该数据集');
+  }
+  const page = Math.max(1, params.page);
+  const pageSize = Math.min(100, Math.max(1, params.page_size));
+  const labelField = v.fields.find((f) => f.field_role === '分类标签')?.field_name ?? '';
+  const rows: DataRow[] = [];
+  const start = (page - 1) * pageSize;
+  const end = Math.min(start + pageSize, v.record_count);
+  for (let index = start; index < end; index++) {
+    rows.push(buildPreviewRow(v, index, labelField));
+  }
+  return { total: v.record_count, page, page_size: pageSize, rows, label_field: labelField };
 };
 
 /** 获取数据集全部版本（管理员查看） */
 export const getDatasetVersions = async (datasetId?: string): Promise<DatasetVersion[]> => {
-  requireLogin();
+  requireAdmin();
   const list = datasetId ? datasetVersions.filter((v) => v.dataset_id === datasetId) : [...datasetVersions];
   return simulateLatency(list);
 };
@@ -755,10 +1167,11 @@ export const uploadDataset = async (params: {
 }): Promise<DatasetVersion> => {
   requireAdmin();
   if (datasetVersions.some((v) => v.dataset_id === params.dataset_id)) throw new Error('该数据集编码已存在');
-  if (!params.fields.some((f) => f.field_role === '分类标签')) throw new Error('必须指定一个分类标签字段');
-  if (params.fields.some((f) => f.field_name === 'class' && f.field_role === '输入特征')) {
-    /* 字段名不允许重名 */
-  }
+  if (!params.fields.length) throw new Error('至少需要一个字段');
+  if (params.fields.some((f) => !f.field_name.trim())) throw new Error('字段名不能为空');
+  if (new Set(params.fields.map((f) => f.field_name)).size !== params.fields.length) throw new Error('字段名不能重复');
+  if (params.fields.some((f) => !['int', 'float', 'string'].includes(f.field_type))) throw new Error('字段类型不合法');
+  if (params.fields.filter((f) => f.field_role === '分类标签').length !== 1) throw new Error('必须且只能指定一个分类标签字段');
   const version: DatasetVersion = {
     dataset_version_id: `${params.dataset_id}@v1`,
     dataset_id: params.dataset_id,
@@ -784,7 +1197,9 @@ export const createDatasetVersion = async (datasetId: string, fields: DatasetFie
   const operator = requireAdmin();
   const old = latestDatasetVersion(datasetId);
   if (!old) throw new Error('数据集不存在');
-  if (!fields.some((f) => f.field_role === '分类标签')) throw new Error('必须指定一个分类标签字段');
+  if (!fields.length || fields.some((f) => !f.field_name.trim())) throw new Error('字段结构不完整');
+  if (new Set(fields.map((f) => f.field_name)).size !== fields.length) throw new Error('字段名不能重复');
+  if (fields.filter((f) => f.field_role === '分类标签').length !== 1) throw new Error('必须且只能指定一个分类标签字段');
   const nextNum = Number(old.dataset_version.replace('v', '')) + 1;
   const version: DatasetVersion = {
     ...old,
@@ -902,6 +1317,7 @@ let thresholds: Record<ScenarioId, ThresholdConfig> = {
   network_security: { scenario_id: 'network_security', medium_threshold: 0.45, high_threshold: 0.75, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
   power_system: { scenario_id: 'power_system', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
   flightdeck_operation: { scenario_id: 'flightdeck_operation', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
+  geological_risk: { scenario_id: 'geological_risk', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
 };
 
 let thresholdChangeLogs: ThresholdChangeLog[] = [];
@@ -995,6 +1411,17 @@ const initModelVersions = (): ModelVersionRecord[] => {
     // PowerGrid：1 个默认已发布 + 1 个草稿
     makeModelVersion('power_system', 'powergrid_knowledgebase', 'MAWNB', 'PUBLISHED', true),
     makeModelVersion('power_system', 'powergrid_knowledgebase', 'A2WNB', 'DRAFT', false),
+    // 地质风险：4 个可训练数据集各至少 1 个已发布；dis_raw_data 设默认（dis_global_catalog 为编目数据，不建模型）
+    makeModelVersion('geological_risk', 'dis_raw_data', 'PMWNB', 'PUBLISHED', true),
+    makeModelVersion('geological_risk', 'dis_raw_data', 'A2WNB', 'DRAFT', false),
+    makeModelVersion('geological_risk', 'dis_landslides', 'MAWNB', 'PUBLISHED', false),
+    makeModelVersion('geological_risk', 'dis_landslides', 'DIWNB', 'DRAFT', false),
+    makeModelVersion('geological_risk', 'dis_causative_factors', 'EMAWNB', 'PUBLISHED', false),
+    makeModelVersion('geological_risk', 'dis_guaruja_random', 'A2WNB', 'PUBLISHED', false),
+    // 航母甲板：3 个数据集各至少 1 个已发布
+    makeModelVersion('flightdeck_operation', 'carrier_feature2_biaoqian', 'PMWNB', 'PUBLISHED', true),
+    makeModelVersion('flightdeck_operation', 'carrier_feature2_lisan', 'EMAWNB', 'PUBLISHED', false),
+    makeModelVersion('flightdeck_operation', 'carrier_paired_trail_biaoqian', 'A2WNB', 'PUBLISHED', false),
   ];
   return list;
 };
@@ -1004,8 +1431,9 @@ const algoName = (id: string) => algorithmRegistry.find((a) => a.algorithm_id ==
 /** 获取模型版本列表（普通用户仅见 PUBLISHED，需求 6.7.5） */
 export const getModelVersions = async (scenarioId?: ScenarioId, datasetId?: string): Promise<ModelVersionRecord[]> => {
   const user = requireLogin();
+  if (scenarioId) assertScenarioAccess(user, scenarioId);
   let list = [...modelVersions];
-  if (user.role === 'USER') list = list.filter((m) => m.status === 'PUBLISHED');
+  if (user.role === 'SCENARIO_USER') list = list.filter((m) => canAccessScenario(user, m.scenario_id) && m.status === 'PUBLISHED');
   if (scenarioId) list = list.filter((m) => m.scenario_id === scenarioId);
   if (datasetId) list = list.filter((m) => m.dataset_id === datasetId);
   return simulateLatency(list.sort((a, b) => b.trained_at.localeCompare(a.trained_at)));
@@ -1020,7 +1448,9 @@ export const trainModel = async (params: {
   training_parameters: Record<string, unknown>;
 }): Promise<ModelVersionRecord & { train_time_s: number }> => {
   const operator = requireAdmin();
-  const v = latestDatasetVersion(params.dataset_id);
+  const v = datasetVersions.find((item) =>
+    item.dataset_id === params.dataset_id && item.dataset_version === params.dataset_version
+  );
   if (!v) throw new Error('数据集不存在');
   if (v.scenario_id !== params.scenario_id) throw new Error('数据集与场景不匹配，禁止跨场景训练');
   if (!v.enabled) throw new Error('该数据集版本已停用，不能用于新训练');
@@ -1118,12 +1548,173 @@ const riskTypeOf = (scenario_id: ScenarioId): string =>
     ? 'NETWORK_SECURITY_RISK'
     : scenario_id === 'power_system'
       ? 'POWER_SYSTEM_RISK'
-      : 'FLIGHT_DECK_OPERATION_RISK';
+      : scenario_id === 'geological_risk'
+        ? 'GEOLOGICAL_RISK'
+        : 'FLIGHT_DECK_OPERATION_RISK';
 
 /** 按数据集生成原始标签（需求 3.2/3.3/3.4） */
 const originalLabelOf = (dataset_id: string, isRisk: boolean): string => {
   if (dataset_id === 'kdd_train_20_percent') return isRisk ? 'anomaly' : 'normal';
+  // 地质（Label/LS/landslides/class）与航母（Collision）均为 0/1 二分类标签；
+  // dis_causative_factors 的 landslides 正类以 '1' 表示（>0，mock 简化）
   return isRisk ? '1' : '0';
+};
+
+/**
+ * 依据数据集字段定义生成一条完整输入特征样本（枚举取合法值域、数值取样例值附近），
+ * 供种子推理记录保存完整字段（需求 3.1：禁止缺列）。
+ */
+const buildSeedFeatures = (datasetId: string): Record<string, unknown> => {
+  const v = latestDatasetVersion(datasetId)!;
+  const features: Record<string, unknown> = {};
+  for (const f of v.fields) {
+    if (f.field_role !== '输入特征') continue;
+    if (f.enum_values && f.enum_values.length > 0) {
+      features[f.field_name] = sample(f.enum_values);
+    } else if (f.field_type === 'float' || f.field_type === 'int') {
+      const base = Number(f.sample_value);
+      const jitter = Math.abs(base) < 10 ? random(-1, 1) : random(-5, 5);
+      features[f.field_name] = Number((base + jitter).toFixed(3));
+    } else {
+      features[f.field_name] = f.sample_value;
+    }
+  }
+  return features;
+};
+
+/**
+ * 航母双机轨迹样本生成器（需求 3.5.1）：49 步方向角/相对角 + 50 步间距 + 派生统计量。
+ * 与 buildCarrierFields 共用同一字段命名，保证 validateInputFeatures 可过、看板可聚合。
+ */
+const buildCarrierTrajectoryFeatures = (collision: boolean, withPlaneIds: boolean): Record<string, unknown> => {
+  const features: Record<string, unknown> = {};
+  const p1Dir: number[] = [];
+  const p2Dir: number[] = [];
+  const relAngles: number[] = [];
+  const distances: number[] = [];
+  const base1 = random(100, 160);
+  const base2 = random(100, 160);
+  const startDist = random(140, 260);
+  const endDist = collision ? random(5, 20) : random(50, 100);
+  let prev1 = base1;
+  let prev2 = base2;
+  let total1 = 0;
+  let total2 = 0;
+  for (let step = 1; step <= 49; step++) {
+    const t = step / 49;
+    const d1 = Number((base1 + Math.sin(t * Math.PI * 2) * 8 + random(-4, 4)).toFixed(2));
+    const d2 = Number((base2 + Math.sin(t * Math.PI * 2 + 1.4) * 8 + random(-4, 4)).toFixed(2));
+    p1Dir.push(d1);
+    p2Dir.push(d2);
+    relAngles.push(Number(Math.abs(d1 - d2).toFixed(2)));
+    distances.push(Number((startDist - (startDist - endDist) * t + Math.sin(t * Math.PI * 3) * 2.5).toFixed(2)));
+    total1 += 55 + Math.abs(d1 - prev1) * 0.8;
+    total2 += 55 + Math.abs(d2 - prev2) * 0.8;
+    prev1 = d1;
+    prev2 = d2;
+  }
+  distances.push(Number(Math.max(2, endDist + random(-1, 1)).toFixed(2)));
+
+  const avg = (arr: number[]) => arr.reduce((s, v) => s + v, 0) / arr.length;
+  const std = (arr: number[]) => Math.sqrt(arr.reduce((s, v) => s + (v - avg(arr)) ** 2, 0) / arr.length);
+  const minOf = (arr: number[]) => Math.min(...arr);
+  const maxOf = (arr: number[]) => Math.max(...arr);
+  const round = (v: number) => Number(v.toFixed(2));
+
+  for (let i = 0; i < 49; i++) {
+    features[`Plane1_dir_angle_deg_${i + 1}`] = p1Dir[i];
+    features[`Plane2_dir_angle_deg_${i + 1}`] = p2Dir[i];
+    features[`relative_angle_deg_${i + 1}`] = relAngles[i];
+  }
+  for (let i = 0; i < 50; i++) {
+    features[`inter_distance_${i + 1}`] = distances[i];
+  }
+  features.Plane1_dir_mean_deg = round(avg(p1Dir));
+  features.Plane1_dir_std_deg = round(std(p1Dir));
+  features.Plane1_dir_max_deg = round(maxOf(p1Dir));
+  features.Plane1_dir_min_deg = round(minOf(p1Dir));
+  features.Plane1_dir_range_deg = round(maxOf(p1Dir) - minOf(p1Dir));
+  features.Plane2_dir_mean_deg = round(avg(p2Dir));
+  features.Plane2_dir_std_deg = round(std(p2Dir));
+  features.Plane2_dir_max_deg = round(maxOf(p2Dir));
+  features.Plane2_dir_min_deg = round(minOf(p2Dir));
+  features.Plane2_dir_range_deg = round(maxOf(p2Dir) - minOf(p2Dir));
+  features.relative_angle_mean_deg = round(avg(relAngles));
+  features.relative_angle_std_deg = round(std(relAngles));
+  features.relative_angle_max_deg = round(maxOf(relAngles));
+  features.relative_angle_min_deg = round(minOf(relAngles));
+  const sortedDist = [...distances].sort((a, b) => a - b);
+  features.inter_dist_mean = round(avg(distances));
+  features.inter_dist_std = round(std(distances));
+  features.inter_dist_min = round(minOf(distances));
+  features.inter_dist_max = round(maxOf(distances));
+  features.inter_dist_range = round(maxOf(distances) - minOf(distances));
+  features.inter_dist_median = round((sortedDist[24] + sortedDist[25]) / 2);
+  features.start_dist = round(distances[0]);
+  features.end_dist = round(distances[49]);
+  features.dist_change = round(distances[49] - distances[0]);
+  features.dist_change_ratio = Number(((distances[49] - distances[0]) / Math.max(distances[0], 1)).toFixed(4));
+  const distSteps: number[] = [];
+  for (let i = 0; i < 49; i++) {
+    const step = round(distances[i + 1] - distances[i]);
+    distSteps.push(step);
+    features[`dist_change_step_${i + 1}`] = step;
+  }
+  features.dist_change_mean_step = round(avg(distSteps));
+  features.dist_change_std_step = round(std(distSteps));
+  features.dist_change_max_step = round(maxOf(distSteps));
+  features.dist_change_min_step = round(minOf(distSteps));
+  features.Plane1_total_distance = Number(total1.toFixed(1));
+  features.Plane2_total_distance = Number(total2.toFixed(1));
+  features.total_dist_diff = Number(Math.abs(total1 - total2).toFixed(1));
+  features.total_dist_ratio = Number((total1 / Math.max(total2, 1)).toFixed(4));
+  if (withPlaneIds) {
+    features.PlaneID1 = sample(['A01', 'A02', 'B01']);
+    features.PlaneID2 = sample(['A01', 'A02', 'B01']);
+  }
+  return features;
+};
+
+/** 按场景生成风险事件描述（需求 5.7.2 口径：解释文本在事件生成时固化存储） */
+const describeRiskEvent = (scenario_id: ScenarioId, features: Record<string, unknown>): string => {
+  if (scenario_id === 'power_system') {
+    const voltage = features.VoltageLevel_kV !== undefined && features.VoltageLevel_kV !== null
+      ? `，当前电压 ${features.VoltageLevel_kV} kV`
+      : '';
+    return `模型判定该样本形成电力系统风险，问题现象为 ${(features.IssueType as string) || '未记录'}${voltage}。`;
+  }
+  if (scenario_id === 'geological_risk') {
+    // 不同地质数据集字段命名存在大小写差异，做回退取数，避免描述出现 "--"
+    const slope = features.Slope ?? features.slope ?? '--';
+    const twi = features.TWI ?? features.twi ?? '--';
+    const dis2fault = features.Dis2fault ?? features.Dis2roads ?? '--';
+    return `模型判定该样本存在滑坡风险，坡度 ${slope}°，TWI ${twi}，距断层 ${dis2fault}m。`;
+  }
+  if (scenario_id === 'flightdeck_operation') {
+    return `模型判定该双机作业轨迹存在碰撞风险，最小间距 ${features.inter_dist_min ?? '--'}，接近率 ${features.dist_change_ratio ?? '--'}，方向角偏差 ${features.relative_angle_max_deg ?? '--'}°。`;
+  }
+  // KDD 使用 service/protocol_type，NF-UNSW 使用 L4_DST_PORT/PROTOCOL，做回退取数
+  const port = features.L4_DST_PORT ?? features.service ?? '未记录';
+  const protocol = features.PROTOCOL ?? features.protocol_type ?? '未记录';
+  const bytes = features.IN_BYTES !== undefined && features.IN_BYTES !== null
+    ? `，流入字节数 ${features.IN_BYTES}`
+    : features.src_bytes !== undefined && features.src_bytes !== null
+      ? `，源端字节数 ${features.src_bytes}`
+      : '';
+  const retrans = features.RETRANSMITTED_IN_BYTES !== undefined && Number(features.RETRANSMITTED_IN_BYTES) > 0
+    ? `，流入重传 ${features.RETRANSMITTED_IN_BYTES} 字节`
+    : '';
+  return `模型判定该网络流量样本存在网络安全风险，目标端口 ${port}，协议 ${protocol}${bytes}${retrans}。`;
+};
+
+/** 航母甲板故障位置（需求 7.4.1）：x 随方向角偏差变化、y 随最小间距变化，坐标基准 1000px，clamp 限幅 */
+const flightdeckFaultPosition = (features: Record<string, unknown>): { fault_position_x: number; fault_position_y: number } => {
+  const relAngleMax = Number(features.relative_angle_max_deg ?? 30);
+  const minDist = Number(features.inter_dist_min ?? 100);
+  return {
+    fault_position_x: clamp(Math.round(500 + (relAngleMax - 30) * 8), 50, 950),
+    fault_position_y: clamp(Math.round(450 - minDist * 4), 40, 960),
+  };
 };
 
 /** 预置推理记录与风险事件（供告警中心/态势展示，同时满足访问控制演示） */
@@ -1138,20 +1729,38 @@ const initInferenceAndEvents = (): void => {
     is_risk: boolean;
     risk_prob: number;
     features: Record<string, unknown>;
+    /** 是否使用当前时间（今日告警演示，需求 7.1 今日告警数） */
+    today?: boolean;
   }> = [
-    { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'PMWNB', day: 25, hour: 10, is_risk: true, risk_prob: 0.93, features: { L4_SRC_PORT: 7636, L4_DST_PORT: 6452, PROTOCOL: 6 } },
-    { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'A2WNB', day: 26, hour: 14, is_risk: false, risk_prob: 0.21, features: { protocol_type: 'tcp', service: 'http', src_bytes: 486 } },
-    { user_id: 'user_000018', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'MAWNB', day: 28, hour: 9, is_risk: true, risk_prob: 0.78, features: { Component: 'Feeder', SystemName: 'Topology Mapping Unit', IssueType: 'Voltage Sag' } },
-    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'DIWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: { L4_SRC_PORT: 8080, L4_DST_PORT: 53, PROTOCOL: 17 } },
-    { user_id: 'user_000031', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'A2WNB', day: 29, hour: 11, is_risk: false, risk_prob: 0.3, features: { Component: 'Transformer', SystemName: 'Load Balancing System', IssueType: 'Harmonic Distortion' } },
-    { user_id: 'user_000042', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'EMAWNB', day: 30, hour: 20, is_risk: true, risk_prob: 0.85, features: { protocol_type: 'icmp', service: 'eco_i', src_bytes: 8 } },
+    // 网络安全/电力：features 保存完整字段（需求 5.5 raw_features 使用规则），支撑看板聚合
+    { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'PMWNB', day: 25, hour: 10, is_risk: true, risk_prob: 0.93, features: buildSeedFeatures('nf_unsw_nb15_v2') },
+    { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'A2WNB', day: 26, hour: 14, is_risk: false, risk_prob: 0.21, features: buildSeedFeatures('kdd_train_20_percent') },
+    { user_id: 'user_000018', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'MAWNB', day: 28, hour: 9, is_risk: true, risk_prob: 0.78, features: buildSeedFeatures('powergrid_knowledgebase') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'DIWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: buildSeedFeatures('nf_unsw_nb15_v2') },
+    { user_id: 'user_000031', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'A2WNB', day: 29, hour: 11, is_risk: false, risk_prob: 0.3, features: buildSeedFeatures('powergrid_knowledgebase') },
+    { user_id: 'user_000042', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'EMAWNB', day: 30, hour: 20, is_risk: true, risk_prob: 0.85, features: buildSeedFeatures('kdd_train_20_percent') },
+    // 今日告警（需求 7.1 指标卡"今日告警数"非零演示）
+    { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'A2WNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.88, today: true, features: buildSeedFeatures('nf_unsw_nb15_v2') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'DIWNB', day: 1, hour: 10, is_risk: true, risk_prob: 0.72, today: true, features: buildSeedFeatures('kdd_train_20_percent') },
+    // 地质风险（carol）：4 个可训练数据集，features 保存完整字段
+    { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'PMWNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.86, features: buildSeedFeatures('dis_raw_data') },
+    { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'A2WNB', day: 2, hour: 8, is_risk: false, risk_prob: 0.18, features: buildSeedFeatures('dis_raw_data') },
+    { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_landslides', algorithm_id: 'MAWNB', day: 3, hour: 11, is_risk: true, risk_prob: 0.74, features: buildSeedFeatures('dis_landslides') },
+    { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_causative_factors', algorithm_id: 'EMAWNB', day: 4, hour: 15, is_risk: true, risk_prob: 0.68, features: buildSeedFeatures('dis_causative_factors') },
+    { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_guaruja_random', algorithm_id: 'A2WNB', day: 5, hour: 10, is_risk: false, risk_prob: 0.22, features: buildSeedFeatures('dis_guaruja_random') },
+    // 航母甲板（carol）：三份 carrier 数据集，features 使用同一轨迹生成器
+    { user_id: 'user_000042', scenario_id: 'flightdeck_operation', dataset_id: 'carrier_feature2_biaoqian', algorithm_id: 'PMWNB', day: 2, hour: 14, is_risk: true, risk_prob: 0.9, features: buildCarrierTrajectoryFeatures(true, false) },
+    { user_id: 'user_000042', scenario_id: 'flightdeck_operation', dataset_id: 'carrier_feature2_lisan', algorithm_id: 'EMAWNB', day: 3, hour: 16, is_risk: false, risk_prob: 0.3, features: buildCarrierTrajectoryFeatures(false, false) },
+    { user_id: 'user_000042', scenario_id: 'flightdeck_operation', dataset_id: 'carrier_paired_trail_biaoqian', algorithm_id: 'A2WNB', day: 4, hour: 13, is_risk: true, risk_prob: 0.84, features: buildCarrierTrajectoryFeatures(true, true) },
   ];
 
   const byUser = (id: string) => userRecords.find((u) => u.user_id === id)?.username ?? id;
 
   for (const s of seed) {
     const model = modelVersions.find((m) => m.dataset_id === s.dataset_id && m.status !== 'FAILED') ?? modelVersions.find((m) => m.dataset_id === s.dataset_id)!;
-    const occurred_at = `2026-07-${String(s.day).padStart(2, '0')} ${String(s.hour).padStart(2, '0')}:${String(random(0, 59)).padStart(2, '0')}:00`;
+    const occurred_at = s.today
+      ? nowStr()
+      : `2026-07-${String(s.day).padStart(2, '0')} ${String(s.hour).padStart(2, '0')}:${String(random(0, 59)).padStart(2, '0')}:00`;
     const record: InferenceRecord = {
       inference_record_id: `infer_${String(inferSeq++).padStart(6, '0')}`,
       user_id: s.user_id,
@@ -1170,8 +1779,9 @@ const initInferenceAndEvents = (): void => {
     };
     inferenceRecords.push(record);
     if (s.is_risk) {
+      const fault = s.scenario_id === 'flightdeck_operation' ? flightdeckFaultPosition(s.features) : null;
       riskEvents.push({
-        event_id: `${s.scenario_id === 'network_security' ? 'evt_network' : 'evt_power'}_${String(eventSeq++).padStart(6, '0')}`,
+        event_id: `evt_${s.scenario_id}_${String(eventSeq++).padStart(6, '0')}`,
         inference_record_id: record.inference_record_id,
         created_by_user_id: s.user_id,
         scenario_id: s.scenario_id,
@@ -1183,12 +1793,12 @@ const initInferenceAndEvents = (): void => {
         risk_type: record.risk_type,
         risk_level: record.risk_level,
         risk_score: s.risk_prob,
+        fault_position_x: fault?.fault_position_x,
+        fault_position_y: fault?.fault_position_y,
         occurred_at,
         status: '待处置',
         raw_features: s.features,
-        description: s.scenario_id === 'power_system'
-          ? `模型判定该样本形成电力系统风险，问题现象为 ${(s.features.IssueType as string) ?? '未记录'}。`
-          : `模型判定该网络流量样本存在网络安全风险。`,
+        description: describeRiskEvent(s.scenario_id, s.features),
       });
     }
   }
@@ -1197,9 +1807,14 @@ const initInferenceAndEvents = (): void => {
 };
 
 /** 过滤风险事件：普通用户强制按本人过滤，管理员查全平台（需求 5.2 访问控制 / 6.8） */
-const filterRiskEvents = (user: UserAccount, scenarioId?: ScenarioId): RiskEvent[] => {
+const filterRiskEvents = (user: UserAccount, scenarioId?: ScenarioId, userId?: string): RiskEvent[] => {
   let list = [...riskEvents];
-  if (user.role === 'USER') list = list.filter((e) => e.created_by_user_id === user.user_id);
+  if (user.role === 'SCENARIO_USER') {
+    if (scenarioId) assertScenarioAccess(user, scenarioId);
+    list = list.filter((e) => canAccessScenario(user, e.scenario_id));
+    list = list.filter((e) => e.created_by_user_id === user.user_id);
+  }
+  else if (userId) list = list.filter((e) => e.created_by_user_id === userId);
   if (scenarioId) list = list.filter((e) => e.scenario_id === scenarioId);
   return list.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
 };
@@ -1211,7 +1826,11 @@ export const getRiskEvents = async (scenarioId?: ScenarioId): Promise<RiskEvent[
 /** 过滤推理记录：普通用户仅本人，管理员全部或指定用户（需求 6.2 / 6.8） */
 const filterInferenceRecords = (user: UserAccount, scenarioId?: ScenarioId, userId?: string): InferenceRecord[] => {
   let list = [...inferenceRecords];
-  if (user.role === 'USER') list = list.filter((r) => r.user_id === user.user_id);
+  if (user.role === 'SCENARIO_USER') {
+    if (scenarioId) assertScenarioAccess(user, scenarioId);
+    list = list.filter((r) => canAccessScenario(user, r.scenario_id));
+    list = list.filter((r) => r.user_id === user.user_id);
+  }
   else if (userId) list = list.filter((r) => r.user_id === userId);
   if (scenarioId) list = list.filter((r) => r.scenario_id === scenarioId);
   return list.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
@@ -1268,9 +1887,9 @@ export const executeInference = async (params: {
   const model = modelVersions.find((m) => m.model_version_id === params.model_version_id);
   if (!model) throw new Error('模型版本不存在');
   if (model.status !== 'PUBLISHED') throw new Error('仅已发布模型可执行推理');
+  assertScenarioAccess(user, model.scenario_id);
   validateInputFeatures(model.dataset_id, params.input_features);
   const cfg = thresholds[model.scenario_id];
-  const issueType = (params.input_features.IssueType as string) ?? '';
   // 模拟模型输出：约 35% 判为风险类（risk_score 为模型对风险类的输出概率，需求 5.4）
   const isRisk = Math.random() < 0.35;
   const risk_probability = isRisk
@@ -1305,8 +1924,9 @@ export const executeInference = async (params: {
 
   let generated_event_id: string | undefined;
   if (isRisk) {
+    const fault = model.scenario_id === 'flightdeck_operation' ? flightdeckFaultPosition(params.input_features) : null;
     const event: RiskEvent = {
-      event_id: `${model.scenario_id === 'network_security' ? 'evt_network' : 'evt_power'}_${String(eventSeq++).padStart(6, '0')}`,
+      event_id: `evt_${model.scenario_id}_${String(eventSeq++).padStart(6, '0')}`,
       inference_record_id: record.inference_record_id,
       created_by_user_id: user.user_id,
       scenario_id: model.scenario_id,
@@ -1318,12 +1938,12 @@ export const executeInference = async (params: {
       risk_type: record.risk_type,
       risk_level,
       risk_score: risk_probability,
+      fault_position_x: fault?.fault_position_x,
+      fault_position_y: fault?.fault_position_y,
       occurred_at,
       status: '待处置',
       raw_features: params.input_features,
-      description: model.scenario_id === 'power_system'
-        ? `模型判定该样本形成电力系统风险，问题现象为 ${issueType || '未记录'}。`
-        : '模型判定该网络流量样本存在网络安全风险。',
+      description: describeRiskEvent(model.scenario_id, params.input_features),
     };
     riskEvents.unshift(event);
     generated_event_id = event.event_id;
@@ -1332,7 +1952,11 @@ export const executeInference = async (params: {
   const recommendations = isRisk
     ? (model.scenario_id === 'power_system'
         ? ['通知运维人员现场核查目标设备', '结合 IssueType 排查对应问题现象', '加强该设备链路监测']
-        : ['立即封禁源地址并同步边界防火墙策略', '保留样本日志用于模型复盘', '加强该主机访问控制']
+        : model.scenario_id === 'geological_risk'
+          ? ['通知地质灾害监测人员现场核查', '结合坡度/TWI/距断层等因子评估', '加强该区域监测频次']
+          : model.scenario_id === 'flightdeck_operation'
+            ? ['通知甲板指挥员复核双机间距', '核查方向角偏差与接近率', '暂停该作业窗口并复盘轨迹']
+            : ['立即封禁源地址并同步边界防火墙策略', '保留样本日志用于模型复盘', '加强该主机访问控制']
       ).join('；')
     : '该样本判定为正常，无需处置。';
 
@@ -1344,11 +1968,7 @@ export const executeInference = async (params: {
     recommendation: recommendations,
     model_used: `${algoName(model.algorithm_id)}（${model.model_version_id}）`,
     is_risk: isRisk,
-    description: isRisk
-      ? model.scenario_id === 'power_system'
-        ? `模型判定该样本形成电力系统风险，问题现象为 ${issueType || '未记录'}。`
-        : '模型判定该网络流量样本存在网络安全风险。'
-      : '模型判定该样本为正常样本。',
+    description: isRisk ? describeRiskEvent(model.scenario_id, params.input_features) : '模型判定该样本为正常样本。',
     inference_record_id: record.inference_record_id,
     generated_event_id,
   });
@@ -1361,11 +1981,36 @@ export const updateRiskEventStatus = async (eventId: string, status: RiskEvent['
   event.status = status;
 };
 
+/**
+ * 获取单个风险事件详情（需求 5.7 / 5.2 访问控制：普通用户仅本人事件）。
+ * 注意：真实权限校验必须由后端完成，mock 层过滤仅为前端联调基线（需求 6.5.x）。
+ */
+export const getRiskEventById = async (eventId: string): Promise<RiskEvent> => {
+  const user = requireLogin();
+  const event = riskEvents.find((e) => e.event_id === eventId);
+  if (!event) throw new Error('风险事件不存在');
+  assertScenarioAccess(user, event.scenario_id);
+  if (user.role === 'SCENARIO_USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
+  return event;
+};
+
+/**
+ * 按推理记录查询关联风险事件（供推理记录页"查看事件"跳转；无关联返回 null）。
+ * 访问控制与 getRiskEventById 一致。
+ */
+export const getRiskEventByInferenceRecordId = async (recordId: string): Promise<RiskEvent | null> => {
+  const user = requireLogin();
+  const event = riskEvents.find((e) => e.inference_record_id === recordId);
+  if (!event) return null;
+  assertScenarioAccess(user, event.scenario_id);
+  if (user.role === 'SCENARIO_USER' && event.created_by_user_id !== user.user_id) throw new Error('无权查看该事件');
+  return event;
+};
+
 // ===================== 场景 / 态势 / 报告（角色感知，需求 6.8） =====================
 
-/** 生成场景卡片数据 — 航母甲板第一阶段为 inactive（需求 1.1）；统计口径按当前用户数据范围（需求 6.8） */
+/** 生成场景卡片数据 — 四场景均已接入（需求 1.1）；统计口径按当前用户数据范围（需求 6.8） */
 const generateScenarioCard = (meta: typeof SCENARIO_META[number], user?: UserAccount): Scenario => {
-  const isFlightdeck = meta.id === 'flightdeck_operation';
   const events = user ? filterRiskEvents(user, meta.id) : [];
   const highCount = events.filter((e) => e.risk_level === 'HIGH').length;
   return {
@@ -1373,12 +2018,12 @@ const generateScenarioCard = (meta: typeof SCENARIO_META[number], user?: UserAcc
     name: meta.name,
     description: meta.description,
     risk_level: meta.risk_level,
-    risk_score: isFlightdeck ? 0 : events.length > 0 ? Math.round(events.reduce((s, e) => s + e.risk_score, 0) / events.length * 100) : 0,
-    event_count: isFlightdeck ? 0 : events.length,
-    high_risk_count: isFlightdeck ? 0 : highCount,
-    dataset_count: isFlightdeck ? 0 : meta.datasets.length,
-    model_count: isFlightdeck ? 0 : modelVersions.filter((m) => m.scenario_id === meta.id && m.status === 'PUBLISHED').length,
-    status: isFlightdeck ? 'inactive' : 'active',
+    risk_score: events.length > 0 ? Math.round(events.reduce((s, e) => s + e.risk_score, 0) / events.length * 100) : 0,
+    event_count: events.length,
+    high_risk_count: highCount,
+    dataset_count: meta.datasets.length,
+    model_count: modelVersions.filter((m) => m.scenario_id === meta.id && m.status === 'PUBLISHED').length,
+    status: 'active',
   };
 };
 
@@ -1395,14 +2040,13 @@ const makeTrendPoint = (base: number, primaryType: string, label: string): Trend
 
 /** 按当前用户可见事件生成趋势基线 */
 const trendBaseOf = (events: RiskEvent[], user: UserAccount, defaultBase: number): number => {
-  if (events.length === 0) return user.role === 'ADMIN' ? defaultBase : Math.max(18, Math.round(defaultBase * 0.35));
+  if (events.length === 0) return user.role === 'SUPER_ADMIN' ? defaultBase : Math.max(18, Math.round(defaultBase * 0.35));
   const avg = events.reduce((s, e) => s + e.risk_score, 0) / events.length;
   return Math.max(18, Math.min(90, Math.round(avg * 100)));
 };
 
-/** 场景详情态势（按当前用户数据范围统计，未接入场景不使用虚构数据） */
+/** 场景详情态势（按当前用户数据范围统计；四场景均已接入） */
 const generateScenarioDetail = (meta: typeof SCENARIO_META[number], user: UserAccount): ScenarioDetail => {
-  const isFlightdeck = meta.id === 'flightdeck_operation';
   const events = filterRiskEvents(user, meta.id);
   const records = filterInferenceRecords(user, meta.id);
   const riskCount = events.length;
@@ -1410,21 +2054,18 @@ const generateScenarioDetail = (meta: typeof SCENARIO_META[number], user: UserAc
   const normalCount = records.filter((r) => !r.is_risk).length;
   const primaryType = meta.risk_types[0] ?? 'NETWORK_SECURITY_RISK';
   const base = trendBaseOf(events, user, 58);
-  const metrics = isFlightdeck
-    ? []
-    : [
-        { id: 'risk-score', label: '当前风险分数', value: riskCount > 0 ? Math.round(avgScore * 100) : 0, trend: 0 },
-        { id: 'event-rate', label: '风险事件数', value: riskCount, trend: 0 },
-        { id: 'model-accuracy', label: '推理记录数', value: records.length, trend: 0 },
-        { id: 'response-time', label: '已处置事件数', value: events.filter((e) => e.status === '已处置').length, trend: 0 },
-      ];
   return {
     scenario: generateScenarioCard(meta, user),
-    metrics,
-    trend_data: isFlightdeck ? [] : Array.from({ length: 12 }, (_, i) =>
+    metrics: [
+      { id: 'risk-score', label: '当前风险分数', value: riskCount > 0 ? Math.round(avgScore * 100) : 0, trend: 0 },
+      { id: 'event-rate', label: '风险事件数', value: riskCount, trend: 0 },
+      { id: 'model-accuracy', label: '推理记录数', value: records.length, trend: 0 },
+      { id: 'response-time', label: '已处置事件数', value: events.filter((e) => e.status === '已处置').length, trend: 0 },
+    ],
+    trend_data: Array.from({ length: 12 }, (_, i) =>
       makeTrendPoint(base, primaryType, `${String(i * 2).padStart(2, '0')}:00`)
     ),
-    risk_distribution: isFlightdeck ? [] : [
+    risk_distribution: [
       { label: '正常', value: Math.max(normalCount, 0), color: '#53e5c8' },
       { label: '风险', value: riskCount, color: '#ff7b72' },
     ],
@@ -1434,7 +2075,8 @@ const generateScenarioDetail = (meta: typeof SCENARIO_META[number], user: UserAc
 
 /** 全局态势总览（按当前用户数据范围统计） */
 const generateGlobalOverview = (user: UserAccount): GlobalOverview => {
-  const scenarios = SCENARIO_META.map((m) => generateScenarioCard(m, user));
+  const accessible = SCENARIO_META.filter((m) => canAccessScenario(user, m.id));
+  const scenarios = accessible.map((m) => generateScenarioCard(m, user));
   const activeEvents = filterRiskEvents(user);
   const globalScore = activeEvents.length > 0
     ? Math.round(activeEvents.reduce((s, e) => s + e.risk_score, 0) / activeEvents.length * 100)
@@ -1442,7 +2084,7 @@ const generateGlobalOverview = (user: UserAccount): GlobalOverview => {
   return {
     global_risk_score: globalScore,
     global_risk_level: globalScore >= 75 ? 'high' : globalScore >= 45 ? 'medium' : 'low',
-    scenario_count: SCENARIO_META.length,
+    scenario_count: accessible.length,
     high_risk_count: activeEvents.filter((e) => e.risk_level === 'HIGH').length,
     active_model_count: modelVersions.filter((m) => m.status === 'PUBLISHED').length,
     scenarios,
@@ -1454,25 +2096,24 @@ const generateGlobalOverview = (user: UserAccount): GlobalOverview => {
 
 /** 态势分析数据（按当前用户数据范围统计） */
 const generateSituationData = (meta: typeof SCENARIO_META[number], user: UserAccount): SituationData => {
-  const isFlightdeck = meta.id === 'flightdeck_operation';
   const events = filterRiskEvents(user, meta.id);
   const records = filterInferenceRecords(user, meta.id);
   const primaryType = meta.risk_types[0] ?? 'NETWORK_SECURITY_RISK';
   const base = trendBaseOf(events, user, 55);
   return {
     scenario_id: meta.id,
-    time_range: isFlightdeck ? '-' : '24h',
-    score_history: isFlightdeck ? [] : Array.from({ length: 24 }, (_, i) =>
+    time_range: '24h',
+    score_history: Array.from({ length: 24 }, (_, i) =>
       makeTrendPoint(base, primaryType, `${String(i).padStart(2, '0')}:00`)
     ),
-    event_distribution: isFlightdeck ? [] : [
+    event_distribution: [
       { label: '正常', value: records.filter((r) => !r.is_risk).length, color: '#53e5c8' },
       { label: '风险', value: events.length, color: '#ff7b72' },
     ],
-    risk_trend: isFlightdeck ? [] : Array.from({ length: 7 }, (_, i) =>
+    risk_trend: Array.from({ length: 7 }, (_, i) =>
       makeTrendPoint(base, primaryType, `第${i + 1}日`)
     ),
-    metrics: isFlightdeck ? [] : [
+    metrics: [
       { id: 'avg-risk', label: '平均风险分数', value: events.length > 0 ? Math.round(events.reduce((s, e) => s + e.risk_score, 0) / events.length * 100) : 0, trend: 0 },
       { id: 'peak-risk', label: '风险事件数', value: events.length, trend: 0 },
       { id: 'event-total', label: '推理记录数', value: records.length, trend: 0 },
@@ -1488,7 +2129,7 @@ const generateReports = (user: UserAccount): Report[] =>
       title: `${meta.name}态势报告 - ${i === 0 ? '周报' : '月报'}`,
       scenario_id: meta.id,
       scenario_name: meta.name,
-      summary: `基于 ${user.role === 'ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
+      summary: `基于 ${user.role === 'SUPER_ADMIN' ? '全平台' : '本人'} ${meta.name} 数据生成的态势分析报告`,
       created_at: `2026-07-${String(20 - i * 3).padStart(2, '0')} ${String(random(8, 18)).padStart(2, '0')}:00`,
       format: sample(['markdown', 'html', 'pdf'] as const),
       status: 'completed' as const,
@@ -1515,18 +2156,22 @@ const ensureScenarioCache = () => {
 
 // ===================== 多场景导出接口 =====================
 
-/** 获取三个场景列表（需求 1.1 场景列表，标明接入状态） */
+/** 获取四个场景列表（需求 1.1 场景列表，标明接入状态） */
 export const getScenarioList = async (): Promise<Scenario[]> => {
   ensureScenarioCache();
   const user = requireLogin();
-  return simulateLatency(SCENARIO_META.map((m) => generateScenarioCard(m, user)));
+  return simulateLatency(
+    SCENARIO_META.filter((m) => canAccessScenario(user, m.id)).map((m) => generateScenarioCard(m, user))
+  );
 };
 
 /** 获取单个场景详情及态势数据（需求 6.8 个人/全局态势） */
 export const getScenarioDetail = async (scenarioId: ScenarioId): Promise<ScenarioDetail> => {
   ensureScenarioCache();
+  const user = requireLogin();
+  assertScenarioAccess(user, scenarioId);
   const meta = SCENARIO_META.find((s) => s.id === scenarioId)!;
-  return simulateLatency(generateScenarioDetail(meta, requireLogin()));
+  return simulateLatency(generateScenarioDetail(meta, user));
 };
 
 /** 获取全局态势概览 */
@@ -1538,8 +2183,10 @@ export const getGlobalOverview = async (): Promise<GlobalOverview> => {
 /** 获取态势分析数据 */
 export const getSituationData = async (scenarioId: ScenarioId): Promise<SituationData> => {
   ensureScenarioCache();
+  const user = requireLogin();
+  assertScenarioAccess(user, scenarioId);
   const meta = SCENARIO_META.find((s) => s.id === scenarioId)!;
-  return simulateLatency(generateSituationData(meta, requireLogin()));
+  return simulateLatency(generateSituationData(meta, user));
 };
 
 /** 获取报告列表 */
@@ -1556,9 +2203,9 @@ export const generateReport = async (params: {
   target_user_id?: string;
 }): Promise<Report> => {
   const user = requireLogin();
-  if (user.role === 'USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
+  if (user.role === 'SCENARIO_USER' && params.scope !== 'self') throw new Error('普通用户只能基于本人数据生成报告');
   const meta = SCENARIO_META.find((s) => s.id === params.scenario_id);
-  const events = filterRiskEvents(user, params.scenario_id);
+  const events = filterRiskEvents(user, params.scenario_id, params.scope === 'user' ? params.target_user_id : undefined);
   const scopeLabel = params.scope === 'all' ? '全平台' : params.scope === 'user' ? `用户 ${params.target_user_id}` : '本人';
   return simulateLatency({
     report_id: `RPT-${params.scenario_id}-${String(random(100, 999))}`,

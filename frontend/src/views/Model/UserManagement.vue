@@ -2,10 +2,12 @@
 /**
  * UserManagement - 用户管理
  *
- * 需求 6.2（P0）：管理员创建普通用户账号，并可重置密码、启用或禁用账号；普通用户可修改本人密码。
+ * 需求 6.2（P0）：管理员创建普通用户账号，并可重置密码、启用或禁用账号、分配绑定场景；
+ * 普通用户可修改本人密码。
  */
 import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useScenarioStore } from '@/stores/scenarioStore';
 import {
   getCurrentUser,
   getUserList,
@@ -14,31 +16,49 @@ import {
   setUserStatus,
   changeOwnPassword,
 } from '@/services/mockApi';
-import type { UserAccount, UserRole } from '@/types/security';
+import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const loading = ref(false);
+const scenarioStore = useScenarioStore();
 
-const isAdmin = () => currentUser.value?.role === 'ADMIN';
+const isAdmin = () => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN';
+const isSuperAdmin = () => currentUser.value?.role === 'SUPER_ADMIN';
 
-// ========== 创建用户弹窗 ==========
+/** 场景名称映射（表格只读展示用户自选场景） */
+const scenarioName = (id: ScenarioId) => scenarioStore.scenarioById(id)?.name ?? id;
+
+// ========== 创建用户弹窗（最外层管理员建场景管理员/用户；场景管理员只在自己场景建用户） ==========
 const createOpen = ref(false);
 const createForm = ref({
   username: '',
   display_name: '',
   password: '',
-  role: 'USER' as UserRole,
+  role: 'SCENARIO_USER' as UserRole,
+  scenario_id: '' as ScenarioId | '',
 });
 
 const openCreate = () => {
-  createForm.value = { username: '', display_name: '', password: '', role: 'USER' };
+  // 场景管理员默认固定为自己场景；最外层管理员需手动选场景
+  const myScenario = isSuperAdmin() ? '' : (currentUser.value?.scenario_ids?.[0] ?? '');
+  createForm.value = { username: '', display_name: '', password: '', role: isSuperAdmin() ? 'SCENARIO_ADMIN' : 'SCENARIO_USER', scenario_id: myScenario as ScenarioId | '' };
   createOpen.value = true;
 };
 
 const submitCreate = async () => {
+  if (!createForm.value.scenario_id) {
+    ElMessage.warning('请选择绑定场景');
+    return;
+  }
   try {
-    await createUser({ ...createForm.value, role: createForm.value.role });
+    await createUser({
+      username: createForm.value.username,
+      display_name: createForm.value.display_name,
+      password: createForm.value.password,
+      role: createForm.value.role,
+      scenario_ids: [createForm.value.scenario_id],
+    });
     ElMessage.success('账号创建成功');
     createOpen.value = false;
     await loadUsers();
@@ -111,7 +131,8 @@ const loadUsers = async () => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  await loadUsers();
+  await scenarioStore.fetchScenarioList();
+  if (isAdmin()) await loadUsers();
 });
 </script>
 
@@ -122,7 +143,7 @@ onMounted(async () => {
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
         <p class="users-page__desc">
-          当前登录：{{ currentUser?.display_name }}（{{ currentUser?.role === 'ADMIN' ? '管理员' : '普通用户' }}）
+          当前登录：{{ currentUser?.display_name }}（{{ currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'SCENARIO_ADMIN' ? '管理员' : '普通用户' }}）
         </p>
       </div>
       <button v-if="isAdmin()" class="users-btn users-btn--primary" @click="openCreate">+ 创建用户</button>
@@ -145,6 +166,7 @@ onMounted(async () => {
               <th>显示名</th>
               <th>角色</th>
               <th>状态</th>
+              <th>绑定场景</th>
               <th>创建时间</th>
               <th>最后登录</th>
               <th>操作</th>
@@ -156,14 +178,20 @@ onMounted(async () => {
               <td>{{ user.username }}</td>
               <td>{{ user.display_name }}</td>
               <td>
-                <span class="role-badge" :class="user.role === 'ADMIN' ? 'role-badge--admin' : 'role-badge--user'">
-                  {{ user.role === 'ADMIN' ? '管理员' : '普通用户' }}
+                <span class="role-badge" :class="user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? 'role-badge--admin' : 'role-badge--user'">
+                  {{ user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN' ? '管理员' : '场景用户' }}
                 </span>
               </td>
               <td>
                 <span class="status-badge" :class="user.status === 'active' ? 'status-badge--on' : 'status-badge--off'">
                   {{ user.status === 'active' ? '启用' : '禁用' }}
                 </span>
+              </td>
+              <td>
+                <span v-if="user.scenario_ids?.length" class="scenario-tags">
+                  <span v-for="sid in user.scenario_ids" :key="sid" class="scenario-tag">{{ scenarioName(sid) }}</span>
+                </span>
+                <span v-else class="users-table__muted">—</span>
               </td>
               <td>{{ user.created_at }}</td>
               <td>{{ user.last_login_at ?? '—' }}</td>
@@ -216,40 +244,55 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- 创建用户弹窗 -->
-    <div v-if="createOpen" class="modal-mask" @click.self="createOpen = false">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>创建普通用户账号</h3>
-          <button class="modal-close" @click="createOpen = false">✕</button>
+    <!-- 创建用户弹窗（el-dialog，append-to-body 暗色，背景固定；系统管理员只建管理员，管理员只建用户） -->
+    <el-dialog
+      v-model="createOpen"
+      :title="isSuperAdmin() ? '创建管理员账号' : '创建用户账号'"
+      width="460px"
+      align-center
+      append-to-body
+      lock-scroll
+      :close-on-click-modal="false"
+    >
+      <div class="pwd-form" style="display: grid; gap: 14px">
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">用户名（登录账号）</label>
+          <input v-model.trim="createForm.username" class="pwd-form__input" placeholder="如 zhangsan" />
         </div>
-        <div class="modal-card__body">
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">用户名（登录账号）</label>
-            <input v-model.trim="createForm.username" class="pwd-form__input" placeholder="如 zhangsan" />
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">显示名</label>
-            <input v-model.trim="createForm.display_name" class="pwd-form__input" placeholder="如 张三" />
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">初始密码（至少 6 位）</label>
-            <input v-model="createForm.password" type="password" class="pwd-form__input" placeholder="初始密码" />
-          </div>
-          <div class="pwd-form__field">
-            <label class="pwd-form__label">角色</label>
-            <select v-model="createForm.role" class="pwd-form__input">
-              <option value="USER">普通用户</option>
-              <option value="ADMIN">管理员</option>
-            </select>
-          </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">显示名</label>
+          <input v-model.trim="createForm.display_name" class="pwd-form__input" placeholder="如 张三" />
         </div>
-        <div class="modal-card__foot">
-          <button class="users-btn" @click="createOpen = false">取消</button>
-          <button class="users-btn users-btn--primary" @click="submitCreate">创建</button>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">初始密码（至少 6 位）</label>
+          <input v-model="createForm.password" type="password" class="pwd-form__input" placeholder="初始密码" />
+        </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">角色</label>
+          <select v-model="createForm.role" class="pwd-form__input" disabled>
+            <option :value="isSuperAdmin() ? 'SCENARIO_ADMIN' : 'SCENARIO_USER'">
+              {{ isSuperAdmin() ? '管理员' : '用户' }}
+            </option>
+          </select>
+        </div>
+        <div class="pwd-form__field">
+          <label class="pwd-form__label">绑定场景</label>
+          <select v-model="createForm.scenario_id" class="pwd-form__input" :disabled="!isSuperAdmin()">
+            <option v-if="!isSuperAdmin()" :value="currentUser?.scenario_ids?.[0]">
+              {{ scenarioName(currentUser?.scenario_ids?.[0] as ScenarioId) }}（当前场景）
+            </option>
+            <option v-for="sc in scenarioStore.activeScenarios" :key="sc.scenario_id" :value="sc.scenario_id">
+              {{ sc.name }}
+            </option>
+          </select>
+          <p v-if="!isSuperAdmin()" class="bind-tip">管理员只能在自己场景内创建用户</p>
         </div>
       </div>
-    </div>
+      <template #footer>
+        <el-button @click="createOpen = false">取消</el-button>
+        <el-button type="primary" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 重置密码弹窗 -->
     <div v-if="resetTarget" class="modal-mask" @click.self="resetTarget = null">
@@ -270,6 +313,7 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -342,6 +386,54 @@ onMounted(async () => {
   padding: 20px;
   text-align: center;
   color: rgba(220, 234, 255, 0.5);
+}
+
+.users-table__muted {
+  color: rgba(220, 234, 255, 0.4);
+}
+
+.scenario-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scenario-tag {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.scenario-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.scenario-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(220, 234, 255, 0.8);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.scenario-checkbox input {
+  accent-color: #5ba6ff;
+}
+
+.bind-tip {
+  margin: 0;
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.55);
 }
 
 .op-btn {

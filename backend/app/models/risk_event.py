@@ -47,6 +47,9 @@ class RiskEvent(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     raw_features: Mapped[dict] = mapped_column(JSONB, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    # 航母甲板热点图坐标（V3.0 §7.4.1）：仅航母场景非空，其余场景为 NULL
+    fault_position_x: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
+    fault_position_y: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
 
     inference_record: Mapped["InferenceRecord"] = relationship(
         back_populates="risk_event"

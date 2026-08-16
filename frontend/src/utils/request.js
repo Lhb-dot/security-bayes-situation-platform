@@ -30,4 +30,15 @@ service.interceptors.response.use(
   }
 );
 
+/**
+ * 统一解包后端响应结构 {code, data, message}（与 /api/v1 约定一致）：
+ * - code === 0 → 返回 data
+ * - 非零 code → 抛出 message 错误
+ * 说明：返回值为任意类型，具体类型由各 API 模块的函数签名显式声明。
+ */
+export const unwrapData = (res) => {
+  if (res && res.code === 0) return res.data;
+  throw new Error(res?.message || '请求失败');
+};
+
 export default service;

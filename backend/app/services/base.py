@@ -16,7 +16,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.schemas.common import fail
-from app.services.constants import ROLE_ADMIN, USER_STATUS_ENABLED
+from app.services.constants import (
+    ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SCENARIO_USER,
+    ROLE_SUPER_ADMIN,
+    USER_STATUS_ENABLED,
+)
 
 logger = logging.getLogger("app.services")
 
@@ -83,15 +89,44 @@ class ServiceBase:
             raise ServiceError(403, "无权限操作")
 
     def require_admin(self, user: Optional[object]) -> None:
-        """仅管理员可操作。"""
+        """仅最外层管理员（SUPER_ADMIN，平台方）可操作。"""
         self.require_login(user)
-        if getattr(user, "role", None) != ROLE_ADMIN:
+        if getattr(user, "role", None) != ROLE_SUPER_ADMIN:
             raise ServiceError(403, "无权限操作")
 
-    def require_owner_or_admin(self, user: Optional[object], owner_id: int) -> None:
-        """普通用户仅能操作本人资源（owner_id 对比）；管理员放行。"""
+    def require_super_admin(self, user: Optional[object]) -> None:
+        """仅最外层管理员可操作（require_admin 的语义化别名）。"""
+        self.require_admin(user)
+
+    def require_scenario_admin(self, user: Optional[object]) -> None:
+        """管理级角色（最外层管理员 或 场景管理员）可操作。"""
         self.require_login(user)
-        if getattr(user, "role", None) == ROLE_ADMIN:
+        if getattr(user, "role", None) not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+            raise ServiceError(403, "无权限操作")
+
+    def require_scenario_admin_of(self, user: Optional[object], scenario_id: int) -> None:
+        """管理级角色且属于该场景（最外层管理员任意场景；场景管理员仅自己场景）。"""
+        self.require_login(user)
+        role = getattr(user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            return
+        if role == ROLE_SCENARIO_ADMIN and getattr(user, "scenario_id", None) == scenario_id:
+            return
+        raise ServiceError(403, "无权限操作")
+
+    def is_scenario_admin_of(self, user: Optional[object], scenario_id: int) -> bool:
+        """判断是否为该场景的管理级角色（供查询过滤用，不抛异常）。"""
+        if user is None:
+            return False
+        role = getattr(user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            return True
+        return role == ROLE_SCENARIO_ADMIN and getattr(user, "scenario_id", None) == scenario_id
+
+    def require_owner_or_admin(self, user: Optional[object], owner_id: int) -> None:
+        """本人可操作本人资源（owner_id 对比）；最外层管理员放行。"""
+        self.require_login(user)
+        if getattr(user, "role", None) == ROLE_SUPER_ADMIN:
             return
         if getattr(user, "id", None) != owner_id:
             raise ServiceError(403, "无权限操作")

@@ -24,7 +24,7 @@ const router = useRouter();
 
 // ===================== 权限 =====================
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
 // ===================== 场景（数据库） =====================
 interface DbScenario {
@@ -311,9 +311,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 业务场景（数据库注册） -->
-        <div class="form-group">
+        <!-- 业务场景（数据库注册）：系统管理员可选全部；管理员场景已固定（账号绑定），直接选数据集 -->
+        <div v-if="currentUser?.role !== 'SCENARIO_ADMIN'" class="form-group">
           <label class="form-label">业务场景（需求 1.1.2：训练前必须先确定场景）</label>
+          <!-- 系统管理员（或用户信息未加载时兜底）：显示全部场景可选 -->
           <div class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"

@@ -8,11 +8,19 @@
 import { computed, onMounted, ref } from 'vue';
 import type { RiskEvent, ScenarioId } from '../../types/security';
 import { getRiskEvents } from '@/services/mockApi';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 
 /** 风险事件列表 */
 const events = ref<RiskEvent[]>([]);
 const loading = ref(true);
 const error = ref('');
+
+const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
+
+/** 是否系统管理员（管理员/用户固定自己场景） */
+const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 
 /** 筛选条件 */
 const selectedScenario = ref<ScenarioId | 'all'>('all');
@@ -23,15 +31,18 @@ const selectedStatus = ref<string>('all');
 const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
-/** 场景选项 */
-const scenarioOptions: { value: ScenarioId | 'all'; label: string }[] = [
-  { value: 'all', label: '全部场景' },
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-];
+/** 场景选项（当前用户可见场景；管理员=全部+所有场景，场景管理员=仅自己场景，用户=自选/绑定） */
+const scenarioOptions = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
+  const role = userStore.currentUser?.role;
+  const list: { value: ScenarioId | 'all'; label: string }[] = [];
+  if (role !== 'SCENARIO_ADMIN') list.push({ value: 'all', label: '所有场景' });
+  list.push(...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })));
+  return list;
+});
 
 /** 风险等级选项 */
 const riskLevelOptions = [
@@ -91,7 +102,13 @@ const statusMap: Record<string, string> = {
   '已处置': '已处置',
 };
 
-onMounted(() => {
+onMounted(async () => {
+  await scenarioStore.fetchScenarioList();
+  // 管理员/用户：默认固定自己场景（隐藏场景下拉）
+  if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
+    const bound = userStore.currentUser?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   loadEvents();
 });
 </script>
@@ -107,52 +124,28 @@ onMounted(() => {
       <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉） -->
     <div class="risk-events-filters">
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">场景</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in scenarioOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedScenario === opt.value }"
-            @click="selectedScenario = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-      </div>
+      <label v-if="isSuperAdmin" class="filter-item">
+        <span class="filter-item__label">场景</span>
+        <select v-model="selectedScenario" class="filter-select">
+          <option v-for="opt in scenarioOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
 
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">风险等级</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in riskLevelOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedRiskLevel === opt.value }"
-            @click="selectedRiskLevel = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-      </div>
+      <label class="filter-item">
+        <span class="filter-item__label">风险等级</span>
+        <select v-model="selectedRiskLevel" class="filter-select">
+          <option v-for="opt in riskLevelOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
 
-      <div class="risk-events-filters__group">
-        <label class="risk-events-filters__label">处置状态</label>
-        <div class="risk-events-filters__tabs">
-          <button
-            v-for="opt in statusOptions"
-            :key="opt.value"
-            class="risk-events-filters__tab"
-            :class="{ 'is-active': selectedStatus === opt.value }"
-            @click="selectedStatus = opt.value"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-      </div>
+      <label class="filter-item">
+        <span class="filter-item__label">处置状态</span>
+        <select v-model="selectedStatus" class="filter-select">
+          <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
     </div>
 
     <!-- 加载状态 -->
@@ -284,25 +277,25 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.risk-events-filters__tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: rgba(8, 17, 31, 0.5);
-  border: 1px solid rgba(125, 201, 255, 0.12);
+.risk-events-filters__select {
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  outline: none;
+  cursor: pointer;
+  min-width: 130px;
 }
 
-.risk-events-filters__tab {
-  border: 0;
-  padding: 5px 12px;
-  border-radius: 999px;
-  color: rgba(220, 234, 255, 0.7);
-  background: transparent;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+.risk-events-filters__select:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.risk-events-filters__select option {
+  background: #0b1628;
+  color: #e8f1ff;
 }
 
 .risk-events-filters__tab:hover {

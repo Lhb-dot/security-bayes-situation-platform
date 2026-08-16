@@ -6,7 +6,7 @@
  *  - 管理员：审核发布、下线、重新发布、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   getModelVersions,
@@ -28,7 +28,8 @@ const error = ref('');
 const selectedScenario = ref<ScenarioId | 'all'>('all');
 const selectedDataset = ref<string>('all');
 
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
 
@@ -43,16 +44,26 @@ const statusLabel: Record<string, string> = {
 const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
+  geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
-/** 数据集选项（从模型列表提取） */
+/** 数据集选项（仅展示当前所选场景的数据集；未选场景时展示全部） */
 const datasetOptions = computed(() => {
   const set = new Map<string, string>();
-  for (const m of models.value) {
+  const base =
+    selectedScenario.value === 'all'
+      ? models.value
+      : models.value.filter((m) => m.scenario_id === selectedScenario.value);
+  for (const m of base) {
     if (!set.has(m.dataset_id)) set.set(m.dataset_id, m.dataset_id);
   }
   return Array.from(set, ([id, name]) => ({ id, name }));
+});
+
+/** 切换场景时重置数据集筛选 */
+watch(selectedScenario, () => {
+  selectedDataset.value = 'all';
 });
 
 const filteredModels = computed(() => {
@@ -158,6 +169,11 @@ const isBest = (m: ModelVersionRecord, key: keyof EvaluationMetrics) => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
+  // 管理员/用户：默认固定自己场景（不显示场景下拉）
+  if (currentUser.value?.role !== 'SUPER_ADMIN') {
+    const bound = currentUser.value?.scenario_ids?.[0];
+    if (bound) selectedScenario.value = bound;
+  }
   algorithms.value = await getAlgorithms();
   await loadModels();
 });
@@ -175,10 +191,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
-        <ScenarioSelector v-model="selectedScenario" />
+        <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
@@ -407,6 +423,16 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.model-center__scenario-tag {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 229, 200, 0.3);
+  background: rgba(83, 229, 200, 0.08);
+  color: #53e5c8;
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 
 .model-filter-select {

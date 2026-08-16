@@ -1,89 +1,101 @@
 <script setup lang="ts">
 /**
- * ScenarioSelector - 场景筛选器组件
+ * ScenarioSelector - 场景筛选下拉框
  *
- * 支持筛选全部场景或三个具体场景
- * 使用 v-model 绑定选中值
+ * 与推理记录（InferenceRecords）完全同源：从 scenarioStore.activeScenarios 取场景。
+ * 数据加载：优先用共享 store（与推理记录一致）；若 store 为空再直接调 getScenarioList 兜底。
+ * 本地 ref + 双向 watch 保证原生 <select> 一定显示选中值。
  */
+import { computed, onMounted, ref, watch } from 'vue';
+import { getScenarioList } from '@/services/mockApi';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId } from '@/types/security';
 
-defineProps<{
-  /** 当前选中的场景 ID（'all' 表示全部场景） */
-  modelValue: ScenarioId | 'all';
-  /** 是否显示"全部场景"选项，默认 true */
-  showAll?: boolean;
-}>();
+/**
+ * showAll 默认必须为 true：Vue 会把未传入的可选 boolean 属性默认为 false，
+ * 导致下方 options 计算里 `showAll !== false` 不成立、场景被过滤。用 withDefaults 显式修正。
+ */
+const props = withDefaults(
+  defineProps<{
+    /** 当前选中的场景 ID（'all' 表示所有场景） */
+    modelValue: ScenarioId | 'all';
+    /** 是否显示"所有场景"选项，默认 true */
+    showAll?: boolean;
+  }>(),
+  { showAll: true }
+);
 
-defineEmits<{
+const emit = defineEmits<{
   /** 选中值变更 */
   'update:modelValue': [value: ScenarioId | 'all'];
 }>();
 
-/** 场景选项列表 */
-const options: { value: ScenarioId | 'all'; label: string }[] = [
-  { value: 'all', label: '全部场景' },
-  { value: 'network_security', label: '网络安全' },
-  { value: 'power_system', label: '电力系统' },
-  { value: 'flightdeck_operation', label: '航母甲板' },
-];
+const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
+
+/** 场景列表：优先共享 store（与推理记录同源），空时用 getScenarioList 兜底 */
+const localScenarios = ref<{ value: ScenarioId; label: string }[]>([]);
+
+const syncScenarios = () => {
+  const storeScenarios = scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }));
+  if (storeScenarios.length > 0) {
+    localScenarios.value = storeScenarios;
+    return;
+  }
+  if (localScenarios.value.length === 0) {
+    // store 未加载 → 直接拉取
+    getScenarioList()
+      .then((list) => {
+        localScenarios.value = list.map((s) => ({ value: s.scenario_id, label: s.name }));
+      })
+      .catch(() => {
+        localScenarios.value = [];
+      });
+  }
+};
+
+/** 选项列表：默认"所有场景"为第一项 + 场景列表。
+ * 管理员（SCENARIO_ADMIN）只显示自己场景，不显示"所有场景"。 */
+const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
+  const role = userStore.currentUser?.role;
+  const list: { value: ScenarioId | 'all'; label: string }[] = [];
+  if (props.showAll !== false && role !== 'SCENARIO_ADMIN') {
+    list.push({ value: 'all', label: '所有场景' });
+  }
+  if (props.showAll !== false) {
+    for (const s of localScenarios.value) {
+      list.push(s);
+    }
+  }
+  return list;
+});
+
+/** 本地选中值：默认"所有场景"，与 props 双向同步 */
+const localValue = ref<ScenarioId | 'all'>(props.modelValue ?? 'all');
+watch(
+  () => props.modelValue,
+  (v) => {
+    localValue.value = v ?? 'all';
+  }
+);
+watch(localValue, (v) => {
+  emit('update:modelValue', v);
+});
+
+onMounted(() => {
+  syncScenarios();
+});
 </script>
 
 <template>
-  <div class="scenario-selector">
-    <!-- 使用现有 nav-tabs 风格 -->
-    <div class="scenario-selector__tabs" role="tablist">
-      <button
-        v-for="opt in options"
-        :key="opt.value"
-        v-show="showAll || opt.value !== 'all'"
-        class="scenario-selector__tab"
-        :class="{ 'is-active': modelValue === opt.value }"
-        role="tab"
-        :aria-selected="modelValue === opt.value"
-        @click="$emit('update:modelValue', opt.value)"
-      >
+  <label class="filter-item">
+    <span class="filter-item__label">场景</span>
+    <!-- :key 绑定选项数量：原生 <select> 在动态新增 <option> 后不刷新是已知问题，key 变化强制重建 -->
+    <select v-model="localValue" class="filter-select" :key="options.length">
+      <option v-for="opt in options" :key="opt.value" :value="opt.value">
         {{ opt.label }}
-      </button>
-    </div>
-  </div>
+      </option>
+    </select>
+  </label>
 </template>
-
-<style scoped>
-.scenario-selector {
-  display: flex;
-  align-items: center;
-}
-
-.scenario-selector__tabs {
-  display: inline-flex;
-  padding: 4px;
-  border: 1px solid rgba(125, 201, 255, 0.18);
-  border-radius: 999px;
-  background: rgba(8, 17, 31, 0.7);
-  backdrop-filter: blur(18px);
-  gap: 2px;
-}
-
-.scenario-selector__tab {
-  border: 0;
-  padding: 8px 18px;
-  border-radius: 999px;
-  color: #d9e8ff;
-  background: transparent;
-  font-size: 0.88rem;
-  transition: background 0.25s ease, color 0.25s ease;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.scenario-selector__tab:hover {
-  background: rgba(91, 166, 255, 0.12);
-  color: #fff;
-}
-
-.scenario-selector__tab.is-active {
-  background: rgba(91, 166, 255, 0.18);
-  color: #fff;
-  font-weight: 500;
-}
-</style>

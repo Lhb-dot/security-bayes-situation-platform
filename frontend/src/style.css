@@ -103,9 +103,10 @@ button {
 .topbar__actions {
   display: flex;
   align-items: center;
+  justify-content: space-between; /* 第二行：导航靠左对齐标题，用户区靠右 */
   gap: 14px;
   min-width: 0;
-  margin-left: auto; /* 第二行导航整体右对齐 */
+  width: 100%; /* 第二行占满整行，bar 对齐到标题下 */
 }
 
 .nav-tabs {
@@ -1154,4 +1155,147 @@ button {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* ===================== Element Plus 暗色主题（全局） =====================
+ * el-dialog / el-table / el-button 等覆盖为暗色科幻风，与整体一致。
+ * append-to-body 的弹窗渲染在 body，scoped 样式够不到，故放全局。
+ * ------------------------------------------------------------------ */
+
+/* 弹窗遮罩 */
+.el-overlay {
+  background: rgba(3, 8, 16, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+/* 弹窗容器（高优先级：style.css 先于 element-plus 加载，用 .el-overlay 前缀保证覆盖默认亮色） */
+.el-overlay .el-dialog {
+  background: linear-gradient(165deg, rgba(16, 30, 54, 0.98), rgba(8, 17, 31, 0.98));
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  color: rgba(217, 232, 255, 0.9);
+}
+
+.el-dialog .el-dialog__header {
+  padding: 18px 24px;
+  margin-right: 0;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.14);
+}
+
+.el-dialog .el-dialog__title {
+  color: #e8f1ff;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.el-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(217, 232, 255, 0.7);
+}
+.el-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: #fff;
+}
+
+.el-dialog .el-dialog__body {
+  padding: 20px 24px;
+  color: rgba(217, 232, 255, 0.9);
+}
+
+.el-dialog .el-dialog__footer {
+  padding: 14px 24px;
+  border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+/* 表格（暗色） */
+.el-overlay .el-table {
+  --el-table-border-color: rgba(125, 201, 255, 0.12);
+  --el-table-header-bg-color: rgba(16, 34, 60, 0.9);
+  --el-table-tr-bg-color: rgba(20, 44, 72, 0.55);
+  --el-table-row-hover-bg-color: rgba(20, 44, 72, 0.55);
+  --el-table-striped-row-bg-color: rgba(20, 44, 72, 0.55);
+  --el-table-bg-color: transparent;
+  background: transparent;
+  color: rgba(217, 232, 255, 0.9);
+}
+.el-table th.el-table__cell {
+  background: rgba(16, 34, 60, 0.9);
+  color: rgba(154, 214, 255, 0.85);
+  font-weight: 600;
+}
+.el-table td.el-table__cell,
+.el-table th.el-table__cell {
+  border-bottom-color: rgba(125, 201, 255, 0.08);
+}
+.el-table .el-table__inner-wrapper::before {
+  background-color: rgba(125, 201, 255, 0.1);
+}
+/* 悬停色常驻：普通行/条纹行都用悬停暗色，悬停不再变色 */
+.el-overlay .el-table__body tr td.el-table__cell,
+.el-overlay .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(20, 44, 72, 0.55);
+}
+.el-overlay .el-table__body tr:hover > td.el-table__cell {
+  background: rgba(20, 44, 72, 0.55);
+}
+
+/* 按钮（暗色） */
+.el-button {
+  border-color: rgba(125, 201, 255, 0.3);
+  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.1);
+}
+.el-button:hover {
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
+  background: rgba(91, 166, 255, 0.18);
+}
+.el-button--primary {
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  border-color: transparent;
+  color: #fff;
+}
+.el-button--primary:hover {
+  opacity: 0.9;
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  color: #fff;
+}
+
+/* ===================== 筛选框（统一为推理记录样式，全站一致） ===================== */
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-item__label {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.filter-select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  outline: none;
+  min-width: 120px;
+}
+
+.filter-select:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.filter-select option {
+  background: #0b1628;
+  color: #e8f1ff;
+}
+
+/* 弹窗不滑动：禁用 el-dialog 开合过渡动画（打开即固定显示） */
+.dialog-fade-enter-active,
+.dialog-fade-leave-active,
+.el-overlay {
+  transition: none !important;
+  animation: none !important;
 }

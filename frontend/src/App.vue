@@ -11,8 +11,9 @@ import AlertsView from './views/Alert/AlertsView.vue';
 import DashboardView from './views/Dashboard/DashboardView.vue';
 import MetricTrendModal from './components/MetricTrendModal.vue';
 import WarRoomModal from './components/WarRoomModal.vue';
-import { getAlertById, getAlerts, getDashboardSnapshot, refreshMockData, getCurrentUser, logout } from './services/mockApi';
-import type { AlertRecord, DashboardSnapshot, MetricHistory, UserAccount } from './types/security';
+import { getAlertById, getAlerts, getDashboardSnapshot } from './services/mockApi';
+import type { AlertRecord, DashboardSnapshot, MetricHistory, UserRole } from './types/security';
+import { useUserStore } from './stores/userStore';
 
 // 页面数据
 const dashboard = ref<DashboardSnapshot | null>(null);
@@ -23,19 +24,36 @@ const error = ref('');
 const warRoomOpen = ref(false);
 const activeMetric = ref<MetricHistory | null>(null);
 
-// ===================== v2.0 当前登录用户 =====================
-const currentUser = ref<UserAccount | null>(getCurrentUser());
-const isAdmin = computed(() => currentUser.value?.role === 'ADMIN');
+// ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
+// 登录/登出统一走 userStore，避免页面直连 mockApi 导致 Pinia 状态与守卫判断不同步
+const userStore = useUserStore();
+const currentUser = computed(() => userStore.currentUser);
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
-// 路由切换后重新同步当前用户（登录页跳转业务页时 setup 已执行完毕，需手动刷新，
-// 否则登录后右上角姓名/角色仍停留在未登录的空状态）
-const syncCurrentUser = () => {
-  currentUser.value = getCurrentUser();
-};
+/** 当前角色中文名 */
+const roleLabel = computed(() => {
+  const role = userStore.currentUser?.role;
+  if (role === 'SUPER_ADMIN') return '系统管理员';
+  if (role === 'SCENARIO_ADMIN') return '管理员';
+  return '用户';
+});
+
+/** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
+const myScenarioName = computed(() => {
+  if (isSuperAdmin.value) return '';
+  const id = userStore.currentUser?.scenario_ids?.[0];
+  if (!id) return '';
+  const map: Record<string, string> = {
+    network_security: '网络安全',
+    power_system: '电力系统',
+    geological_risk: '地质风险',
+    flightdeck_operation: '航母甲板',
+  };
+  return map[id] ?? id;
+});
 
 const handleLogout = async () => {
-  await logout();
-  currentUser.value = null;
+  await userStore.logout();
   router.push('/login');
 };
 
@@ -55,10 +73,22 @@ const goOverview = () => {
 };
 
 /**
- * 跳转场景中心
+ * 跳转场景中心：系统管理员 → 场景中心列表；管理员/用户 → 自己场景详情页
  */
 const goScenarioCenter = () => {
-  router.push({ path: '/scenarios' });
+  if (isSuperAdmin.value) {
+    router.push({ path: '/scenarios' });
+    return;
+  }
+  const bound = userStore.currentUser?.scenario_ids?.[0];
+  router.push(bound ? { path: `/scenarios/${bound}/dashboard` } : { path: '/scenarios' });
+};
+
+/**
+ * 跳转用户管理（系统管理员管管理员/用户；管理员管自己用户）
+ */
+const goUsers = () => {
+  router.push({ path: '/users' });
 };
 
 /**
@@ -82,12 +112,6 @@ const goRiskInference = () => {
   router.push({ path: '/inference' });
 };
 
-/**
- * 跳转态势分析
- */
-const goSituation = () => {
-  router.push({ path: '/situation' });
-};
 
 /**
  * 跳转报告中心
@@ -108,23 +132,6 @@ const goSettings = () => {
  */
 const goInferenceRecords = () => {
   router.push({ path: '/inference-records' });
-};
-
-/**
- * 跳转用户管理
- */
-const goUsers = () => {
-  router.push({ path: '/users' });
-};
-
-/**
- * 跳转首页大屏
- */
-const goDashboard = () => {
-  router.push({ path: '/dashboard' });
-  // 切回首页重载图表数据，解决图表残留问题
-  dashboard.value = null;
-  loadData();
 };
 
 /**
@@ -162,12 +169,6 @@ const loadData = async () => {
   }
 };
 
-// 刷新Mock模拟数据
-const reloadData = async () => {
-  refreshMockData();
-  await loadData();
-};
-
 // 作战大屏打开后跳转告警
 const openAlertFromWarRoom = (id: string) => {
   warRoomOpen.value = false;
@@ -182,35 +183,38 @@ const openMetric = (id: string) => {
 // ===================== 页面标题计算属性 =====================
 const pageTitle = computed(() => {
   if (route.path === '/login') return '用户登录';
+  if (route.path === '/home') return '首页';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
   if (route.path === '/alerts') return '告警详情总览';
   if (route.path.startsWith('/alerts/')) return '告警处置分析';
-  if (route.path === '/overview') return '全局总览';
+  if (route.path === '/overview') return '首页';
   if (route.path === '/scenarios') return '场景中心';
-  if (route.path.startsWith('/scenarios/')) return '场景大屏';
+  if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';
   if (route.path === '/datasets') return '数据集中心';
+  if (route.path.startsWith('/datasets/')) return '数据集详情';
   if (route.path === '/models') return '模型中心';
   if (route.path === '/inference') return '风险研判';
   if (route.path === '/inference-records') return '推理记录';
-  if (route.path === '/situation') return '态势分析';
   if (route.path === '/reports') return '报告中心';
-  if (route.path === '/users') return '用户管理';
-  if (route.path === '/settings') return '系统设置';
+  if (route.path === '/settings') return isSuperAdmin.value ? '系统设置' : '设置';
+  if (route.path.startsWith('/events/')) return '风险事件详情';
   return '态势感知与威胁可视化平台';
 });
 
 // ===================== 路由监听与生命周期 =====================
 // 注册路由后置钩子，页面切换时重新加载数据（保存返回的取消注册函数）
 const unregisterAfterEach = router.afterEach(() => {
-  syncCurrentUser();
   loadData();
 });
 
 onMounted(async () => {
   await loadData();
-  // 默认进入首页
+  // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
   if (route.path === '/') {
-    goDashboard();
+    if (isSuperAdmin.value) router.push('/overview');
+    else if (userStore.currentUser?.scenario_ids?.[0]) {
+      router.push(`/scenarios/${userStore.currentUser.scenario_ids[0]}/dashboard`);
+    } else router.push('/home');
   }
 });
 
@@ -221,6 +225,7 @@ onBeforeUnmount(() => {
 
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');
+const isHomePage = computed(() => route.path === '/home');
 const isDashboardPage = computed(() => route.path === '/dashboard');
 const isAlertsListPage = computed(() => route.path === '/alerts');
 const isAlertDetailPage = computed(() => route.path.startsWith('/alerts/'));
@@ -237,10 +242,78 @@ const isUsersPage = computed(() => route.path === '/users');
 const isSettingsPage = computed(() => route.path === '/settings');
 const isNewRoutePage = computed(() => {
   const path = route.path;
-  return path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets'
+  return path === '/home' || path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
     || path === '/models' || path === '/inference' || path === '/inference-records' || path === '/situation'
-    || path === '/reports' || path === '/users' || path === '/settings';
+    || path === '/reports' || path === '/users' || path === '/settings' || path.startsWith('/events/');
 });
+
+// ===================== 顶部导航（三级角色驱动渲染） =====================
+// 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
+interface NavItem {
+  path: string;
+  label: string;
+  /** 允许访问的角色列表（缺省=所有角色） */
+  roles?: UserRole[];
+  /** 点击动作：复用原导航跳转函数，保持既有行为 */
+  action?: () => void;
+}
+
+const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER'];
+const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
+
+const navItems: NavItem[] = [
+  // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard），不再单独显示 /home 入口
+  { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview },
+  { path: '/scenarios', label: '场景中心', roles: ALL_ROLES, action: goScenarioCenter },
+  { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter },
+  { path: '/alerts', label: '告警中心', roles: ALL_ROLES, action: goAlertsList },
+  { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage },
+  { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter },
+  { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference },
+  { path: '/inference-records', label: '推理记录', roles: ALL_ROLES, action: goInferenceRecords },
+  { path: '/reports', label: '报告中心', roles: ALL_ROLES, action: goReportCenter },
+  { path: '/users', label: '用户管理', roles: MGMT_ROLES, action: goUsers },
+  { path: '/settings', label: '设置', roles: ALL_ROLES, action: goSettings },
+];
+
+/** 按当前角色过滤可见导航项 */
+const visibleNavItems = computed(() => {
+  const role = userStore.currentUser?.role;
+  return navItems.filter((item) => !item.roles || (role ? item.roles.includes(role) : false));
+});
+
+/** 导航激活态：沿用原 isXxxPage 判断，保持既有高亮逻辑（含告警详情前缀高亮） */
+const isNavActive = (item: NavItem): boolean => {
+  switch (item.path) {
+    case '/home': return isHomePage.value;
+    case '/dashboard': return isDashboardPage.value;
+    case '/overview': return isOverviewPage.value;
+    case '/scenarios':
+      // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
+      if (isSuperAdmin.value) return isScenarioCenterPage.value;
+      return route.path.startsWith('/scenarios/') || isScenarioCenterPage.value;
+    case '/datasets': return isDatasetCenterPage.value;
+    case '/alerts': return isAlertsListPage.value || isAlertDetailPage.value;
+    case '/risk': return isRiskPage.value;
+    case '/models': return isModelCenterPage.value;
+    case '/inference': return isRiskInferencePage.value;
+    case '/inference-records': return isInferenceRecordsPage.value;
+    case '/situation': return isSituationPage.value;
+    case '/reports': return isReportCenterPage.value;
+    case '/users': return isUsersPage.value;
+    case '/settings': return isSettingsPage.value;
+    default: return false;
+  }
+};
+
+/** 导航点击：优先复用原导航跳转函数（含首页图表重置重载），兜底 router.push */
+const handleNavClick = (item: NavItem): void => {
+  if (item.action) {
+    item.action();
+    return;
+  }
+  router.push(item.path);
+};
 </script>
 
 <template>
@@ -249,110 +322,30 @@ const isNewRoutePage = computed(() => {
     <div class="app-shell__backdrop"></div>
     <header class="topbar">
       <div class="topbar__heading">
-        <p class="eyebrow">AI Security Operations Center</p>
-        <h1>{{ pageTitle }}</h1>
+        <div class="topbar__heading-left">
+          <p class="eyebrow">AI Security Operations Center</p>
+          <h1>{{ pageTitle }}</h1>
+        </div>
+        <!-- 当前场景（管理员/用户）：与标题同字号，放标题行最右 -->
+        <span v-if="myScenarioName" class="topbar__heading-scenario">{{ myScenarioName }}</span>
       </div>
       <div class="topbar__actions">
         <nav class="nav-tabs">
           <button
+            v-for="item in visibleNavItems"
+            :key="item.path"
             class="nav-tabs__item"
-            :class="{ 'is-active': isDashboardPage }"
-            @click="goDashboard"
+            :class="{ 'is-active': isNavActive(item) }"
+            @click="handleNavClick(item)"
           >
-            首页
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isOverviewPage }"
-            @click="goOverview"
-          >
-            全局总览
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isScenarioCenterPage }"
-            @click="goScenarioCenter"
-          >
-            场景中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isDatasetCenterPage }"
-            @click="goDatasetCenter"
-          >
-            数据集中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isAlertsListPage || isAlertDetailPage }"
-            @click="goAlertsList"
-          >
-            告警中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isRiskPage }"
-            @click="goAiTrainPage"
-          >
-            AI模型训练
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isModelCenterPage }"
-            @click="goModelCenter"
-          >
-            模型中心
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isRiskInferencePage }"
-            @click="goRiskInference"
-          >
-            风险研判
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isInferenceRecordsPage }"
-            @click="goInferenceRecords"
-          >
-            推理记录
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isSituationPage }"
-            @click="goSituation"
-          >
-            态势分析
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isReportCenterPage }"
-            @click="goReportCenter"
-          >
-            报告中心
-          </button>
-          <button
-            v-if="isAdmin"
-            class="nav-tabs__item"
-            :class="{ 'is-active': isUsersPage }"
-            @click="goUsers"
-          >
-            用户管理
-          </button>
-          <button
-            class="nav-tabs__item"
-            :class="{ 'is-active': isSettingsPage }"
-            @click="goSettings"
-          >
-            系统设置
+            {{ item.path === '/settings' ? (isSuperAdmin ? '系统设置' : '设置') : (item.path === '/scenarios' ? (isSuperAdmin ? '场景中心' : '首页') : item.label) }}
           </button>
         </nav>
-        <button class="ghost-button" @click="reloadData">刷新模拟数据</button>
         <div class="topbar__user">
           <span class="topbar__user-avatar">{{ currentUser?.display_name?.charAt(0) }}</span>
           <div class="topbar__user-pop">
             <span class="topbar__user-name">{{ currentUser?.display_name }}</span>
-            <span class="topbar__user-role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
+            <span class="topbar__user-role">{{ roleLabel }}</span>
             <button class="ghost-button ghost-button--logout" @click="handleLogout">退出登录</button>
           </div>
         </div>
@@ -412,15 +405,33 @@ const isNewRoutePage = computed(() => {
 <style scoped>
 .risk-page-wrap,
 .new-page-wrap {
-  padding: 24px;
+  padding: 20px 16px; /* 缩小页面内边距，让数据集/模型等表格更宽 */
   min-height: auto;
   box-sizing: border-box;
 }
 
-/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡 */
+/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡。
+   左侧标题 + 右侧当前场景（管理员/用户）同字号大字，flex 两端对齐 */
 .topbar__heading {
   flex: 1 1 100%;
   min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.topbar__heading-left {
+  min-width: 0;
+}
+
+/* 当前场景大字（与页面标题同字号 clamp，标题行最右） */
+.topbar__heading-scenario {
+  flex-shrink: 0;
+  color: #9ad6ff;
+  font-size: clamp(1.6rem, 2vw, 2.6rem);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ===================== 用户区：仅头像，悬停弹出姓名/角色/退出 ===================== */

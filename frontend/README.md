@@ -1,59 +1,54 @@
-# 多场景贝叶斯分类态势感知系统 — 前端
+# 多场景贝叶斯分类态势感知系统 — 前端（V3.0 四场景）
 
-基于 **Vue 3 + TypeScript + Vite + Element Plus** 构建的多场景贝叶斯分类态势感知平台前端，面向**网络安全、电力系统、航母甲板保障作业**三个业务场景，严格对齐需求文档《用户分级v2.md》（v2.0）的 P0/P1 功能。
+基于 **Vue 3 + TypeScript + Vite + Element Plus + Pinia + ECharts** 构建的多场景贝叶斯分类态势感知平台前端，面向**网络安全、电力系统、地质风险、航母甲板保障作业**四个业务场景，严格对齐《V3.0需求分析(1).md》的 P0 功能与第 7 节场景差异化展示要求。
 
-> 当前版本数据由本地 Mock 层驱动（`src/services/mockApi.ts`），函数签名与真实后端接口一致，后续替换为真实后端时页面层无需修改。用户登录、角色鉴权、数据范围隔离等 P0 逻辑均已在 Mock 层完整模拟。
+> 当前版本数据由本地 Mock 层驱动（`src/services/mockApi.ts`，经 Pinia store 注入页面）。登录、角色鉴权、场景-用户绑定、数据范围隔离等规则已在 Mock 层模拟；正式交付时须由后端实现同等鉴权与持久化（切换点见第八节）。
 
 ---
 
 ## 一、功能总览
 
-### P0 业务闭环
-
-系统按需求 6.3 实现「管理员训练闭环」与「普通用户使用闭环」两条验收基线：
+### P0 业务闭环（需求 6.3）
 
 ```
-┌─ 管理员闭环 ─────────────────────────────────────────────┐
-│  登录 → 管理普通用户 → 选择场景 → 上传/选择数据集版本     │
-│  → 选择已注册算法 → 配置公开训练参数 → 启动训练           │
-│  → 查看 Accuracy/Recall/F1/G-mean → 生成 DRAFT 模型版本   │
-│  → 审核发布 → 设置默认推荐模型 → 查看全平台数据            │
-└──────────────────────────────────────────────────────────┘
+┌─ 管理员闭环 ───────────────────────────────────────────────────┐
+│  登录 → 场景中心 → 用户管理（创建账号并分配场景）→ 选择场景      │
+│  → 数据集（含数据预览/上传/版本）→ 选择算法配置参数 → 训练      │
+│  → DRAFT → 发布 → 设默认推荐模型 → 配置阈值 → 全平台态势        │
+└───────────────────────────────────────────────────────────────┘
 
-┌─ 普通用户闭环 ───────────────────────────────────────────┐
-│  登录 → 选择场景 → 选择数据集 → 查看该范围已发布模型      │
-│  → 自动选中默认推荐模型（可改选）→ 按模型绑定字段输入样本  │
-│  → 单条推理 → 查看结果/风险等级 → 风险类生成 RiskEvent     │
-│  → 查看本人推理记录 / 本人风险事件 / 本人态势              │
-└──────────────────────────────────────────────────────────┘
+┌─ 普通用户闭环 ─────────────────────────────────────────────────┐
+│  登录 → 首页（全局态势）→ 场景看板（仅绑定场景）→ 数据集         │
+│  → 已发布模型（默认推荐自动选中）→ 字段表单推理 → 风险事件详情   │
+│  → 本人推理记录 / 本人态势                                     │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### 已实现功能明细（对照需求）
 
 | 模块 | 功能 | 需求条款 | 说明 |
 |:-----|:-----|:---------|:-----|
-| 用户与权限 | 用户登录 | 6.2 | 未登录访问业务页面一律跳转登录页（全局路由守卫 + 请求拦截器携带身份） |
-| 用户与权限 | 角色鉴权 | 6.2 | `ADMIN` / `USER` 两种角色，数据层强制校验，前端隐藏按钮不替代权限控制 |
-| 用户与权限 | 普通用户账号管理 | 6.2 | 管理员创建/重置密码/启用禁用账号；普通用户可修改本人密码 |
-| 用户与权限 | 数据范围隔离 | 6.8 | 普通用户只能查本人推理记录/风险事件/态势；管理员查看全平台或按用户筛选 |
-| 场景管理 | 场景列表 / 切换 | 1.1 | 三场景卡片标明接入状态；按当前场景筛选数据集/模型/记录/事件 |
-| 数据集管理 | 列表与字段预览 | 6.2 | 展示字段名/类型/角色/样例值；枚举字段按数据集值域校验（3.1.5） |
-| 数据集管理 | 上传与版本管理 | 2.3 | 管理员上传（指定场景 + 字段校验）；修改已用数据集创建新版本；被引用只能停用不能物理删除 |
-| 算法管理 | 算法代码注册 | 6.6 | A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB 五种，含参数定义，管理员不可增删改算法实现 |
-| 模型训练 | 选择场景/数据集/算法 | 6.3.1 | 禁止跨场景/跨数据集合并训练；已停用数据集版本不可训练 |
-| 模型训练 | 配置训练参数 | 6.6.3 | 按算法注册参数定义动态生成表单，提供默认值/范围/校验 |
-| 模型训练 | 训练生成草稿 | 6.7.2 | 训练成功生成 `DRAFT` 模型版本（TRAINING → DRAFT → PUBLISHED → OFFLINE 状态机） |
-| 模型管理 | 保存模型版本 | 6.7.1 | 保存场景/数据集版本/算法/训练参数/评估指标/训练人/状态 |
-| 模型管理 | 发布与下线 | 6.7 | 管理员审核发布、下线、重新发布；普通用户仅见已发布模型 |
-| 模型管理 | 默认推荐模型 | 6.7.4 | 每个「场景＋数据集」最多一个默认推荐；默认模型下线时自动取消默认 |
-| 模型使用 | 已发布模型列表 | 6.7.5 | 推理页展示该范围全部已发布模型（含指标），默认选中推荐模型，可改选 |
-| 风险研判 | 单条样本推理 | 6.2 | 按模型绑定数据集字段生成输入表单；风险类结果生成 16 字段 RiskEvent |
-| 推理记录 | 本人推理记录 | 6.2 | 普通用户仅本人；管理员查全部并按用户/场景筛选 |
-| 风险事件 | 风险事件列表 | 6.2 | 普通用户仅本人风险事件；管理员全平台 |
-| 风险配置 | 场景风险阈值 | 5.4.1 | 网络/电力分别配置中/高风险阈值，范围 [0,1]、high>medium、实时生效、记录变更日志 |
-| 态势展示 | 个人与全局态势 | 6.8 | 普通用户态势只统计本人数据；管理员统计全平台 |
-| 报告生成 | 生成态势报告 | P1 | 普通用户基于本人数据；管理员可选全平台/指定用户，支持导出 Markdown |
-| 模型管理 | 模型版本对比 | P1 | 对比不同算法/数据集版本/模型版本指标并高亮最优，普通用户仅比较已发布模型 |
+| 用户与权限 | 用户登录 / 角色鉴权 | 6.2 / 6.5 | 全局路由守卫 + 角色落地页（ADMIN→场景中心，USER→首页）；mock 层强制校验，前端隐藏仅体验 |
+| 用户与权限 | 普通用户账号管理 | 6.2 | 创建/重置密码/启用禁用；**创建与改绑均支持"分配场景"多选** |
+| 用户与权限 | 数据范围隔离 | 6.8 | 普通用户仅本人记录/事件/态势；管理员全平台或按用户筛选 |
+| 场景管理 | 场景列表 / 场景-用户绑定 | 1.1.6 / 6.5 | 四场景卡片；普通用户仅见绑定场景（mock 层强制过滤 + URL 直访拦截） |
+| 数据集管理 | 列表与字段预览 | 6.2 / 3.1 | 按场景展示字段名/类型/角色/样例值/枚举值域 |
+| 数据集管理 | 数据内容预览 | 2.4 | 详情页分页（每页 ≤50）、只读、标签列高亮、极宽表冻结首列 |
+| 数据集管理 | 上传与版本管理 | 2.3 | 管理员上传/改版保留旧版/停用/删除（被引用只能停用） |
+| 算法管理 | 算法代码注册 | 6.6 | A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB，含参数定义 |
+| 模型训练 | 训练 / 保存 / 发布 / 下线 | 6.7 | TRAINING→FAILED/DRAFT→PUBLISHED→OFFLINE 状态机；发布人/时间记录 |
+| 模型管理 | 默认推荐模型 | 6.7.4 | 每"场景＋数据集"最多一个默认；自动选中可改选；下线自动取消默认 |
+| 模型使用 | 已发布模型列表 | 6.7.5 | 推理页展示该范围全部已发布模型（含指标），默认推荐自动选中 |
+| 风险研判 | 单条样本推理 | 6.2 / 7.4 | 动态字段表单；**carrier 279 字段按 6 族折叠分组**（默认仅首组挂载，防卡顿）；`?port=` 可预填端口 |
+| 推理记录 | 本人推理记录 | 6.2 | 普通用户仅本人；管理员全部/按用户/按场景筛选 |
+| 风险事件 | 列表 / 详情 | 5.7 / 6.2 | 五组信息（基本信息/模型溯源/推理详情/输入特征/可解释性文本）+ 处置流转；解释文本生成时固化 |
+| 风险配置 | 场景风险阈值 | 5.4.1 | network/power/geological 三场景独立配置，[0,1]、high>medium、实时生效、变更日志；航母甲板预留卡 |
+| 态势展示 | 首页（全局态势） | 7.0 | 普通用户登录落地页：大号数字卡 + 场景分布 + 健康度排行 + 趋势 + 场景快捷卡 |
+| 态势展示 | 场景差异化看板 | 7.1–7.4 | 四看板指标卡/图表/交互按需求对齐（端口预填、设备筛选、数据集联动、热点图等） |
+| 态势展示 | 场景中心 / 业务场景概览 | 7.0 | 三入口视觉明确区分；看板顶部内嵌其它场景快捷入口 |
+| 态势展示 | 场景轻量算法 | 8.1–8.4 | 网络端口偏离度 + Z-score 突变检测、电力设备健康分 + 风险评分模型、地质易发性评分、甲板碰撞风险 + 轨迹偏差检测（`src/utils/scenarioAlgorithms.ts`） |
+| 报告生成 | 生成态势报告 | P1 | 普通用户本人数据；管理员全平台/指定用户，支持导出 Markdown |
+| 模型管理 | 模型版本对比 | P1 | 模型中心内联对比面板：选择 2-5 个模型，按 Accuracy/Recall/Precision/Specificity/F1/G-mean 逐项对比并高亮最优 |
 
 ---
 
@@ -61,43 +56,46 @@
 
 | 路由 | 页面 | 说明 | 权限 |
 |:-----|:-----|:-----|:-----|
-| `/login` | 用户登录 | 登录入口，含演示账号快捷登录 | 公开 |
-| `/overview` | 全局总览 | 跨场景风险指标聚合、趋势、风险事件列表（按角色过滤） | 登录 |
-| `/dashboard` | 首页大屏 | 态势感知大屏：攻击趋势、类型分布、Top 源、攻击轨迹动画 | 登录 |
-| `/scenarios` | 场景中心 | 场景卡片列表，含接入状态标识 | 登录 |
-| `/scenarios/:id/dashboard` | 场景大屏 | 单场景专属看板（按角色统计） | 登录 |
-| `/datasets` | 数据集中心 | 按场景筛选数据集、字段预览、版本管理（管理员上传/停用/删除） | 登录 |
-| `/inference` | 风险研判 | 已发布模型列表 → 默认推荐 → 动态字段 → 单条推理 | 登录 |
-| `/inference-records` | 推理记录 | 本人/全部推理记录，输入特征查看 | 登录 |
-| `/alerts` | 风险事件 | 统一 RiskEvent 列表（按角色过滤） | 登录 |
-| `/risk` | 模型训练 | 管理员训练页：算法参数配置 → 训练生成 DRAFT | 仅 ADMIN |
-| `/models` | 模型中心 | 模型生命周期管理：发布/下线/默认推荐 + 版本对比 | 登录（操作仅 ADMIN） |
-| `/situation` | 态势分析 | 多维度风险趋势分析（个人/全局） | 登录 |
-| `/reports` | 报告中心 | 报告列表、生成报告（本人/全平台/指定用户）、导出 | 登录 |
-| `/users` | 用户管理 | 账号列表、创建/重置密码/启用禁用、修改本人密码 | 登录（管理仅 ADMIN） |
-| `/settings` | 系统设置 | 按场景风险阈值 + 变更记录、场景启停、自动刷新、主题 | 登录（阈值修改仅 ADMIN） |
+| `/login` | 用户登录 | 登录入口，含演示账号快捷登录，副标题四场景 | 公开 |
+| `/` | — | 按角色重定向（ADMIN→`/scenarios`，USER→`/home`） | — |
+| `/home` | 首页（全局态势） | 普通用户全局驾驶舱（跨场景聚合） | 仅 USER |
+| `/overview` | 全局总览 | 兼容路径（保留旧页） | 登录 |
+| `/dashboard` | 旧版首页大屏 | 全平台演示大屏 | 仅 ADMIN |
+| `/scenarios` | 场景中心 | 场景卡片（普通用户仅绑定场景；空态引导） | 登录 |
+| `/scenarios/:id/dashboard` | 场景看板 | 四场景差异化看板（7.1–7.4） | 登录 |
+| `/datasets` | 数据集中心 | 按场景筛选、字段预览、上传/版本管理、数据预览入口 | 登录 |
+| `/datasets/:datasetId` | 数据集详情 | 字段结构 + 数据内容预览（分页/标签高亮/冻结首列） | 登录 |
+| `/inference` | 风险研判 | 场景→数据集→已发布模型→字段表单→推理 | 登录 |
+| `/inference-records` | 推理记录 | 本人/全部记录、输入特征查看、风险记录跳事件详情 | 登录 |
+| `/events/:eventId` | 风险事件详情 | 五组信息 + 处置流转 | 登录 |
+| `/alerts` | 旧版告警中心 | 旧大屏演示页（入口仅 ADMIN，不迁移新逻辑） | 仅 ADMIN |
+| `/risk` | 模型训练 | 管理员训练页（走 `trainingApi` 真实后端，需后端运行） | 仅 ADMIN |
+| `/models` | 模型中心 | 模型生命周期：发布/下线/默认推荐 | 登录（操作仅 ADMIN） |
+| `/situation` | 态势分析 | 四场景风险趋势分析（按绑定场景注入） | 登录 |
+| `/reports` | 报告中心 | 报告列表、生成（本人/全平台/指定用户）、导出 | 登录 |
+| `/users` | 用户管理 | 账号列表、创建（含分配场景）、重置/启禁、分配场景、改本人密码 | 登录（管理仅 ADMIN） |
+| `/settings` | 系统设置 | 三场景阈值 + 变更记录、场景启停（含地质） | 登录（阈值仅 ADMIN） |
 
-### 场景支持
+### 场景与数据集
 
-| 场景 | ID | 接入状态 | 数据集 | 样本数 | 说明 |
-|:-----|:---|:---------|:-------|:------:|:-----|
-| 网络安全态势感知 | `network_security` | ✅ 已接入 | KDDTrain+ 20 Percent（41 字段） | 7556 | 完整功能 |
-| 网络安全态势感知 | `network_security` | ✅ 已接入 | NF-UNSW-NB15-v2（41 字段） | 23897 | 完整功能 |
-| 电力系统风险态势感知 | `power_system` | ✅ 已接入 | PowerGrid Knowledgebase（9 字段） | 2000 | 完整功能 |
-| 航母甲板保障作业 | `flightdeck_operation` | ⏸️ 仅预留 | 无数据集 | — | 保留入口/接口，不使用虚构数据 |
+| 场景 | ID | 数据集 | 字段 | 标签 |
+|:-----|:---|:-------|:----:|:-----|
+| 网络安全 | `network_security` | KDDTrain+ 20 Percent（7556） | 41 | `class` |
+| 网络安全 | `network_security` | NF-UNSW-NB15-v2（23897） | 41 | `Label` |
+| 电力系统 | `power_system` | PowerGrid Knowledgebase（2000） | 9 | `Target_Event` |
+| 地质风险 | `geological_risk` | DIS_raw_data（5000）/ DIS_Landslides（5185）/ DIS_Causative_Factors（5000）/ DIS_Global_Catalog（1000，编目）/ DIS_guaruja_random（200） | 19/9/13/12/8 | Label / LS / landslides / landslide_size / class |
+| 航母甲板 | `flightdeck_operation` | carrier_feature2_biaoqian / carrier_feature2_lisan / carrier_paired_trail_biaoqian（各 507） | 279/279/281 | `Collision` |
 
 ---
 
-## 三、演示账号
+## 三、演示账号（密码均为 `123456`）
 
-登录页提供演示账号快捷登录，**密码均为 `123456`**：
-
-| 账号 | 角色 | 显示名 | 可执行操作 |
-|:-----|:-----|:-------|:-----------|
-| `admin` | 管理员 | 系统管理员 | 训练/发布/默认推荐模型、上传/停用数据集、管理用户、配置阈值、查看全平台数据 |
-| `alice` | 普通用户 | 张梦琪 | 选已发布模型推理、查看本人推理记录/风险事件/态势、生成本人报告 |
-| `bob` | 普通用户 | 李文昊 | 同上 |
-| `carol` | 普通用户 | 陈晓宇 | 同上 |
+| 账号 | 角色 | 显示名 | 绑定场景 |
+|:-----|:-----|:-------|:---------|
+| `admin` | 管理员 | 系统管理员 | 全部 4 场景（角色放行） |
+| `alice` | 普通用户 | 演示用户A | 网络安全 |
+| `bob` | 普通用户 | 演示用户B | 电力系统 |
+| `carol` | 普通用户 | 演示用户C | 地质风险 + 航母甲板 |
 
 ---
 
@@ -106,114 +104,55 @@
 | 技术 | 用途 |
 |:-----|:------|
 | **Vue 3**（Composition API + `<script setup lang="ts">`） | 前端框架 |
-| **TypeScript** | 类型安全 |
-| **Vite 8.x** | 构建工具 |
-| **vue-tsc** | TypeScript 类型检查 |
-| **vue-router 4**（hash 模式） | 路由管理 + 登录守卫 |
-| **Element Plus** | UI 组件库（表格、弹窗、标签、按钮、消息提示） |
-| **CSS 自定义** | 暗色科幻主题（渐变背景、毛玻璃效果、科幻色板） |
+| **TypeScript**（strict） | 类型安全 |
+| **Vite 8.x / vue-tsc** | 构建与类型检查 |
+| **vue-router 4**（hash 模式） | 路由 + 角色守卫 |
+| **Pinia** | 全局状态（页面数据唯一入口，不直连 mockApi） |
+| **Element Plus** | UI 组件库 |
+| **ECharts**（按需引入） | 柱/饼/折线/雷达图封装 |
+| **CSS 自定义** | 暗色科幻主题 |
 
 ---
 
 ## 五、数据架构
 
+### 数据流
+
+```
+页面 → Pinia Store（src/stores/） → mockApi（过渡期）→ 后端 API 层（src/api/，联调切换点）
+```
+
 ### 核心类型（`src/types/security.ts`）
 
-#### `RiskEvent` — 风险事件（需求 5.2 最小 16 字段）
+- 四场景标识：`ScenarioId = 'network_security' | 'power_system' | 'geological_risk' | 'flightdeck_operation'`
+- `RiskEvent`：16+ 必填字段 + 可选 `fault_position_x/y`（航母热点图坐标，基准 1000px）
+- `UserAccount.scenario_ids?`：用户-场景绑定（需求 1.1.6）
+- `RiskLevelUpper` / `toRiskLevel()`：风险等级大小写双轨统一入口
+- `DataRow` / `DataPreview`：数据预览分页类型（需求 2.4）
+- `ScenarioDashboardData`：场景看板聚合数据
 
-```typescript
-interface RiskEvent {
-  event_id: string;
-  inference_record_id: string;   // 来源推理记录编号
-  created_by_user_id: string;    // 发起推理的账号（用于访问控制）
-  scenario_id: ScenarioId;
-  dataset_id: string;
-  dataset_version: string;       // 来源数据集版本
-  algorithm_id: string;          // 来源算法
-  model_version_id: string;
-  original_label: string;        // 保留 anomaly / 1 等原始输出
-  risk_type: string;             // NETWORK_SECURITY_RISK / POWER_SYSTEM_RISK
-  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
-  risk_score: number;
-  occurred_at: string;
-  status: '待处置' | '处理中' | '已处置';
-  raw_features: Record<string, unknown>;
-  description: string;
-}
-```
+### Store（`src/stores/`）
 
-#### `ModelVersionRecord` — 模型版本（需求 6.7.1）
+`userStore`（会话/用户管理/可见场景）、`scenarioStore`、`datasetStore`、`modelStore`、`inferenceStore`、`riskEventStore`、`situationStore`、`reportStore`、`thresholdStore`。
 
-```typescript
-interface ModelVersionRecord {
-  model_version_id: string;
-  scenario_id: ScenarioId;
-  dataset_id: string;
-  dataset_version: string;
-  algorithm_id: string;                    // A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB
-  training_parameters: Record<string, unknown>;
-  evaluation_metrics: EvaluationMetrics;   // Accuracy/Recall/Precision/Specificity/F1/G-mean
-  trained_by: string;
-  trained_at: string;
-  status: ModelStatus;                     // TRAINING | FAILED | DRAFT | PUBLISHED | OFFLINE
-  published_by?: string;
-  published_at?: string;
-  is_default: boolean;                     // 是否为「场景＋数据集」默认推荐模型
-}
-```
+### API 层（`src/api/`）
 
-#### 其他 v2.0 新增类型
-
-| 类型 | 说明 |
-|:-----|:-----|
-| `UserAccount / UserRole` | 用户账号（ADMIN / USER）、状态 |
-| `AlgorithmDefinition / AlgorithmParamDef` | 算法注册 + 公开参数定义（默认值/类型/范围/校验） |
-| `InferenceRecord` | 推理记录（含 `is_risk`、`risk_score`、`risk_level`） |
-| `ThresholdConfig / ThresholdChangeLog` | 按场景阈值配置 + 变更日志（操作人/前后值/时间） |
-| `DatasetVersion` | 数据集版本（上传人/时间/启用状态/是否被引用） |
+10 个模块与后端 `/api/v1` 路由一一对应（薄封装 + 统一 `unwrapData`）；`situationApi` 为占位（后端无态势路由）。联调时在 store 内部替换数据源即可。
 
 ### Mock 数据层（`src/services/mockApi.ts`）
 
-所有接口通过 `simulateLatency`（~180ms）模拟异步延迟，函数签名与真实后端一致，后续替换时页面层无需修改。核心接口：
-
-| 函数 | 返回 | 说明 |
-|:-----|:-----|:-----|
-| `login / logout / getCurrentUser` | `UserAccount` | 会话管理（localStorage 持久化） |
-| `getUserList / createUser / resetUserPassword / setUserStatus / changeOwnPassword` | 用户管理 | 管理员账号管理 + 本人改密 |
-| `getDatasetList(scenario?)` | `Dataset[]` | 数据集列表（普通用户仅见已发布模型相关且启用版本） |
-| `getDatasetVersions / uploadDataset / disableDatasetVersion / deleteDatasetVersion` | `DatasetVersion[]` | 数据集版本管理（需求 2.3） |
-| `getAlgorithms` | `AlgorithmDefinition[]` | 五种注册算法 |
-| `getThresholds / saveThreshold / getThresholdChangeLogs` | 阈值配置 | 按场景阈值 + 变更记录（需求 5.4.1） |
-| `trainModel(params)` | `ModelVersionRecord` | 训练 → 生成 DRAFT 模型版本 |
-| `getModelVersions(scenario?, dataset?)` | `ModelVersionRecord[]` | 模型列表（普通用户仅 PUBLISHED） |
-| `publishModel / offlineModel / rePublishModel / setDefaultModel` | — | 模型生命周期操作（需求 6.7） |
-| `executeInference(params)` | `InferenceResult` | 单条推理 → 生成推理记录 + 风险类生成 RiskEvent |
-| `getInferenceRecords(scenario?, userId?)` | `InferenceRecord[]` | 推理记录（按角色/用户过滤） |
-| `getRiskEvents(scenario?)` | `RiskEvent[]` | 风险事件（按角色过滤） |
-| `getScenarioList / getScenarioDetail / getGlobalOverview / getSituationData` | 态势数据 | 个人/全局态势（按角色统计） |
-| `getReportList / generateReport` | `Report[]` | 报告列表 + 生成报告（本人/全平台/指定用户） |
-
-### 数据集字段结构
-
-严格遵循《用户分级v2.md》第 3 节 ARFF 文件定义，并录入枚举值域（需求 3.1.5 / 3.2.1 / 3.3.1 / 3.4.1）：
-
-| 数据集 | 字段数 | 输入特征 | 标签字段 | 正类（风险） | 负类（正常） |
-|:-------|:------:|:--------:|:---------|:-------------|:-------------|
-| KDDTrain+ 20 Percent | 41 | 40 | `class` | `anomaly` | `normal` |
-| NF-UNSW-NB15-v2 | 41 | 40 | `Label` | `1` | `0` |
-| PowerGrid Knowledgebase | 9 | 8 | `Target_Event` | `1` | `0` |
+覆盖四场景 11 数据集、5 算法、模型生命周期、推理/事件闭环、阈值、数据预览（确定性生成）、场景绑定访问控制（`canAccessScenario` / `assertScenarioAccess`）。
 
 ### 风险等级生成（需求 5.4）
 
 ```
-若模型结果为正常类：保存推理结果，不生成 RiskEvent
-若模型结果为风险类：
-    risk_score >= high_threshold      → HIGH
-    medium_threshold <= risk_score < high_threshold → MEDIUM
-    risk_score < medium_threshold     → LOW
+正常类 → 仅保存推理结果，不生成 RiskEvent
+风险类 → risk_score >= high_threshold → HIGH
+         medium <= risk_score < high → MEDIUM
+         risk_score < medium          → LOW
 ```
 
-阈值按场景隔离配置，调整只影响风险等级，不改变模型原始预测标签；历史 RiskEvent 不因阈值修改而重算。
+阈值按场景隔离、实时生效、历史事件不重算；变更记录含操作人/场景/时间/前后值。
 
 ---
 
@@ -222,123 +161,65 @@ interface ModelVersionRecord {
 ```
 frontend/
 ├── src/
-│   ├── api/                      # 真实后端 API 调用（预留）
+│   ├── api/                      # API 层模块（10 个，与 /api/v1 对齐）
 │   ├── components/
-│   │   ├── common/               # 通用组件（ScenarioSelector 等）
-│   │   ├── DonutChart.vue        # 环形图
-│   │   ├── LineTrendChart.vue    # 折线趋势图
-│   │   └── RankingList.vue       # 排行列表
+│   │   ├── charts/               # ECharts 封装（EChartBase + Bar/Pie/Line/Radar）
+│   │   ├── common/               # 通用组件（ScenarioSelector / RiskLevelTag / DataPreviewTable）
+│   │   ├── scenario/             # 四场景看板 + ScenarioMetricCard + EventTimeline + ScenariosQuickNav
+│   │   ├── Deck/                 # 甲板热点图（DeckHeatMap）
+│   │   └── ...                   # 旧 SVG 图表（保留兼容）
 │   ├── router/
-│   │   └── index.ts              # 路由配置（hash 模式）+ 登录守卫
+│   │   ├── index.ts              # 路由 + meta
+│   │   └── guards.ts             # 角色守卫
 │   ├── services/
-│   │   ├── mockApi.ts            # Mock 数据层（用户/算法/模型/事件闭环）
-│   │   └── modelApi.js           # 后端模型 API 封装
-│   ├── types/
-│   │   └── security.ts           # 核心类型定义
-│   ├── utils/
-│   │   └── request.js            # axios 实例（请求拦截器注入身份）
+│   │   └── mockApi.ts            # Mock 数据层（四场景）
+│   ├── stores/                   # Pinia（9 个）
+│   ├── types/security.ts         # 业务类型唯一来源
+│   ├── utils/request.js          # axios 实例 + unwrapData
 │   ├── views/
-│   │   ├── Login.vue             # 用户登录
-│   │   ├── Dashboard/            # 首页大屏
-│   │   ├── Alert/                # 告警（风险事件）列表与详情
-│   │   └── Model/
-│   │       ├── OverviewView.vue      # 全局总览
-│   │       ├── ScenarioCenter.vue    # 场景中心
-│   │       ├── ScenarioDashboard.vue # 场景大屏
-│   │       ├── DatasetCenter.vue     # 数据集中心（上传/版本管理）
-│   │       ├── RiskAnalysis.vue      # 模型训练（管理员）
-│   │       ├── ModelCenter.vue       # 模型中心（发布/默认推荐/对比）
-│   │       ├── RiskInference.vue     # 风险研判（已发布模型推理）
-│   │       ├── InferenceRecords.vue  # 推理记录
-│   │       ├── SituationAnalysis.vue # 态势分析
-│   │       ├── ReportCenter.vue      # 报告中心（生成/导出）
-│   │       ├── UserManagement.vue    # 用户管理（管理员）
-│   │       └── Settings.vue          # 系统设置（按场景阈值）
-│   ├── App.vue                  # 应用外壳（顶栏导航 + 用户信息 + 退出）
-│   ├── main.ts                  # 挂载入口
-│   └── style.css                # 全局样式
+│   │   ├── Login.vue
+│   │   ├── Home/                 # 首页（全局态势）
+│   │   ├── Scenario/             # 场景看板容器
+│   │   ├── Dataset/              # 数据集详情（预览）
+│   │   ├── Event/                # 风险事件详情
+│   │   ├── Model/                # 场景中心/数据集/模型/推理/记录/态势/报告/用户/设置/训练
+│   │   ├── Dashboard/            # 旧大屏（保留）
+│   │   └── Alert/                # 旧告警（保留）
+│   ├── App.vue / main.ts / style.css
 └── public/
-    └── maps/                    # SVG 地图底图
 ```
 
 ---
 
 ## 七、项目启动
 
-### 1. 安装依赖
-
 ```bash
 npm install
-```
-
-### 2. 启动开发环境
-
-```bash
-npm run dev
-```
-
-打开浏览器访问 `http://localhost:5173`（Vite 默认端口），使用演示账号登录。
-
-### 3. 构建生产版本
-
-```bash
-npm run build
-```
-
-### 4. 类型检查（单独运行）
-
-```bash
-npm run type-check
+npm run dev        # http://localhost:5173
+npm run build      # vue-tsc -b && vite build
 ```
 
 ---
 
 ## 八、如何接入真实后端
 
-当前数据层位于 `src/services/mockApi.ts`，函数签名与真实接口一致。替换策略：
+当前数据入口统一为 **Pinia store → mockApi**；后端就绪后的切换点：
 
-1. **创建真实 API 服务**（如 `src/services/realApi.ts`），使用 axios/fetch 调用后端
-2. **保持函数签名不变**（输入参数、返回类型、异步 Promise 接口）
-3. **在页面中替换 import 路径**（`mockApi` → `realApi`）
+1. **store 内部替换**：把 store action 中 `mockApi.xxx()` 替换为 `src/api/` 对应模块（函数签名已对齐 `/api/v1`）。
+2. **登录**：后端无 `/auth/login` 路由，暂走 mock；后端提供后由 `userStore.login` 切换。
+3. **态势**：`situationApi` 为占位（`getGlobalCockpit` TODO），联调时实现并切换 `situationStore`。
+4. **`/risk` 训练页**：已走 `trainingApi`（真实后端数据库版），需后端运行（`http://127.0.0.1:12312`）。
 
-```typescript
-// 当前（Mock）
-import { getRiskEvents } from '@/services/mockApi';
-const events = await getRiskEvents();
-
-// 替换后（真实后端）
-import { getRiskEvents } from '@/services/realApi';
-const events = await getRiskEvents();
-```
-
-> 注意：需求 6.5.2 要求「所有权限校验必须在后端实现，前端隐藏按钮不能替代权限控制」。当前 Mock 层已模拟 `requireLogin / requireAdmin` 校验，接入真实后端时必须在服务端实现同等鉴权。
+> 权限边界（需求 6.5.2）：真实鉴权必须在后端实现，前端隐藏/过滤仅为体验；Mock 层 `requireLogin / requireAdmin / assertScenarioAccess` 模拟，接入后端时须在服务端实现同等校验。
 
 ---
 
-## 职责边界（前端 / 后端）
+## 九、设计风格
 
-本项目只负责**前端**。以下文档 P0 硬性要求依赖**后端**实现，前端无法替代；前端已按相同函数签名在 Mock 层（`src/services/mockApi.ts`）预留接口契约，后端接入时按签名实现即可。
-
-| 需求 | 说明 | 前端现状 |
-|:-----|:-----|:---------|
-| 6.5.2 权限校验在后端实现 | 前端 UI 已按角色隔离 + Mock 层模拟校验，但真实鉴权/数据隔离须由后端接口层校验 | `request.js` 请求拦截器已注入 `X-User-Id`；Mock 层 `requireLogin/requireAdmin` 模拟 |
-| 5.4.1.3 / 2.3 / 6.7 持久化 | 阈值、数据集版本、模型版本、推理记录、风险事件需持久化保存，刷新不丢失 | 当前为内存 Mock，刷新即重置；登录 session 存 localStorage |
-| 5.2 访问控制(3) 用户禁用后记录保留 | 历史推理记录/风险事件在用户禁用后仍应保留，管理员可查询 | Mock 层同 session 生命周期，待后端数据库承载 |
-
----
-
-## 九、设计风格说明
-
-### 暗色科幻主题
-
-- **背景**：深色渐变 + 动态网格/粒子 canvas 背景
-- **卡片**：玻璃拟态（`rgba` 半透明背景 + 发光边框）
-- **主色**：贯穿全站的 `#5ba6ff` → `#407acc` 蓝色渐变
-- **动画**：加载微动效、悬停高亮、平滑过渡
-
-### Element Plus 组件覆盖
-
-全站的 `el-table`、`el-dialog`、`el-tag`、`el-button` 均通过全局 `<style>` 覆盖为暗色主题（实色深色背景，避免亮色层透出），保持视觉一致。
+- 暗色科幻主题：深色渐变 + 玻璃拟态卡片 + `#5ba6ff` 蓝色渐变主色。
+- ECharts 统一暗色主题（`bayes-dark`），配色与 `style.css` 一致（#5ba6ff / #53e5c8 / #ff7b72 / #ffd166）。
+- Element Plus 组件（el-table / el-dialog / el-tabs / el-collapse / el-button）全局覆盖为暗色。
+- 场景看板样式命名空间 `scenario-*`，与 `home-*` / `ov-*` 隔离。
 
 ---
 
@@ -347,24 +228,26 @@ const events = await getRiskEvents();
 ```bash
 vue-tsc -b && vite build
 # ✓ 0 TypeScript errors
-# ✓ built in 1.29s
 ```
 
-当前版本通过 `vue-tsc -b && vite build` 全量类型检查 + 构建，**零类型错误**。
+当前版本零类型错误；仅存在既有 chunk 体积告警（>500kB，建议后续代码分割优化）。
+
+## 更新记录
+
+- [8.14所做修改.md](8.14所做修改.md)：补齐需求第 8 节场景轻量算法、`/overview` 权限对齐 6.5.2、甲板热点图 SVG 底图升级。
+- [8.13所做修改.md](8.13所做修改.md)：V3.0 四场景改造（Task 001–017）与需求第 7 节看板规格对齐的完整汇报。
+- [前端更新（8.8所做修改）.md](前端更新（8.8所做修改）.md)：v2 后续修补记录。
+- [前端更新（8.5前端修补）.md](前端更新（8.5前端修补）.md)：用户分级 v2 审查后的权限隔离、数据集版本绑定等修补。
+- [前端更新（8.4对齐用户分级）.md](前端更新（8.4对齐用户分级）.md)：v2 P0/P1 功能初始实现记录。
 
 ---
 
 ## 十一、后续扩展方向
 
-- [ ] 接入真实后端 API，服务端实现鉴权与数据隔离（需求 6.5.2）
-- [ ] 接入真实数据库（MySQL / PostgreSQL / InfluxDB）
+- [ ] 接入真实后端 API（登录/态势/管理接口），服务端鉴权与持久化
+- [ ] 真实 ARFF 数据替换 mock（含 507 条航母轨迹），热点图替换美工底图
 - [ ] 实时数据推送（WebSocket / SSE）
-- [ ] 资产拓扑图与攻击路径回放
-- [ ] 自定义可视化大屏布局（拖拽组件）
-- [ ] 多语言支持（i18n）
-- [ ] 航母甲板场景正式数据集接入（需求变更后启用训练/推理）
-- [ ] 模型在线部署与实时推理管线
-- [ ] AI 研判可解释性展示（SHAP / LIME）
+- [ ] chunk 代码分割优化（ECharts 动态路由已初步分离）
 
 ---
 
