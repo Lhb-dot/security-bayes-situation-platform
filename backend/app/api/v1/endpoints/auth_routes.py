@@ -36,7 +36,7 @@ def _payload(user: AppUser) -> dict:
 def _set_cookies(response: Response, session_token: str, csrf_token: str, ttl: int) -> None:
     common = {
         "max_age": ttl,
-        "expires": ttl,
+        "expires": datetime.now(timezone.utc) + timedelta(seconds=ttl),
         "secure": cookie_secure(),
         "samesite": cookie_samesite(),
         "path": "/",
