@@ -221,7 +221,7 @@ export interface ModelVersion {
 }
 
 /** 模型生命周期状态（需求 6.7.2） */
-export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE';
+export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {

@@ -37,7 +37,7 @@ def list_model_versions(
     dataset_id: Optional[int] = Query(None, description="按数据集过滤"),
     status: Optional[str] = Query(
         None,
-        description="按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/OFFLINE",
+        description="按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED",
     ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
@@ -187,7 +187,7 @@ def fail_model_training(
 @router.post(
     "/{model_id}/publish",
     response_model=ResponseModel,
-    summary="发布模型（仅管理员）：DRAFT → PUBLISHED（OFFLINE 可重新发布）",
+    summary="发布模型（仅训练人）：DRAFT → PUBLISHED",
 )
 def publish_model(
     model_id: int,
@@ -202,7 +202,7 @@ def publish_model(
 @router.post(
     "/{model_id}/offline",
     response_model=ResponseModel,
-    summary="下线模型（仅管理员）：PUBLISHED → OFFLINE（自动清除默认推荐状态）",
+    summary="兼容旧接口：PUBLISHED → DISABLED（自动清除默认推荐状态）",
 )
 def offline_model(
     model_id: int,
@@ -211,6 +211,21 @@ def offline_model(
 ):
     return unwrap(
         ModelVersionService(db).offline(current_user=current_user, model_id=model_id)
+    )
+
+
+@router.post(
+    "/{model_id}/disable",
+    response_model=ResponseModel,
+    summary="禁用模型（仅管理员）：PUBLISHED → DISABLED",
+)
+def disable_model(
+    model_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    return unwrap(
+        ModelVersionService(db).disable(current_user=current_user, model_id=model_id)
     )
 
 

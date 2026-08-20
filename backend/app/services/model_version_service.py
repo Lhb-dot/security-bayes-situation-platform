@@ -6,7 +6,7 @@
 模型：app.models.model_version.ModelVersion。
 
 状态机（需求 6.7.2）：
-    TRAINING → FAILED / DRAFT → PUBLISHED → OFFLINE（→ PUBLISHED 可重新发布，§6.7.5.7）
+    TRAINING → FAILED / DRAFT → PUBLISHED → DISABLED
 由 MODEL_STATUS_TRANSITIONS 常量驱动，禁止任意跳转。
 
 关键业务规则：
@@ -21,9 +21,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.models.algorithm import Algorithm
+from app.models.app_user import AppUser
 from app.models.dataset import Dataset
 from app.models.inference_record import InferenceRecord
 from app.models.model_version import ModelVersion
@@ -36,6 +37,7 @@ from app.services.constants import (
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_PLATFORM,
     MODEL_STATUS_DRAFT,
+    MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
     MODEL_STATUS_OFFLINE,
     MODEL_STATUS_PUBLISHED,
@@ -83,9 +85,28 @@ class ModelVersionService(ServiceBase):
         else:
             raise ServiceError(403, "无权限操作")
 
-    @staticmethod
-    def _to_dict(model: ModelVersion) -> dict:
-        return row_to_dict(model)
+    def _require_trainer(self, current_user, model: ModelVersion) -> None:
+        """模型只能由发起训练的管理员发布。"""
+        if getattr(current_user, "id", None) != model.trained_by:
+            raise ServiceError(403, "只有训练该模型的管理员可以发布")
+
+    def _to_dict(self, model: ModelVersion) -> dict:
+        """Serialize a model with the display fields needed by the real model center."""
+        data = row_to_dict(model)
+        data.update(
+            {
+                "model_version_id": model.id,
+                "scenario_code": model.scenario.code if model.scenario else None,
+                "scenario_name": model.scenario.name if model.scenario else None,
+                "dataset_logical_id": model.dataset.logical_id if model.dataset else None,
+                "dataset_version": model.dataset.version if model.dataset else None,
+                "algorithm_code": model.algorithm.code if model.algorithm else None,
+                "algorithm_name": model.algorithm.display_name if model.algorithm else None,
+                "trained_by_name": model.trainer.username if model.trainer else None,
+                "published_by_name": model.publisher.username if model.publisher else None,
+            }
+        )
+        return data
 
     def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
         """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
@@ -320,28 +341,41 @@ class ModelVersionService(ServiceBase):
     # ------------------------------------------------------------------
     @service_call
     def publish(self, current_user, model_id: int):
-        """发布模型：DRAFT → PUBLISHED；OFFLINE → PUBLISHED（重新发布，需求 6.7.5.7）。"""
+        """发布模型：仅训练人可将 DRAFT 模型发布。"""
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
         self._require_manageable_model(current_user, model)
+        self._require_trainer(current_user, model)
         self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
         self.commit()
         return ok(data=self._to_dict(model), message="模型已发布")
 
     @service_call
     def offline(self, current_user, model_id: int):
-        """下线模型：PUBLISHED → OFFLINE。
+        """兼容旧接口：将已发布模型禁用。
 
         需求 6.7.4.5：默认模型被下线时，系统必须同时取消其默认状态（is_default=False）。
         """
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
         self._require_manageable_model(current_user, model)
-        self._transition(model, MODEL_STATUS_OFFLINE)
+        self._transition(model, MODEL_STATUS_DISABLED)
         if model.is_default:
             model.is_default = False
         self.commit()
-        return ok(data=self._to_dict(model), message="模型已下线，默认推荐状态已清除")
+        return ok(data=self._to_dict(model), message="模型已禁用，默认推荐状态已清除")
+
+    @service_call
+    def disable(self, current_user, model_id: int):
+        """禁用模型：PUBLISHED → DISABLED，保留模型记录。"""
+        model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
+        self._transition(model, MODEL_STATUS_DISABLED)
+        if model.is_default:
+            model.is_default = False
+        self.commit()
+        return ok(data=self._to_dict(model), message="模型已禁用，默认推荐状态已清除")
 
     @service_call
     def set_default(self, current_user, model_id: int):
@@ -396,7 +430,7 @@ class ModelVersionService(ServiceBase):
     ):
         """模型版本列表。
 
-        - 最外层管理员：全部模型版本，可按状态过滤。
+        - 最外层管理员：仅自己训练的模型，可按状态过滤。
         - 场景管理员：自己场景内全部模型版本（管理视角）。
         - 场景用户：仅已发布模型（需求 6.7.3.4 / 6.7.5.1）。
         """
@@ -404,19 +438,27 @@ class ModelVersionService(ServiceBase):
         role = getattr(current_user, "role", None)
         stmt = select(ModelVersion)
         if role == ROLE_SUPER_ADMIN:
-            # 系统管理员仅可见 platform 数据集派生模型（需求 0.2）
-            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
-                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
-            )
+            # 系统管理员不能看到场景管理员训练的模型，避免跨管理员泄露模型资产。
+            stmt = stmt.where(ModelVersion.trained_by == current_user.id)
             if status:
                 stmt = stmt.where(ModelVersion.status == status)
         elif role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
-                ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                Dataset.visibility.in_(
-                    (DATASET_VISIBILITY_PLATFORM, "company")
-                ),
+            # 普通管理员可以管理本场景模型，但不展示系统管理员尚未发布的模型。
+            # 系统管理员已发布的模型仍可作为本场景可用模型展示。
+            stmt = (
+                stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id)
+                .join(AppUser, AppUser.id == ModelVersion.trained_by)
+                .where(
+                    ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
+                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, "company")),
+                    or_(
+                        AppUser.role != ROLE_SUPER_ADMIN,
+                        ModelVersion.status == MODEL_STATUS_PUBLISHED,
+                    ),
+                )
             )
+            if status:
+                stmt = stmt.where(ModelVersion.status == status)
         else:
             # 场景用户：仅看到绑定场景中可用的已发布模型；个人模型仅限本人。
             stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
@@ -444,20 +486,25 @@ class ModelVersionService(ServiceBase):
     def _can_view_model(self, current_user, model: ModelVersion) -> bool:
         """模型可见性（需求 0.2 / 6.7）。
 
-        - SUPER_ADMIN：仅 platform 数据集派生模型
+        - SUPER_ADMIN：仅自己训练的模型
         - SCENARIO_ADMIN：自己场景全部
         - SCENARIO_USER：仅已发布
         """
         role = getattr(current_user, "role", None)
         if role == ROLE_SUPER_ADMIN:
-            dataset = self.db.get(Dataset, model.dataset_id)
-            return bool(dataset) and self.is_platform_visibility(dataset.visibility)
+            return model.trained_by == getattr(current_user, "id", None)
         if role == ROLE_SCENARIO_ADMIN:
             dataset = self.db.get(Dataset, model.dataset_id)
+            trainer = self.db.get(AppUser, model.trained_by)
             return (
                 model.scenario_id == getattr(current_user, "scenario_id", None)
                 and bool(dataset)
                 and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, "company")
+                and not (
+                    trainer
+                    and trainer.role == ROLE_SUPER_ADMIN
+                    and model.status != MODEL_STATUS_PUBLISHED
+                )
             )
         dataset = self.db.get(Dataset, model.dataset_id)
         return (
@@ -541,6 +588,8 @@ class ModelVersionService(ServiceBase):
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
         self._require_manageable_model(current_user, model)
+        if model.status != MODEL_STATUS_DISABLED:
+            raise ServiceError(400, "只有禁用中的模型才能删除")
         ir_count = self.db.scalar(
             select(func.count()).select_from(InferenceRecord).where(
                 InferenceRecord.model_version_id == model_id

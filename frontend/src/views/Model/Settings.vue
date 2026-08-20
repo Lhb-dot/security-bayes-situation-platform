@@ -69,6 +69,7 @@ const SCENARIO_LABEL: Record<string, string> = {
 };
 /** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景 */
 const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 const activeScenarios = computed<ScenarioId[]>(() =>
   currentUser.value?.role === 'SUPER_ADMIN'
     ? ['network_security', 'power_system', 'flightdeck_operation', 'geological_risk']
@@ -80,6 +81,8 @@ const thresholds = ref<ThresholdConfig[]>([]);
 const changeLogs = ref<ThresholdChangeLog[]>([]);
 const showChangeLogs = ref(false);
 const saving = ref(false);
+/** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
+const thresholdScenario = ref<ScenarioId>('network_security');
 const editing = ref<Record<string, { medium: number | null; high: number | null }>>({
   network_security: { medium: null, high: null },
   power_system: { medium: null, high: null },
@@ -110,6 +113,8 @@ const loadThresholds = async () => {
     };
   }
   editing.value = nextEditing;
+  const firstScenario = activeScenarios.value[0];
+  if (firstScenario) thresholdScenario.value = firstScenario; else thresholdScenario.value = 'network_security';
 };
 
 const loadChangeLogs = async () => {
@@ -267,32 +272,38 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div class="threshold-grid">
-        <div v-for="sc in activeScenarios" :key="sc" class="threshold-card">
-          <div class="threshold-card__head">
-            <h4>{{ SCENARIO_LABEL[sc] }}</h4>
-            <span class="threshold-card__scene">{{ sc }}</span>
+      <div v-if="isSuperAdmin" class="threshold-scenario-pick">
+        <label class="settings-form__label">选择场景</label>
+        <select v-model="thresholdScenario" class="settings-form__input threshold-scenario-pick__select">
+          <option v-for="sc in activeScenarios" :key="sc" :value="sc">{{ SCENARIO_LABEL[sc] ?? sc }}</option>
+        </select>
+      </div>
+
+      <!-- 阈值长条框：系统管理员可切换场景，其余账号固定为绑定场景 -->
+      <div class="threshold-bar">
+        <div class="threshold-bar__head">
+          <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
+          <span class="threshold-bar__scene">{{ thresholdScenario }}</span>
+        </div>
+        <div class="threshold-bar__form">
+          <div class="threshold-field">
+            <label>中风险阈值（0~1）</label>
+            <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold !== undefined" class="threshold-bar__current">
+              当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold) }}
+            </span>
           </div>
-          <div class="threshold-card__form">
-            <div class="threshold-field">
-              <label>中风险阈值（0~1）</label>
-              <input v-model.number="editing[sc].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-              <span v-if="thresholds.find(t => t.scenario_id === sc)?.medium_threshold !== undefined" class="threshold-card__current">
-                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === sc)?.medium_threshold) }}
-              </span>
-            </div>
-            <div class="threshold-field">
-              <label>高风险阈值（0~1）</label>
-              <input v-model.number="editing[sc].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-              <span v-if="thresholds.find(t => t.scenario_id === sc)?.high_threshold !== undefined" class="threshold-card__current">
-                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === sc)?.high_threshold) }}
-              </span>
-            </div>
-            <p class="threshold-card__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
-            <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(sc)">
-              {{ saving ? '保存中...' : '保存并生效' }}
-            </button>
+          <div class="threshold-field">
+            <label>高风险阈值（0~1）</label>
+            <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold !== undefined" class="threshold-bar__current">
+              当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold) }}
+            </span>
           </div>
+          <p class="threshold-bar__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
+          <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
+            {{ saving ? '保存中...' : '保存并生效' }}
+          </button>
         </div>
       </div>
     </section>
@@ -518,41 +529,55 @@ onMounted(async () => {
 }
 
 /* 阈值 */
-.threshold-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.threshold-card {
-  padding: 16px 18px;
-  border-radius: 12px;
-  border: 1px solid rgba(125, 201, 255, 0.14);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.threshold-card__head {
+.threshold-scenario-pick {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.threshold-card__head h4 {
+.threshold-scenario-pick__select {
+  width: 220px;
+}
+
+/* 阈值长条框：单个横向长条，内含可调整的阈值输入 */
+.threshold-bar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  border-radius: 14px;
+  border: 1px solid rgba(125, 201, 255, 0.16);
+  background: rgba(8, 17, 31, 0.55);
+}
+
+.threshold-bar__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+  padding-right: 18px;
+  border-right: 1px solid rgba(125, 201, 255, 0.1);
+}
+
+.threshold-bar__head h4 {
   margin: 0;
-  font-size: 1rem;
-  color: #d9e8ff;
+  font-size: 1.05rem;
+  color: #e8f1ff;
 }
 
-.threshold-card__scene {
-  font-size: 0.72rem;
-  color: rgba(154, 214, 255, 0.5);
+.threshold-bar__scene {
+  font-size: 0.78rem;
+  color: rgba(154, 214, 255, 0.55);
 }
 
-.threshold-card__form {
-  display: grid;
-  gap: 10px;
+.threshold-bar__form {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+  flex: 1;
 }
 
 .threshold-field {
@@ -566,14 +591,19 @@ onMounted(async () => {
   color: rgba(220, 234, 255, 0.65);
 }
 
-.threshold-card__current {
-  font-size: 0.72rem;
+.threshold-field .settings-form__input {
+  width: 150px;
+}
+
+.threshold-bar__current {
+  font-size: 0.74rem;
   color: rgba(154, 214, 255, 0.6);
 }
 
-.threshold-card__rule {
+.threshold-bar__rule {
+  flex-basis: 100%;
   margin: 0;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   color: rgba(255, 209, 102, 0.7);
 }
 
@@ -785,8 +815,19 @@ select.settings-form__input option {
   .settings-grid {
     grid-template-columns: 1fr;
   }
-  .threshold-grid {
-    grid-template-columns: 1fr;
+  .threshold-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .threshold-bar__head {
+    border-right: none;
+    padding-right: 0;
+  }
+  .threshold-field .settings-form__input {
+    width: 100%;
+  }
+  .threshold-scenario-pick__select {
+    flex: 1;
   }
   .scenario-pick-grid {
     grid-template-columns: repeat(2, 1fr);
