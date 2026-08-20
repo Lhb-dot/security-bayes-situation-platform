@@ -29,7 +29,7 @@ declare module 'vue-router' {
  */
 const roleLanding = (user: UserAccount): string => {
   if (user.role === 'SUPER_ADMIN') return '/overview';
-  const bound = user.scenario_ids?.[0];
+  const bound = user.scenario_code;
   if (bound) return `/scenarios/${bound}/dashboard`;
   return '/home';
 };

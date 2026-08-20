@@ -327,6 +327,7 @@ export type UserRole = 'SUPER_ADMIN' | 'SCENARIO_ADMIN' | 'SCENARIO_USER';
 
 /** 用户账号 */
 export interface UserAccount {
+  id: number;
   user_id: string;
   username: string;
   display_name: string;
@@ -335,7 +336,9 @@ export interface UserAccount {
   created_at: string;
   created_by: string;
   last_login_at?: string;
-  /** 绑定可见场景（需求 1.1.6 用户-场景绑定；缺省表示未绑定，由管理员分配） */
+  scenario_id: number | null;
+  scenario_code: ScenarioId | null;
+  /** @deprecated 仅为旧展示组件兼容；正式数据源只返回单个 scenario_code。 */
   scenario_ids?: ScenarioId[];
 }
 

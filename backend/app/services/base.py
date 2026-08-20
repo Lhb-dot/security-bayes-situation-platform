@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.schemas.common import fail
 from app.services.constants import (
+    DATASET_VISIBILITY_PLATFORM,
     ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
@@ -130,6 +131,32 @@ class ServiceBase:
             return
         if getattr(user, "id", None) != owner_id:
             raise ServiceError(403, "无权限操作")
+
+    def require_scenario_access(self, user: Optional[object], scenario_id: int) -> None:
+        """场景访问校验（需求 0.2 / 1.1.6）。
+
+        - SUPER_ADMIN：可访问全部场景元数据与平台预置数据相关能力；
+        - SCENARIO_ADMIN / SCENARIO_USER：仅可访问本人绑定场景。
+        """
+        self.require_login(user)
+        if getattr(user, "role", None) == ROLE_SUPER_ADMIN:
+            return
+        if getattr(user, "scenario_id", None) == scenario_id:
+            return
+        raise ServiceError(403, "无权限操作")
+
+    def can_access_scenario(self, user: Optional[object], scenario_id: int) -> bool:
+        """判断当前用户是否可访问指定场景（不抛异常）。"""
+        if user is None or getattr(user, "status", None) != USER_STATUS_ENABLED:
+            return False
+        if getattr(user, "role", None) == ROLE_SUPER_ADMIN:
+            return True
+        return getattr(user, "scenario_id", None) == scenario_id
+
+    @staticmethod
+    def is_platform_visibility(visibility: Optional[str]) -> bool:
+        """是否为平台预置数据可见性。"""
+        return (visibility or DATASET_VISIBILITY_PLATFORM) == DATASET_VISIBILITY_PLATFORM
 
     # ------------------------------------------------------------------
     # 事务辅助

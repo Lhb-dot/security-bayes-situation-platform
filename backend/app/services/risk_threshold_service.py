@@ -31,8 +31,11 @@ class RiskThresholdService(ServiceBase):
 
     @service_call
     def get_by_scenario(self, current_user, scenario_id: int):
-        """按场景查询阈值（登录用户可读，供态势/推理结果展示；需求 5.4.1.3）。"""
-        self.require_login(current_user)
+        """按场景查询阈值（登录用户可读，供态势/推理结果展示；需求 5.4.1.3）。
+
+        必须校验场景绑定：非 SUPER_ADMIN 仅可读本人绑定场景阈值。
+        """
+        self.require_scenario_access(current_user, scenario_id)
         threshold = self.db.get(RiskThreshold, scenario_id)
         if threshold is None:
             return ok(data=None, message="该场景尚未配置风险阈值")

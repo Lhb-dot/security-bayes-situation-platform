@@ -35,8 +35,8 @@ const handleLogin = async () => {
     // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
     if (user.role === 'SUPER_ADMIN') {
       router.push('/overview');
-    } else if (user.scenario_ids?.[0]) {
-      router.push(`/scenarios/${user.scenario_ids[0]}/dashboard`);
+    } else if (user.scenario_code) {
+      router.push(`/scenarios/${user.scenario_code}/dashboard`);
     } else {
       router.push('/home');
     }
@@ -47,11 +47,6 @@ const handleLogin = async () => {
   }
 };
 
-const quickLogin = async (uname: string, pwd: string) => {
-  username.value = uname;
-  password.value = pwd;
-  await handleLogin();
-};
 </script>
 
 <template>
@@ -94,18 +89,7 @@ const quickLogin = async (uname: string, pwd: string) => {
       </form>
 
       <div class="login-demo">
-        <p class="login-demo__title">演示账号（密码均为 123456）</p>
-        <div class="login-demo__btns">
-          <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
-            系统管理员 admin
-          </button>
-          <button class="login-demo__btn" @click="quickLogin('net_admin', '123456')">
-            管理员 net_admin
-          </button>
-          <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
-            用户 alice
-          </button>
-        </div>
+        <p class="login-demo__title">请使用已配置的系统账号登录</p>
       </div>
     </div>
   </div>

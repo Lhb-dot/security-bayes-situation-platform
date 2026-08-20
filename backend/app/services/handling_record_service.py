@@ -11,16 +11,20 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
+from app.models.dataset import Dataset
 from app.models.handling_record import HandlingRecord
 from app.models.risk_event import RiskEvent
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_VISIBILITY_PLATFORM,
     HANDLING_ACTIONS,
     RISK_EVENT_STATUS_TRANSITIONS,
-    ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SCENARIO_USER,
+    ROLE_SUPER_ADMIN,
 )
 from app.utils.common import get_logger, paginate, row_to_dict, validate_enum
 
@@ -36,13 +40,27 @@ class HandlingRecordService(ServiceBase):
             raise ServiceError(404, "处置记录不存在")
         return record
 
-    @staticmethod
-    def _is_related(record: HandlingRecord, user) -> bool:
-        """判断处置记录是否与当前用户相关（本人处置或本人事件）。"""
-        return (
-            record.handler_id == user.id
-            or record.risk_event.created_by_user_id == user.id
-        )
+    def _can_access_event(self, current_user, event: RiskEvent) -> bool:
+        """Apply the same platform/scenario/personal boundary as risk events."""
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            dataset = self.db.get(Dataset, event.dataset_id)
+            return bool(dataset) and self.is_platform_visibility(dataset.visibility)
+        if role == ROLE_SCENARIO_ADMIN:
+            dataset = self.db.get(Dataset, event.dataset_id)
+            return (
+                event.scenario_id == getattr(current_user, "scenario_id", None)
+                and bool(dataset)
+                and dataset.visibility in ("platform", "company")
+            )
+        if role == ROLE_SCENARIO_USER:
+            return event.created_by_user_id == getattr(current_user, "id", None)
+        return False
+
+    def _can_access_record(self, current_user, record: HandlingRecord) -> bool:
+        """Check the parent event before exposing a handling/audit record."""
+        event = record.risk_event or self.db.get(RiskEvent, record.risk_event_id)
+        return bool(event) and self._can_access_event(current_user, event)
 
     # ------------------------------------------------------------------
     # 新增处置记录
@@ -65,7 +83,8 @@ class HandlingRecordService(ServiceBase):
         event = self.db.get(RiskEvent, risk_event_id)
         if event is None:
             raise ServiceError(404, "风险事件不存在")
-        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        if not self._can_access_event(current_user, event):
+            raise ServiceError(403, "无权限操作")
 
         err = validate_enum(action, HANDLING_ACTIONS, "action")
         if err:
@@ -111,14 +130,22 @@ class HandlingRecordService(ServiceBase):
         """处置记录列表。普通用户仅可见本人处置的或本人风险事件的记录。"""
         self.require_login(current_user)
         stmt = select(HandlingRecord)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            stmt = stmt.join(
-                RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).join(
+                Dataset, Dataset.id == RiskEvent.dataset_id
             ).where(
-                or_(
-                    HandlingRecord.handler_id == current_user.id,
-                    RiskEvent.created_by_user_id == current_user.id,
-                )
+                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
+        elif role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).where(
+                RiskEvent.scenario_id == getattr(current_user, "scenario_id", None)
+            ).join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
+                Dataset.visibility.in_(("platform", "company"))
+            )
+        else:
+            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).where(
+                RiskEvent.created_by_user_id == current_user.id
             )
         if risk_event_id is not None:
             stmt = stmt.where(HandlingRecord.risk_event_id == risk_event_id)
@@ -132,10 +159,7 @@ class HandlingRecordService(ServiceBase):
         """处置记录详情。"""
         self.require_login(current_user)
         record = self._get(record_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and not self._is_related(record, current_user)
-        ):
+        if not self._can_access_record(current_user, record):
             raise ServiceError(403, "无权限操作")
         return ok(data=row_to_dict(record))
 

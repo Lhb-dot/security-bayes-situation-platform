@@ -34,6 +34,7 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     ALGORITHM_STATUS_AVAILABLE,
     DATASET_STATUS_ACTIVE,
+    DATASET_VISIBILITY_PLATFORM,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_FAILED,
     MODEL_STATUS_OFFLINE,
@@ -63,6 +64,24 @@ class ModelVersionService(ServiceBase):
         if model is None:
             raise ServiceError(404, "模型版本不存在")
         return model
+
+    def _require_manageable_model(self, current_user, model: ModelVersion) -> None:
+        """Lifecycle operations follow the same dataset ownership boundary."""
+        dataset = self.db.get(Dataset, model.dataset_id)
+        if dataset is None:
+            raise ServiceError(404, "模型绑定的数据集不存在")
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            if dataset.visibility != DATASET_VISIBILITY_PLATFORM:
+                raise ServiceError(403, "系统管理员只能管理平台数据集派生模型")
+        elif role == ROLE_SCENARIO_ADMIN:
+            if (
+                model.scenario_id != getattr(current_user, "scenario_id", None)
+                or dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, "company")
+            ):
+                raise ServiceError(403, "无权限操作")
+        else:
+            raise ServiceError(403, "无权限操作")
 
     @staticmethod
     def _to_dict(model: ModelVersion) -> dict:
@@ -164,6 +183,13 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(400, "数据集不属于所选场景，禁止跨场景混合训练")
         if dataset.status != DATASET_STATUS_ACTIVE:
             raise ServiceError(400, "数据集已停用，不能用于训练")
+        if dataset.visibility != DATASET_VISIBILITY_PLATFORM and getattr(current_user, "role", None) == ROLE_SUPER_ADMIN:
+            raise ServiceError(403, "系统管理员只能使用平台数据集训练模型")
+        if (
+            getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
+            and dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, "company")
+        ):
+            raise ServiceError(403, "场景管理员不能使用个人数据集训练模型")
 
         algorithm = self.db.get(Algorithm, algorithm_id)
         if algorithm is None:
@@ -267,6 +293,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(400, "evaluation_metrics 必须是 JSON 对象")
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         self._transition(model, MODEL_STATUS_DRAFT)
         model.evaluation_metrics = evaluation_metrics
         self.commit()
@@ -279,6 +306,7 @@ class ModelVersionService(ServiceBase):
         """训练失败：TRAINING → FAILED。"""
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         self._transition(model, MODEL_STATUS_FAILED)
         if error_message:
             metrics = dict(model.evaluation_metrics or {})
@@ -295,6 +323,7 @@ class ModelVersionService(ServiceBase):
         """发布模型：DRAFT → PUBLISHED；OFFLINE → PUBLISHED（重新发布，需求 6.7.5.7）。"""
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
         self.commit()
         return ok(data=self._to_dict(model), message="模型已发布")
@@ -307,6 +336,7 @@ class ModelVersionService(ServiceBase):
         """
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         self._transition(model, MODEL_STATUS_OFFLINE)
         if model.is_default:
             model.is_default = False
@@ -322,6 +352,7 @@ class ModelVersionService(ServiceBase):
         """
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         if model.status != MODEL_STATUS_PUBLISHED:
             raise ServiceError(400, "只有已发布模型才能设为默认推荐模型")
         others = self.db.scalars(
@@ -343,6 +374,7 @@ class ModelVersionService(ServiceBase):
         """取消默认推荐状态（管理级角色，仅场景内）。"""
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         if not model.is_default:
             raise ServiceError(400, "该模型不是默认推荐模型")
         model.is_default = False
@@ -371,18 +403,36 @@ class ModelVersionService(ServiceBase):
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
         stmt = select(ModelVersion)
-        if role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.where(ModelVersion.scenario_id == getattr(current_user, "scenario_id", None))
-        elif role != ROLE_SUPER_ADMIN:
-            # 场景用户：仅看到被分配场景的已发布模型
-            stmt = stmt.where(ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES))
+        if role == ROLE_SUPER_ADMIN:
+            # 系统管理员仅可见 platform 数据集派生模型（需求 0.2）
+            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
+                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
+            if status:
+                stmt = stmt.where(ModelVersion.status == status)
+        elif role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
+                ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
+                Dataset.visibility.in_(
+                    (DATASET_VISIBILITY_PLATFORM, "company")
+                ),
+            )
+        else:
+            # 场景用户：仅看到绑定场景中可用的已发布模型；个人模型仅限本人。
+            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
+                ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES)
+            )
             bound = getattr(current_user, "scenario_id", None)
             if bound is None:
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
-            stmt = stmt.where(ModelVersion.scenario_id == bound)
-        elif status:
-            stmt = stmt.where(ModelVersion.status == status)
+            stmt = stmt.where(
+                ModelVersion.scenario_id == bound,
+                (Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, "company")))
+                | ((Dataset.visibility == "personal") & (Dataset.uploaded_by == current_user.id)),
+            )
         if scenario_id is not None:
+            if role != ROLE_SUPER_ADMIN:
+                self.require_scenario_access(current_user, scenario_id)
             stmt = stmt.where(ModelVersion.scenario_id == scenario_id)
         if dataset_id is not None:
             stmt = stmt.where(ModelVersion.dataset_id == dataset_id)
@@ -392,13 +442,36 @@ class ModelVersionService(ServiceBase):
         return ok(data=result)
 
     def _can_view_model(self, current_user, model: ModelVersion) -> bool:
-        """模型可见性：SUPER_ADMIN 全部；SCENARIO_ADMIN 自己场景全部；SCENARIO_USER 仅已发布。"""
+        """模型可见性（需求 0.2 / 6.7）。
+
+        - SUPER_ADMIN：仅 platform 数据集派生模型
+        - SCENARIO_ADMIN：自己场景全部
+        - SCENARIO_USER：仅已发布
+        """
         role = getattr(current_user, "role", None)
         if role == ROLE_SUPER_ADMIN:
-            return True
+            dataset = self.db.get(Dataset, model.dataset_id)
+            return bool(dataset) and self.is_platform_visibility(dataset.visibility)
         if role == ROLE_SCENARIO_ADMIN:
-            return model.scenario_id == getattr(current_user, "scenario_id", None)
-        return model.status in USER_VISIBLE_MODEL_STATUSES
+            dataset = self.db.get(Dataset, model.dataset_id)
+            return (
+                model.scenario_id == getattr(current_user, "scenario_id", None)
+                and bool(dataset)
+                and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, "company")
+            )
+        dataset = self.db.get(Dataset, model.dataset_id)
+        return (
+            model.scenario_id == getattr(current_user, "scenario_id", None)
+            and model.status in USER_VISIBLE_MODEL_STATUSES
+            and bool(dataset)
+            and (
+                dataset.visibility in (DATASET_VISIBILITY_PLATFORM, "company")
+                or (
+                    dataset.visibility == "personal"
+                    and dataset.uploaded_by == getattr(current_user, "id", None)
+                )
+            )
+        )
 
     @service_call
     def get(self, current_user, model_id: int):
@@ -414,7 +487,7 @@ class ModelVersionService(ServiceBase):
         self, current_user, scenario_id: int, dataset_id: int
     ):
         """获取某"场景＋数据集"的默认推荐模型（需求 6.7.4：无默认则返回 null）。"""
-        self.require_login(current_user)
+        self.require_scenario_access(current_user, scenario_id)
         model = self.db.scalar(
             select(ModelVersion).where(
                 ModelVersion.scenario_id == scenario_id,
@@ -467,6 +540,7 @@ class ModelVersionService(ServiceBase):
         """
         model = self._get(model_id)
         self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
         ir_count = self.db.scalar(
             select(func.count()).select_from(InferenceRecord).where(
                 InferenceRecord.model_version_id == model_id

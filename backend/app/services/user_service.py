@@ -55,8 +55,10 @@ class UserService(ServiceBase):
 
     @staticmethod
     def _safe(user: AppUser) -> dict:
-        """对外字段：隐藏 password_hash。"""
-        return row_to_dict(user, exclude=("password_hash",))
+        """对外字段：隐藏 password_hash，并返回规范化场景编码。"""
+        data = row_to_dict(user, exclude=("password_hash",))
+        data["scenario_code"] = user.scenario.code if user.scenario is not None else None
+        return data
 
     # ------------------------------------------------------------------
     # 查询
@@ -189,13 +191,15 @@ class UserService(ServiceBase):
         user = self._get(user_id)
         if user.role == ROLE_SUPER_ADMIN:
             raise ServiceError(400, "最外层管理员不绑定场景，无需分配")
+        if scenario_id is None:
+            raise ServiceError(400, "场景管理员/场景用户必须绑定场景")
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
-            if user.scenario_id != getattr(current_user, "scenario_id", None):
+            bound = getattr(current_user, "scenario_id", None)
+            if user.scenario_id != bound or scenario_id != bound:
                 raise ServiceError(403, "场景管理员只能管理自己场景的用户")
-        if scenario_id is not None:
-            scenario = self.db.get(Scenario, scenario_id)
-            if scenario is None:
-                raise ServiceError(404, "绑定场景不存在")
+        scenario = self.db.get(Scenario, scenario_id)
+        if scenario is None:
+            raise ServiceError(404, "绑定场景不存在")
         user.scenario_id = scenario_id
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
@@ -234,6 +238,13 @@ class UserService(ServiceBase):
                 raise ServiceError(400, "旧密码不正确")
         user.password_hash = hash_password(new_password)
         user.updated_at = datetime.now(timezone.utc)
+        # Password changes invalidate every previously issued session for this account.
+        from app.models.auth_session import AuthSession
+        now = datetime.now(timezone.utc)
+        self.db.query(AuthSession).filter(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        ).update({AuthSession.revoked_at: now}, synchronize_session=False)
         self.commit()
         return ok(message="密码修改成功")
 

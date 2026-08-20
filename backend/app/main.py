@@ -500,7 +500,7 @@ class LocalVLLMClient:
 
 # ==================== FastAPI App & Routes ====================
 import threading
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -509,6 +509,7 @@ from app.algorithms.pmwnb_demo import (
 )
 import app.algorithms.pmwnb_demo as pmwnb_demo
 from app.services.model_sim import get_dataset_list, train_bayes_sim, infer_bayes_sim, check_service_health
+from app.api.deps import get_current_user, require_scenario_admin
 
 
 
@@ -557,12 +558,12 @@ async def get_map_json():
 # ===================== 大创项目：PMWNB 矩阵加权贝叶斯接口 =====================
 
 @app.get("/api/model/dataset-list")
-async def get_ds():
+async def get_ds(current_user=Depends(get_current_user)):  # noqa: ARG001
     return {"code": 200, "data": get_dataset_list()}
 
 
 @app.post("/api/model/save-threshold")
-async def save_thr(high: float, mid: float, low: float):
+async def save_thr(high: float, mid: float, low: float, current_user=Depends(require_scenario_admin)):  # noqa: ARG001
     ok = save_threshold_sim(high, mid, low)
     if not ok:
         raise HTTPException(status_code=400, detail="阈值规则错误，必须满足 高>中>低")
@@ -570,7 +571,7 @@ async def save_thr(high: float, mid: float, low: float):
 
 
 @app.post("/api/model/train")
-def api_train_bayes_model(dataset_name: str, algo_type: str = "", discrete_method: str = ""):
+def api_train_bayes_model(dataset_name: str, algo_type: str = "", discrete_method: str = "", current_user=Depends(require_scenario_admin)):  # noqa: ARG001
     global train_global_status
     train_result = train_bayes_sim(dataset_name, algo_type, discrete_method)
     train_global_status["is_trained"] = True
@@ -592,7 +593,7 @@ def api_train_bayes_model(dataset_name: str, algo_type: str = "", discrete_metho
 
 
 @app.post("/api/model/infer")
-def api_bayes_infer(flowLength: float, duration: float, accessFreq: float):
+def api_bayes_infer(flowLength: float, duration: float, accessFreq: float, current_user=Depends(get_current_user)):  # noqa: ARG001
     global train_global_status
     if not train_global_status["is_trained"]:
         raise HTTPException(status_code=400, detail="禁止预测：请先选择数据集执行模型训练")
@@ -602,12 +603,12 @@ def api_bayes_infer(flowLength: float, duration: float, accessFreq: float):
 
 
 @app.get("/api/model/exp-records")
-async def get_exp():
+async def get_exp(current_user=Depends(get_current_user)):  # noqa: ARG001
     return {"code": 200, "data": get_all_exp()}
 
 
 @app.delete("/api/model/exp/{record_id}")
-async def del_exp(record_id: int):
+async def del_exp(record_id: int, current_user=Depends(require_scenario_admin)):  # noqa: ARG001
     del_exp_by_id(record_id)
     return {"code": 200, "msg": "实验记录删除完成"}
 # ==================================================================
@@ -636,13 +637,6 @@ VIRTUAL_TITLE_FRAGMENTS = [
 ]
 VIRTUAL_SOURCES = {"模拟新闻源", "模拟情报源"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # 
 # class CrawlStartRequest(BaseModel):
@@ -1921,12 +1915,9 @@ def _is_strategic(text: str) -> bool:
 
 
 
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
-
-
 # 大屏贝叶斯批量统计接口
 @app.get("/api/model/risk_statistics")
-def get_bayes_risk_stat():
+def get_bayes_risk_stat(current_user=Depends(get_current_user)):  # noqa: ARG001
     return {
         "topSourceIps": [
             {"name": "110.25.33.12", "score": 96},
@@ -1952,6 +1943,9 @@ def get_bayes_risk_stat():
         },
         "model_metric":{"accuracy":0.86,"f1":0.84,"recall":0.82}
     }
+
+
+app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 if __name__ == '__main__':
     import uvicorn

@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_bound_scenario
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -30,12 +30,12 @@ def list_scenarios(
 
 
 @router.get(
-    "/{scenario_id}", response_model=ResponseModel, summary="场景详情（登录用户）"
+    "/{scenario_id}", response_model=ResponseModel, summary="场景详情（绑定场景校验）"
 )
 def get_scenario(
     scenario_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(require_bound_scenario),
 ):
     return unwrap(
         ScenarioService(db).get(current_user=current_user, scenario_id=scenario_id)
@@ -50,7 +50,7 @@ def get_scenario(
 def get_scenario_insights(
     scenario_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(require_bound_scenario),
     dataset_id: Optional[int] = Query(None, description="指定数据集；缺省取场景下首个 ACTIVE 数据集"),
     sample_rows: int = Query(500, ge=10, le=2000, description="参与计算的样本行数上限"),
 ):

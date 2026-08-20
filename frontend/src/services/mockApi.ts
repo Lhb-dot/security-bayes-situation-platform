@@ -696,10 +696,22 @@ const SCENARIO_META: Array<{
 // ===================== v2.0 会话与用户（需求 6.2 / 6.5） =====================
 
 /** 内部用户记录：密码仅 mock 内部使用，对外接口不返回 */
-interface UserRecord extends UserAccount {
+interface UserRecord {
+  id: number;
+  user_id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  status: 'active' | 'disabled';
+  created_at: string;
+  created_by: string;
+  last_login_at?: string;
+  scenario_ids?: ScenarioId[];
   password: string;
-  /** 对应 PostgreSQL app_user 表的主键 ID：前端登录后以该整数 ID 作为 X-User-Id 调 /api/v1 */
+  /** 兼容旧 mock 数据的后端主键，不参与真实认证。 */
   backend_id: number;
+  scenario_id: number | null;
+  scenario_code: ScenarioId | null;
 }
 
 const SESSION_KEY = 'bayes_session_user_id';
@@ -707,11 +719,11 @@ const SESSION_KEY = 'bayes_session_user_id';
 /** 预置账号（三级角色）：SUPER_ADMIN（最外层）/ SCENARIO_ADMIN（场景管理员）/ SCENARIO_USER（场景用户）。
  * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐。 */
 let userRecords: UserRecord[] = [
-  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
-  { user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'] },
-  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'] },
-  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'] },
-  { user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk', 'flightdeck_operation'] },
+  { id: 1, user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system', scenario_id: null, scenario_code: null },
+  { id: 6, user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'], scenario_id: 1, scenario_code: 'network_security' },
+  { id: 2, user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'], scenario_id: 1, scenario_code: 'network_security' },
+  { id: 3, user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'], scenario_id: 2, scenario_code: 'power_system' },
+  { id: 7, user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk'], scenario_id: 3, scenario_code: 'geological_risk' },
 ];
 
 let sessionUser: UserAccount | null = null;
@@ -849,6 +861,7 @@ export const createUser = async (params: {
   if (userRecords.some((u) => u.username === params.username)) throw new Error('该用户名已存在');
   const newId = `user_${String(userRecords.length + 1).padStart(6, '0')}`;
   const record: UserRecord = {
+    id: 0,
     user_id: newId,
     // mock 新注册用户在后端数据库中不存在，backend_id=0 访问 /api/v1 时会被后端 401 拒绝
     backend_id: 0,
@@ -860,6 +873,8 @@ export const createUser = async (params: {
     created_at: nowStr(),
     created_by: operator.user_id,
     scenario_ids: params.scenario_ids ?? [],
+    scenario_id: null,
+    scenario_code: params.scenario_ids?.[0] ?? null,
   };
   userRecords.push(record);
   return { ...record };

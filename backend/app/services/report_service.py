@@ -93,12 +93,18 @@ class ReportService(ServiceBase):
 
         role = getattr(current_user, "role", None)
         if role != ROLE_SUPER_ADMIN:
-            # 场景管理员/用户：只能生成自己绑定场景的报告
+            # 场景角色只能生成本人绑定场景的报告。
             if scenario_id is not None and scenario_id != current_user.scenario_id:
                 raise ServiceError(403, "只能生成本人绑定场景的报告")
             scenario_id = current_user.scenario_id
-            if target_user_id is not None and target_user_id != current_user.id:
+            if role == ROLE_SCENARIO_USER and target_user_id is not None and target_user_id != current_user.id:
                 raise ServiceError(403, "普通用户只能基于本人数据生成报告")
+            if role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
+                target = self.db.get(AppUser, target_user_id)
+                if target is None:
+                    raise ServiceError(404, "目标用户不存在")
+                if target.scenario_id != scenario_id:
+                    raise ServiceError(403, "只能指定本人绑定场景内的用户")
         elif target_user_id is not None:
             target = self.db.get(AppUser, target_user_id)
             if target is None:
@@ -166,10 +172,10 @@ class ReportService(ServiceBase):
         """报告详情（普通用户仅本人生成或定向给自己的报告）。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and not self._can_view(current_user, report)
-        ):
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "无权限操作")
+        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and not self._can_view(current_user, report):
             raise ServiceError(403, "无权限操作")
         return ok(data=row_to_dict(report))
 
@@ -181,10 +187,10 @@ class ReportService(ServiceBase):
         """删除报告：生成者本人或管理员。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and report.generated_by != current_user.id
-        ):
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "无权限操作")
+        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and report.generated_by != current_user.id:
             raise ServiceError(403, "无权限操作")
         self.db.delete(report)
         self.commit()
