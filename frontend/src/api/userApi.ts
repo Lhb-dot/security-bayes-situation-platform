@@ -18,6 +18,13 @@ interface AuthPayload {
   csrf_token?: string;
 }
 
+export interface UserListResult {
+  items: UserAccount[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 const toUserAccount = (user: ApiUser): UserAccount => ({
   id: user.id,
   user_id: String(user.id),
@@ -60,9 +67,24 @@ export const getUserList = async (params?: {
   page?: number;
   page_size?: number;
   keyword?: string;
-}): Promise<UserAccount[]> => {
-  const data = await unwrapData(await request.get('/api/v1/users', { params }));
-  return (data.items ?? []).map((user: ApiUser) => toUserAccount(user));
+  role?: UserRole;
+}): Promise<UserListResult> => {
+  const data = await unwrapData(
+    await request.get('/api/v1/users', {
+      params: {
+        page: params?.page ?? 1,
+        page_size: params?.page_size ?? 200,
+        keyword: params?.keyword,
+        role: params?.role,
+      },
+    }),
+  );
+  return {
+    items: (data.items ?? []).map((user: ApiUser) => toUserAccount(user)),
+    total: data.total ?? 0,
+    page: data.page ?? 1,
+    page_size: data.page_size ?? 200,
+  };
 };
 
 export const createUser = async (params: {
@@ -73,14 +95,29 @@ export const createUser = async (params: {
 }): Promise<UserAccount> =>
   unwrapUser(await unwrapData(await request.post('/api/v1/users', params)));
 
+export const updateUserScenario = async (
+  userId: string | number,
+  scenarioId: number,
+): Promise<UserAccount> =>
+  unwrapUser(
+    await unwrapData(
+      await request.put(`/api/v1/users/${userId}/scenario`, {
+        scenario_id: scenarioId,
+      }),
+    ),
+  );
+
 export const changePassword = async (
-  userId: string,
+  userId: string | number,
   params: { old_password: string; new_password: string },
 ): Promise<void> => {
   await unwrapData(await request.put(`/api/v1/users/${userId}/password`, params));
 };
 
-export const resetPassword = async (userId: string, newPassword: string): Promise<void> => {
+export const resetPassword = async (
+  userId: string | number,
+  newPassword: string,
+): Promise<void> => {
   await unwrapData(
     await request.put(`/api/v1/users/${userId}/reset-password`, {
       new_password: newPassword,
@@ -89,7 +126,7 @@ export const resetPassword = async (userId: string, newPassword: string): Promis
 };
 
 export const setUserStatus = async (
-  userId: string,
+  userId: string | number,
   status: 'active' | 'disabled',
 ): Promise<void> => {
   await unwrapData(

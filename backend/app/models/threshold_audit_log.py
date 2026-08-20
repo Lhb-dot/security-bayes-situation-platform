@@ -14,6 +14,9 @@ class ThresholdAuditLog(Base):
     __tablename__ = "threshold_audit_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("app_user.id"), nullable=False
+    )
     scenario_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("scenario.id"), nullable=False
     )
@@ -26,5 +29,10 @@ class ThresholdAuditLog(Base):
     new_high: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     operated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    target_user: Mapped["AppUser"] = relationship(
+        back_populates="threshold_audit_logs", foreign_keys=[user_id]
+    )
     scenario: Mapped["Scenario"] = relationship(back_populates="audit_logs")
-    operator: Mapped["AppUser"] = relationship(back_populates="audit_operations")
+    operator: Mapped["AppUser"] = relationship(
+        back_populates="audit_operations", foreign_keys=[operator_id]
+    )

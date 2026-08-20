@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import joinedload
 
 from app.models.app_user import AppUser
 from app.models.scenario import Scenario
@@ -20,7 +21,6 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     PASSWORD_MIN_LEN,
-    ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
@@ -33,7 +33,6 @@ from app.services.constants import (
 from app.utils.common import (
     get_logger,
     hash_password,
-    paginate,
     row_to_dict,
     validate_enum,
     validate_length,
@@ -48,7 +47,11 @@ class UserService(ServiceBase):
     """用户账号管理（ADMIN 管理账号 / 用户本人改密与查询）。"""
 
     def _get(self, user_id: int) -> AppUser:
-        user = self.db.get(AppUser, user_id)
+        user = self.db.scalar(
+            select(AppUser)
+            .options(joinedload(AppUser.scenario))
+            .where(AppUser.id == user_id)
+        )
         if user is None:
             raise ServiceError(404, "用户不存在")
         return user
@@ -89,21 +92,51 @@ class UserService(ServiceBase):
         page: int = 1,
         page_size: int = 10,
         keyword: Optional[str] = None,
+        role: Optional[str] = None,
     ):
         """用户列表（管理级角色）。
 
-        SUPER_ADMIN 看全部用户；SCENARIO_ADMIN 只看自己场景的用户；SCENARIO_USER 无列表权限。
+        SUPER_ADMIN 看全部用户（含所有场景管理员与普通用户）；
+        SCENARIO_ADMIN 只看自己场景的用户；SCENARIO_USER 无列表权限。
         """
         self.require_scenario_admin(current_user)
-        stmt = select(AppUser)
+        filters = []
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.where(AppUser.scenario_id == getattr(current_user, "scenario_id", None))
+            filters.append(AppUser.scenario_id == getattr(current_user, "scenario_id", None))
         if keyword:
-            stmt = stmt.where(AppUser.username.ilike(f"%{keyword}%"))
-        stmt = stmt.order_by(AppUser.id)
-        result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._safe(u) for u in result["items"]]
-        return ok(data=result)
+            filters.append(AppUser.username.ilike(f"%{keyword.strip()}%"))
+        if role:
+            err = validate_enum(role, ROLES, "role")
+            if err:
+                raise ServiceError(400, err)
+            filters.append(AppUser.role == role)
+
+        page = max(1, int(page or 1))
+        page_size = min(max(1, int(page_size or 10)), 200)
+
+        count_stmt = select(func.count()).select_from(AppUser)
+        if filters:
+            count_stmt = count_stmt.where(*filters)
+        total = self.db.scalar(count_stmt) or 0
+
+        stmt = (
+            select(AppUser)
+            .options(joinedload(AppUser.scenario))
+            .order_by(AppUser.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        if filters:
+            stmt = stmt.where(*filters)
+        items = list(self.db.scalars(stmt).unique().all())
+        return ok(
+            data={
+                "items": [self._safe(u) for u in items],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
 
     # ------------------------------------------------------------------
     # 创建 / 修改（权限矩阵 6.5.2：账号管理仅 ADMIN；改密本人或 ADMIN）
@@ -174,7 +207,8 @@ class UserService(ServiceBase):
         )
         self.db.add(user)
         self.commit()
-        return ok(data=self._safe(user), message="用户创建成功")
+        created = self._get(user.id)
+        return ok(data=self._safe(created), message="用户创建成功")
 
     @service_call
     def update_scenario(
@@ -203,7 +237,8 @@ class UserService(ServiceBase):
         user.scenario_id = scenario_id
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
-        return ok(data=self._safe(user), message="场景绑定已更新")
+        updated = self._get(user.id)
+        return ok(data=self._safe(updated), message="场景绑定已更新")
 
     @service_call
     def update_password(
@@ -268,7 +303,8 @@ class UserService(ServiceBase):
         user.status = status
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
-        return ok(data=self._safe(user), message="账号状态已更新")
+        updated = self._get(user.id)
+        return ok(data=self._safe(updated), message="账号状态已更新")
 
     @service_call
     def delete(self, current_user: Optional[AppUser], user_id: int):
@@ -306,7 +342,9 @@ class UserService(ServiceBase):
                 (HandlingRecord, HandlingRecord.handler_id == user_id),
                 (Report, Report.generated_by == user_id),
                 (RiskThreshold, RiskThreshold.updated_by == user_id),
+                (RiskThreshold, RiskThreshold.user_id == user_id),
                 (ThresholdAuditLog, ThresholdAuditLog.operator_id == user_id),
+                (ThresholdAuditLog, ThresholdAuditLog.user_id == user_id),
             )
         )
         if referenced:

@@ -8,7 +8,8 @@
 import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
 import { useScenarioStore } from '@/stores/scenarioStore';
-import { getReportList, generateReport, getCurrentUser, getUserList, updateReportSchedule } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
+import { getReportList, generateReport, updateReportSchedule } from '@/services/mockApi';
 import { ElMessage } from 'element-plus';
 
 const reports = ref<Report[]>([]);
@@ -17,6 +18,7 @@ const error = ref('');
 const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 
@@ -196,10 +198,11 @@ const formatLabel: Record<string, string> = {
 };
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  currentUser.value = userStore.currentUser;
   await scenarioStore.fetchScenarioList();
   if (isAdmin.value) {
-    users.value = await getUserList();
+    await userStore.fetchUsers({ page: 1, page_size: 200 });
+    users.value = userStore.users;
   }
   await loadReports();
 });

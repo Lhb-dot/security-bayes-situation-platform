@@ -14,6 +14,7 @@ export const useUserStore = defineStore('user', {
   state: () => ({
     currentUser: null as UserAccount | null,
     users: [] as UserAccount[],
+    usersTotal: 0,
     loading: false,
     initialized: false,
   }),
@@ -26,7 +27,9 @@ export const useUserStore = defineStore('user', {
     visibleScenarioIds: (state): ScenarioId[] =>
       state.currentUser?.role === 'SUPER_ADMIN'
         ? [...ALL_SCENARIO_IDS]
-        : state.currentUser?.scenario_code ? [state.currentUser.scenario_code] : [],
+        : state.currentUser?.scenario_code
+          ? [state.currentUser.scenario_code]
+          : [],
     boundScenarioId: (state): ScenarioId | null => state.currentUser?.scenario_code ?? null,
   },
   actions: {
@@ -59,6 +62,7 @@ export const useUserStore = defineStore('user', {
       } finally {
         this.currentUser = null;
         this.users = [];
+        this.usersTotal = 0;
         mockApi.syncSession(null);
         this.initialized = true;
       }
@@ -70,27 +74,33 @@ export const useUserStore = defineStore('user', {
         new_password: newPassword,
       });
     },
-    async fetchUsers(): Promise<void> {
+    async fetchUsers(params?: {
+      page?: number;
+      page_size?: number;
+      keyword?: string;
+      role?: UserRole;
+    }): Promise<void> {
       this.loading = true;
       try {
-        this.users = await userApi.getUserList();
+        const result = await userApi.getUserList(params);
+        this.users = result.items;
+        this.usersTotal = result.total;
       } finally {
         this.loading = false;
       }
     },
     async createUser(params: {
       username: string;
-      display_name: string;
       password: string;
       role: UserRole;
       scenario_id?: number | null;
-    }): Promise<void> {
-      await userApi.createUser({
-        username: params.username,
-        password: params.password,
-        role: params.role,
-        scenario_id: params.scenario_id,
-      });
+    }): Promise<UserAccount> {
+      const created = await userApi.createUser(params);
+      await this.fetchUsers();
+      return created;
+    },
+    async updateUserScenario(userId: string, scenarioId: number): Promise<void> {
+      await userApi.updateUserScenario(userId, scenarioId);
       await this.fetchUsers();
     },
     async resetUserPassword(userId: string, newPassword: string): Promise<void> {

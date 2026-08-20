@@ -1,0 +1,115 @@
+0820改动
+
+分支：fix/data-boundary-isolation
+相关提交：
+- a36f7f9 合并正式会话认证与平台/公司/个人数据边界
+- c83219b 放宽开发态 CORS 并修正会话 Cookie 过期时间
+- 4fb5664 打通正式登录与页面 mock 会话并同源代理 API
+
+
+一、登录认证（原来 X-User-Id，改成真实登录）
+
+新增：
+- backend/app/api/v1/endpoints/auth_routes.py   登录/退出/获取当前用户
+- backend/app/models/auth_session.py           会话表
+- backend/app/schemas/auth.py
+- backend/app/utils/auth.py                    cookie、csrf、token 处理
+- backend/alembic/versions/20260820_000001_add_auth_sessions_and_role_constraints.py
+
+修改：
+- backend/app/api/deps.py                      用 cookie 会话鉴权，加 CSRF
+- backend/app/api/v1/__init__.py               挂上 /auth 路由
+- backend/app/models/__init__.py               注册 AuthSession
+- backend/app/main.py                          CORS 允许 localhost/127.0.0.1:5173；部分旧接口加登录校验
+- frontend/src/api/userApi.ts                  走真实 /api/v1/auth/* 和用户接口
+- frontend/src/stores/userStore.ts             登录态改走真实接口
+- frontend/src/utils/request.js                withCredentials、CSRF、开发态走 Vite 代理
+- frontend/src/main.ts                         启动时 bootstrap 恢复登录
+- frontend/src/views/Login.vue                 去掉快捷演示登录按钮
+- frontend/src/router/guards.ts / index.ts / App.vue
+- frontend/vite.config.ts                      加 /api 代理到后端 12312
+
+
+二、平台 / 公司 / 个人数据边界
+
+修改了这些 service，按角色过滤可见数据：
+- SUPER_ADMIN：主要看 platform
+- SCENARIO_ADMIN：看本场景的 platform + company
+- SCENARIO_USER：主要看自己的数据
+
+涉及文件：
+- backend/app/services/base.py
+- backend/app/services/dataset_service.py
+- backend/app/services/handling_record_service.py
+- backend/app/services/inference_record_service.py
+- backend/app/services/model_version_service.py
+- backend/app/services/report_service.py
+- backend/app/services/risk_event_service.py
+- backend/app/services/risk_threshold_service.py
+- backend/app/services/scenario_service.py
+- backend/app/services/situation_snapshot_service.py
+- backend/app/services/user_service.py
+- backend/app/api/v1/endpoints/scenario_routes.py
+- backend/app/api/v1/endpoints/risk_threshold_routes.py
+
+
+三、登录后页面空白的修补
+
+原因：登录已经是真实接口，但很多页面还在用 mockApi，mock 里没有登录态，就报未登录。
+
+改动：
+- frontend/src/services/mockApi.ts   加 syncSession，把真实登录用户同步进去
+- frontend/src/stores/userStore.ts   登录/刷新/退出时调用 syncSession
+- frontend/src/utils/request.js      缓存 csrf_token
+- frontend/vite.config.ts            /api 代理，让 cookie 同源
+
+
+四、本地需要注意的
+
+1. 要跑迁移：backend 目录下 alembic upgrade head（会建 auth_session 表）
+2. backend/app/.env 要有 AUTH_SESSION_PEPPER（至少 32 位）
+3. 改完代码要重启后端；前端要重启 vite（代理才生效）
+4. 测试账号（seed）：
+   - 系统管理员 admin / admin123
+   - 场景管理员 net_admin / net123456
+   - 场景用户 alice / alice123
+
+
+五、还没改完的（当前状态）
+
+- 用户管理页（UserManagement.vue）还在直接调 mockApi
+- 所以页面上“创建用户”目前还不会写进数据库
+- userStore / userApi 那边其实已经有真实创建用户接口，但页面还没接上
+
+
+六、数据集中心改为数据库真实数据（含航母场景显示修复）
+
+问题：
+- 数据集中心、字段预览、数据预览仍走 mockApi
+- 航母甲板场景被前端占位拦截（“暂未接入数据集”），即使库里已有 3 个 carrier 数据集也不显示
+- 后端预览接口返回的是数组行，前端表格按对象行列名渲染对不上
+
+后端修改：
+- backend/app/services/dataset_service.py
+  - get_preview：ARFF 行转为“字段名 -> 值”的对象行，标签列可高亮
+  - _to_dict：补充 name / field_count / data_format / record_count / referenced / enabled / scenario_code / scenario_name
+  - _count_records：按文件 path+mtime 缓存样本数，列表接口避免重复扫盘
+
+前端修改：
+- frontend/src/api/datasetApi.ts
+  - 对接后端真实结构到 Dataset / DatasetField / DataPreview / DatasetVersion
+  - 列表默认按 logical_id 取最新版本；版本管理可取同逻辑集全部版本
+  - 字段预览、数据预览、详情/停用/删除支持数字 id 与 logical_id
+  - 上传/创建版本按后端契约传 file_path + fields_schema + label_field
+- frontend/src/stores/datasetStore.ts
+  - 数据源从 mockApi 切到 datasetApi（列表/字段/预览/版本）
+- frontend/src/views/Model/DatasetCenter.vue
+  - 改为调用真实 datasetApi + userStore
+  - 删除航母甲板“暂未接入”占位，筛选航母时正常展示数据集表格
+  - 上传/新版本表单增加 file_path（必须是仓库 data/ 下相对路径）
+- frontend/src/views/Dataset/DatasetDetailView.vue
+  - 标签列优先取字段角色，其次回退预览接口 label_field
+
+结果：
+- 数据集中心列表、字段预览、数据预览均读 PostgreSQL + 真实 ARFF
+- 航母甲板 3 个数据集可见：carrier_feature2_biaoqian / carrier_feature2_lisan / carrier_paired_trail

@@ -1345,38 +1345,70 @@ let thresholds: Record<ScenarioId, ThresholdConfig> = {
   flightdeck_operation: { scenario_id: 'flightdeck_operation', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
   geological_risk: { scenario_id: 'geological_risk', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
 };
+const userThresholds = new Map<string, Record<ScenarioId, ThresholdConfig>>();
 
 let thresholdChangeLogs: ThresholdChangeLog[] = [];
 let thresholdLogSeq = 1;
 
-/** 获取全部场景阈值配置 */
-export const getThresholds = async (): Promise<ThresholdConfig[]> =>
-  simulateLatency(Object.values(thresholds));
+const thresholdConfigFor = (user: UserAccount, scenarioId: ScenarioId): ThresholdConfig => {
+  let own = userThresholds.get(user.user_id);
+  if (!own) {
+    own = Object.fromEntries(
+      Object.entries(thresholds).map(([key, value]) => [key, { ...value, user_id: user.id }]),
+    ) as Record<ScenarioId, ThresholdConfig>;
+    userThresholds.set(user.user_id, own);
+  }
+  return own[scenarioId];
+};
+
+/** 获取当前账号的全部场景阈值配置 */
+export const getThresholds = async (): Promise<ThresholdConfig[]> => {
+  const user = requireLogin();
+  const ids = user.role === 'SUPER_ADMIN' ? Object.keys(thresholds) as ScenarioId[] : (user.scenario_ids ?? []);
+  return simulateLatency(ids.map((id) => thresholdConfigFor(user, id)));
+};
 
 /** 获取阈值变更记录（需求 5.4.1.5） */
-export const getThresholdChangeLogs = async (): Promise<ThresholdChangeLog[]> =>
-  simulateLatency([...thresholdChangeLogs].sort((a, b) => b.changed_at.localeCompare(a.changed_at)));
+export const getThresholdChangeLogs = async (): Promise<ThresholdChangeLog[]> => {
+  const user = requireLogin();
+  return simulateLatency(
+    thresholdChangeLogs
+      .filter((log) => log.user_id === user.id || log.operator_id === user.user_id)
+      .sort((a, b) => (b.operated_at ?? b.changed_at ?? '').localeCompare(a.operated_at ?? a.changed_at ?? '')),
+  );
+};
 
-/** 管理员按场景保存阈值：范围 [0,1]、high>medium、实时生效、记录变更日志 */
+/** 当前账号按场景保存阈值：范围 [0,1]、high>medium、实时生效、记录变更日志 */
 export const saveThreshold = async (scenarioId: ScenarioId, medium_threshold: number, high_threshold: number): Promise<ThresholdConfig> => {
-  const operator = requireAdmin();
+  const operator = requireLogin();
+  assertScenarioAccess(operator, scenarioId);
   if (medium_threshold < 0 || medium_threshold > 1 || high_threshold < 0 || high_threshold > 1) {
     throw new Error('阈值必须位于 [0,1] 范围内');
   }
   if (high_threshold <= medium_threshold) throw new Error('高风险阈值必须大于中风险阈值');
-  const old = thresholds[scenarioId];
+  const old = thresholdConfigFor(operator, scenarioId);
   thresholdChangeLogs.push({
-    log_id: `thr_log_${String(thresholdLogSeq++).padStart(4, '0')}`,
+    id: thresholdLogSeq++,
+    user_id: operator.id,
     scenario_id: scenarioId,
     operator_id: operator.user_id,
-    changed_at: nowStr(),
-    old_medium_threshold: old.medium_threshold,
-    old_high_threshold: old.high_threshold,
-    new_medium_threshold: medium_threshold,
-    new_high_threshold: high_threshold,
+    operated_at: nowStr(),
+    old_medium: old.medium_threshold,
+    old_high: old.high_threshold,
+    new_medium: medium_threshold,
+    new_high: high_threshold,
   });
-  thresholds[scenarioId] = { scenario_id: scenarioId, medium_threshold, high_threshold, updated_by: operator.user_id, updated_at: nowStr() };
-  return thresholds[scenarioId];
+  const next = { ...old, user_id: operator.id, scenario_id: scenarioId, medium_threshold, high_threshold, updated_by: operator.id, updated_at: nowStr() };
+  userThresholds.get(operator.user_id)![scenarioId] = next;
+  return next;
+};
+
+/** 将真实后端保存结果同步到模拟推理链路。 */
+export const syncThreshold = (config: ThresholdConfig): void => {
+  const user = requireLogin();
+  const own = userThresholds.get(user.user_id) ?? {} as Record<ScenarioId, ThresholdConfig>;
+  own[config.scenario_id] = { ...config, user_id: user.id };
+  userThresholds.set(user.user_id, own);
 };
 
 // ===================== v2.0 模型版本与生命周期（需求 6.7） =====================
@@ -1932,7 +1964,7 @@ export const executeInference = async (params: {
   if (model.status !== 'PUBLISHED') throw new Error('仅已发布模型可执行推理');
   assertScenarioAccess(user, model.scenario_id);
   validateInputFeatures(model.dataset_id, params.input_features);
-  const cfg = thresholds[model.scenario_id];
+  const cfg = thresholdConfigFor(user, model.scenario_id);
   // 模拟模型输出：约 35% 判为风险类（risk_score 为模型对风险类的输出概率，需求 5.4）
   const isRisk = Math.random() < 0.35;
   const risk_probability = isRisk

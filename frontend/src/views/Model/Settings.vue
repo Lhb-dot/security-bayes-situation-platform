@@ -14,14 +14,20 @@ import { ElMessage } from 'element-plus';
 import {
   changeOwnPassword,
   getCurrentUser,
-  getThresholdChangeLogs,
-  getThresholds,
-  saveThreshold,
+  syncThreshold,
 } from '@/services/mockApi';
+import {
+  getRiskThresholdAuditLogs,
+  getRiskThresholds,
+  updateRiskThreshold,
+} from '@/api/riskThresholdApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const canConfigureThresholds = computed(() =>
+  currentUser.value?.role === 'SUPER_ADMIN' || !!currentUser.value?.scenario_code,
+);
 
 // ===================== 普通用户：个人设置（场景由管理员分配，用户不可自选） =====================
 const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
@@ -61,21 +67,24 @@ const SCENARIO_LABEL: Record<string, string> = {
   flightdeck_operation: '航母甲板作业',
   geological_risk: '地质风险',
 };
-/** 阈值可配置场景：系统管理员=全部（含预留能力）；管理员=仅自己场景 */
+/** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景 */
 const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
 const activeScenarios = computed<ScenarioId[]>(() =>
-  isScenarioAdmin.value
-    ? [(currentUser.value?.scenario_ids?.[0] as ScenarioId) ?? 'network_security']
-    : ['network_security', 'power_system', 'geological_risk']
+  currentUser.value?.role === 'SUPER_ADMIN'
+    ? ['network_security', 'power_system', 'flightdeck_operation', 'geological_risk']
+    : currentUser.value?.scenario_code
+      ? [currentUser.value.scenario_code]
+      : []
 );
 const thresholds = ref<ThresholdConfig[]>([]);
 const changeLogs = ref<ThresholdChangeLog[]>([]);
+const showChangeLogs = ref(false);
 const saving = ref(false);
-const editing = ref<Record<string, { medium: number; high: number }>>({
-  network_security: { medium: 0.45, high: 0.75 },
-  power_system: { medium: 0.5, high: 0.8 },
-  flightdeck_operation: { medium: 0.5, high: 0.8 },
-  geological_risk: { medium: 0.5, high: 0.8 },
+const editing = ref<Record<string, { medium: number | null; high: number | null }>>({
+  network_security: { medium: null, high: null },
+  power_system: { medium: null, high: null },
+  flightdeck_operation: { medium: null, high: null },
+  geological_risk: { medium: null, high: null },
 });
 const scenarioSwitches = ref([
   { id: 'network_security', label: '网络安全态势感知', enabled: true },
@@ -84,25 +93,29 @@ const scenarioSwitches = ref([
 ]);
 
 const loadThresholds = async () => {
-  const [ths, logs] = await Promise.all([getThresholds(), getThresholdChangeLogs()]);
+  const ths = await getRiskThresholds();
   thresholds.value = ths;
-  changeLogs.value = logs;
-  editing.value = {};
+  const nextEditing: Record<string, { medium: number | null; high: number | null }> = {};
+  for (const scenarioId of activeScenarios.value) {
+    nextEditing[scenarioId] = { medium: null, high: null };
+  }
   for (const t of ths) {
-    editing.value[t.scenario_id] = { medium: t.medium_threshold, high: t.high_threshold };
+    nextEditing[t.scenario_id] = { medium: t.medium_threshold, high: t.high_threshold };
+  }
+  editing.value = nextEditing;
+};
+
+const loadChangeLogs = async () => {
+  try {
+    changeLogs.value = await getRiskThresholdAuditLogs();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '阈值修改记录加载失败');
   }
 };
 
-/** 变更记录按场景隔离：管理员只看自己场景（系统管理员看全部） */
-const visibleChangeLogs = computed(() =>
-  isScenarioAdmin.value
-    ? changeLogs.value.filter((log) => activeScenarios.value.includes(log.scenario_id))
-    : changeLogs.value
-);
-
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
-  if (e.medium < 0 || e.medium > 1 || e.high < 0 || e.high > 1) {
+  if (!e || e.medium === null || e.high === null || e.medium < 0 || e.medium > 1 || e.high < 0 || e.high > 1) {
     ElMessage.warning('阈值必须位于 [0,1] 范围内');
     return;
   }
@@ -112,7 +125,15 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   }
   saving.value = true;
   try {
-    await saveThreshold(scenarioId, e.medium, e.high);
+    const medium = e.medium;
+    const high = e.high;
+    const saved = await updateRiskThreshold(scenarioId, { medium_threshold: medium, high_threshold: high });
+    // Keep the form in sync with the persisted database row returned by PUT.
+    editing.value[scenarioId] = {
+      medium: saved.medium_threshold,
+      high: saved.high_threshold,
+    };
+    syncThreshold(saved);
     ElMessage.success(`「${SCENARIO_LABEL[scenarioId]}」阈值已保存并实时生效`);
     await loadThresholds();
   } catch (err) {
@@ -128,7 +149,7 @@ const saveAdminSettings = () => {
 
 onMounted(async () => {
   currentUser.value = getCurrentUser();
-  if (isAdmin.value) await loadThresholds();
+  if (canConfigureThresholds.value) await loadThresholds();
 });
 </script>
 
@@ -138,7 +159,7 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">{{ isAdmin ? 'System Settings' : 'My Settings' }}</p>
         <h2>{{ isAdmin ? '系统设置' : '设置' }}</h2>
-        <p v-if="isAdmin" class="settings-page__desc">风险阈值按场景配置（需求 5.4.1），其余为全局基础参数</p>
+        <p v-if="isAdmin" class="settings-page__desc">风险阈值按当前账号和场景配置，其余为全局基础参数</p>
         <p v-else class="settings-page__desc">选择你感兴趣的场景（可多选），其它页面将实时更新；下方为个人设置</p>
       </div>
     </div>
@@ -218,75 +239,87 @@ onMounted(async () => {
       </section>
     </template>
 
+    <!-- ==================== 当前账号阈值 ==================== -->
+    <section v-if="canConfigureThresholds" class="card settings-section settings-section--span">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Threshold</p>
+          <h3>我的风险阈值</h3>
+          <p class="settings-section__hint">告警按当前账号在对应场景的阈值判定，修改后立即生效。</p>
+        </div>
+        <button class="settings-btn" type="button" @click="showChangeLogs = true; loadChangeLogs()">
+          查看阈值修改记录
+        </button>
+      </div>
+
+      <div class="threshold-grid">
+        <div v-for="sc in activeScenarios" :key="sc" class="threshold-card">
+          <div class="threshold-card__head">
+            <h4>{{ SCENARIO_LABEL[sc] }}</h4>
+            <span class="threshold-card__scene">{{ sc }}</span>
+          </div>
+          <div class="threshold-card__form">
+            <div class="threshold-field">
+              <label>中风险阈值（0~1）</label>
+              <input v-model.number="editing[sc].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <div class="threshold-field">
+              <label>高风险阈值（0~1）</label>
+              <input v-model.number="editing[sc].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <p class="threshold-card__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
+            <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(sc)">
+              {{ saving ? '保存中...' : '保存并生效' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <el-dialog
+      v-model="showChangeLogs"
+      title="本账号阈值修改记录"
+      class="threshold-log-dialog"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-table
+        :data="changeLogs"
+        stripe
+        max-height="62vh"
+        style="width: 100%"
+        empty-text="暂无阈值修改记录"
+      >
+        <el-table-column label="变更时间" min-width="170">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ row.operated_at ?? row.changed_at ?? '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="场景" width="150">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ SCENARIO_LABEL[row.scenario_id] ?? row.scenario_id }}
+          </template>
+        </el-table-column>
+        <el-table-column label="中风险阈值" width="120" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ row.old_medium ?? row.old_medium_threshold ?? '-' }} →
+            <el-tag type="success" effect="plain">{{ row.new_medium ?? row.new_medium_threshold ?? '-' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="高风险阈值" width="120" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ row.old_high ?? row.old_high_threshold ?? '-' }} →
+            <el-tag type="success" effect="plain">{{ row.new_high ?? row.new_high_threshold ?? '-' }}</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
     <!-- ==================== 管理员：系统设置 ==================== -->
     <template v-if="isAdmin">
       <div class="settings-grid">
-        <section class="card settings-section settings-section--span">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Threshold</p>
-              <h3>场景风险阈值配置</h3>
-            </div>
-            <span class="perm-tip">仅管理员可修改</span>
-          </div>
-
-          <div class="threshold-grid">
-            <div v-for="sc in activeScenarios" :key="sc" class="threshold-card">
-              <div class="threshold-card__head">
-                <h4>{{ SCENARIO_LABEL[sc] }}</h4>
-                <span class="threshold-card__scene">{{ sc }}</span>
-              </div>
-              <div class="threshold-card__form">
-                <div class="threshold-field">
-                  <label>中风险阈值（0~1）</label>
-                  <input v-model.number="editing[sc].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-                </div>
-                <div class="threshold-field">
-                  <label>高风险阈值（0~1）</label>
-                  <input v-model.number="editing[sc].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-                </div>
-                <p class="threshold-card__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
-                <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(sc)">
-                  {{ saving ? '保存中...' : '保存并生效' }}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="change-logs">
-            <h4 class="change-logs__title">阈值变更记录（需求 5.4.1.5）</h4>
-            <div class="change-logs__wrap">
-              <table class="change-logs__table">
-                <thead>
-                  <tr>
-                    <th>变更时间</th>
-                    <th>场景</th>
-                    <th>操作人ID</th>
-                    <th>原中风险</th>
-                    <th>原高风险</th>
-                    <th>新中风险</th>
-                    <th>新高风险</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="log in visibleChangeLogs" :key="log.log_id">
-                    <td>{{ log.changed_at }}</td>
-                    <td>{{ SCENARIO_LABEL[log.scenario_id] ?? log.scenario_id }}</td>
-                    <td>{{ log.operator_id }}</td>
-                    <td>{{ log.old_medium_threshold }}</td>
-                    <td>{{ log.old_high_threshold }}</td>
-                    <td class="change-logs__new">{{ log.new_medium_threshold }}</td>
-                    <td class="change-logs__new">{{ log.new_high_threshold }}</td>
-                  </tr>
-                  <tr v-if="visibleChangeLogs.length === 0">
-                    <td colspan="7" class="change-logs__empty">暂无变更记录</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
         <section v-if="!isScenarioAdmin" class="card settings-section">
           <div class="section-heading">
             <div>
@@ -390,6 +423,12 @@ onMounted(async () => {
 
 .settings-section {
   padding: 20px 24px;
+}
+
+.settings-section__hint {
+  margin: 6px 0 0;
+  color: rgba(220, 234, 255, 0.55);
+  font-size: 0.82rem;
 }
 
 .settings-section--span {
@@ -559,6 +598,31 @@ onMounted(async () => {
   color: rgba(220, 234, 255, 0.45);
 }
 
+.threshold-log-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.threshold-log-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.72);
+}
+
+.threshold-log-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  max-height: min(680px, 90vh);
+  overflow: auto;
+  padding: 22px 24px;
+}
+
 .settings-form {
   display: grid;
   gap: 16px;
@@ -704,5 +768,59 @@ select.settings-form__input option {
   .settings-form--row3 {
     grid-template-columns: 1fr;
   }
+}
+</style>
+
+<style>
+/* Keep the audit dialog consistent with DatasetCenter's field preview dialog. */
+.threshold-log-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.threshold-log-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
+}
+
+.threshold-log-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(220, 234, 255, 0.5) !important;
+}
+
+.threshold-log-dialog .el-dialog__body {
+  padding: 20px 24px !important;
+}
+
+.threshold-log-dialog .el-table,
+.threshold-log-dialog .el-table__inner-wrapper,
+.threshold-log-dialog .el-table__body-wrapper,
+.threshold-log-dialog .el-table__header-wrapper {
+  background-color: transparent !important;
+}
+
+.threshold-log-dialog .el-table th.el-table__cell {
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
+}
+
+.threshold-log-dialog .el-table td.el-table__cell {
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
+}
+
+.threshold-log-dialog .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: rgba(10, 24, 44, 0.85) !important;
+}
+
+.threshold-log-dialog .el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(20, 44, 72, 0.9) !important;
+}
+
+.threshold-log-dialog .el-table__empty-text {
+  color: rgba(180, 200, 235, 0.3) !important;
 }
 </style>

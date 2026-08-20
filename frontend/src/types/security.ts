@@ -391,23 +391,32 @@ export interface InferenceRecord {
 
 /** 按场景风险阈值配置 */
 export interface ThresholdConfig {
+  user_id?: number;
   scenario_id: ScenarioId;
   medium_threshold: number;
   high_threshold: number;
-  updated_by: string;                                     // 最后修改管理员
+  updated_by: number | string;                             // 最后修改账号
   updated_at: string;
 }
 
 /** 阈值变更记录（需求 5.4.1.5） */
 export interface ThresholdChangeLog {
-  log_id: string;
+  id?: number;
+  user_id?: number;
   scenario_id: ScenarioId;
-  operator_id: string;                                    // 管理员账号ID
-  changed_at: string;
-  old_medium_threshold: number;
-  old_high_threshold: number;
-  new_medium_threshold: number;
-  new_high_threshold: number;
+  operator_id: number | string;                            // 操作账号ID
+  operated_at?: string;
+  old_medium?: number;
+  old_high?: number;
+  new_medium?: number;
+  new_high?: number;
+  // 兼容旧 mock 数据结构
+  log_id?: string;
+  changed_at?: string;
+  old_medium_threshold?: number;
+  old_high_threshold?: number;
+  new_medium_threshold?: number;
+  new_high_threshold?: number;
 }
 
 // ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================

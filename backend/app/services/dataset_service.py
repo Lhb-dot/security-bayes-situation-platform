@@ -88,9 +88,43 @@ class DatasetService(ServiceBase):
         )
         return bool(count)
 
-    @staticmethod
-    def _to_dict(dataset: Dataset) -> dict:
-        return row_to_dict(dataset)
+    _record_count_cache: dict = {}
+
+    def _count_records(self, file_path: str) -> int:
+        """统计 ARFF 样本数（按 path+mtime 缓存，避免列表接口重复扫盘）。"""
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import count_arff_rows
+
+        try:
+            path = resolve_dataset_path(file_path)
+            if not os.path.exists(path):
+                return 0
+            mtime = os.path.getmtime(path)
+            cached = DatasetService._record_count_cache.get(path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            total = count_arff_rows(path)
+            DatasetService._record_count_cache[path] = (mtime, total)
+            return total
+        except Exception:
+            logger.exception("统计数据集样本数失败: %s", file_path)
+            return 0
+
+    def _to_dict(self, dataset: Dataset) -> dict:
+        """序列化数据集，并补充前端列表/详情常用展示字段。"""
+        data = row_to_dict(dataset)
+        data["name"] = dataset.logical_id
+        data["field_count"] = len(dataset.fields_schema or [])
+        normalized = dataset.file_path.replace("\\", "/")
+        suffix = Path(normalized).suffix.lstrip(".").lower()
+        data["data_format"] = suffix if suffix in ("csv", "arff", "json") else "arff"
+        data["record_count"] = self._count_records(dataset.file_path)
+        data["referenced"] = self._is_referenced(dataset.id)
+        data["enabled"] = dataset.status == DATASET_STATUS_ACTIVE
+        if getattr(dataset, "scenario", None) is not None:
+            data["scenario_code"] = dataset.scenario.code
+            data["scenario_name"] = dataset.scenario.name
+        return data
 
     @staticmethod
     def _default_visibility(role: Optional[str]) -> str:
@@ -411,15 +445,28 @@ class DatasetService(ServiceBase):
             raise ServiceError(403, "无权限操作")
 
         from app.services.training_executor import resolve_dataset_path
-        from app.utils.arff_reader import count_arff_rows, read_arff
+        from app.utils.arff_reader import read_arff
 
         path = resolve_dataset_path(dataset.file_path)
         if not os.path.exists(path):
             raise ServiceError(404, f"数据集文件不存在: {path}")
 
         offset = (page - 1) * page_size
-        _, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
-        page_rows = rows[offset: offset + page_size]
+        raw_fields, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
+        # 优先使用登记的 fields_schema 字段名，保证与字段预览/标签列一致
+        if dataset.fields_schema:
+            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(dataset.fields_schema)]
+        else:
+            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(raw_fields)]
+        page_rows = []
+        for row in rows[offset: offset + page_size]:
+            page_rows.append(
+                {
+                    names[i]: (row[i] if i < len(row) else None)
+                    for i in range(len(names))
+                }
+            )
+        total = self._count_records(dataset.file_path)
         return ok(
             data={
                 "dataset_id": dataset.id,
@@ -430,6 +477,6 @@ class DatasetService(ServiceBase):
                 "rows": page_rows,
                 "page": page,
                 "page_size": len(page_rows),
-                "total": count_arff_rows(path),
+                "total": total,
             }
         )

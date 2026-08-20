@@ -1,20 +1,8 @@
-"""风险阈值配置 Service（RiskThreshold）。
-
-对应需求文档章节：5.4（风险等级生成规则）、5.4.1（风险阈值配置管理规范）、
-6.5.2（权限矩阵：修改风险阈值 → 仅管理员）。
-
-模型：app.models.risk_threshold.RiskThreshold（单值表，scenario_id 为主键，每场景一行）。
-
-业务规则（需求 5.4.1）：
-1. 场景隔离：各场景分别维护阈值，禁止共用（网络与电力分别维护；航母第一阶段仅预留
-   配置能力，不启用实际阈值计算——启用与否由上层调用方决定）。
-2. 两项阈值均位于 [0,1]，且 high_threshold > medium_threshold（DB 层 chk_rt_threshold 兜底）。
-3. 阈值绑定 scenario_id 持久化，支持按场景查询和修改。
-4. 修改成功后立即生效（后续推理直接读取最新值，无需重启；本表即运行时配置源）。
-5. 每次修改必须保留变更记录：操作人、场景、时间、修改前后数值（写 threshold_audit_log）。
-"""
+"""按账号和场景维护风险阈值，并记录每次修改。"""
 from datetime import datetime, timezone
 from typing import Optional
+
+from sqlalchemy import select
 
 from app.models.risk_threshold import RiskThreshold
 from app.models.scenario import Scenario
@@ -27,7 +15,29 @@ logger = get_logger("risk_threshold")
 
 
 class RiskThresholdService(ServiceBase):
-    """场景风险阈值：查询（登录用户）/ 修改（仅 ADMIN，含审计）。"""
+    """风险阈值：配置归属当前账号，场景管理员只可操作绑定场景。"""
+
+    def _get_for_user(self, user_id: int, scenario_id: int) -> Optional[RiskThreshold]:
+        return self.db.scalar(
+            select(RiskThreshold).where(
+                RiskThreshold.user_id == user_id,
+                RiskThreshold.scenario_id == scenario_id,
+            )
+        )
+
+    @service_call
+    def get_list(self, current_user):
+        """查询当前账号可见的全部阈值配置。"""
+        self.require_login(current_user)
+        stmt = (
+            select(RiskThreshold)
+            .where(RiskThreshold.user_id == current_user.id)
+            .join(Scenario, Scenario.id == RiskThreshold.scenario_id)
+        )
+        if getattr(current_user, "role", None) != "SUPER_ADMIN":
+            stmt = stmt.where(RiskThreshold.scenario_id == current_user.scenario_id)
+        rows = self.db.scalars(stmt.order_by(RiskThreshold.scenario_id)).all()
+        return ok(data=[row_to_dict(row) for row in rows])
 
     @service_call
     def get_by_scenario(self, current_user, scenario_id: int):
@@ -36,9 +46,9 @@ class RiskThresholdService(ServiceBase):
         必须校验场景绑定：非 SUPER_ADMIN 仅可读本人绑定场景阈值。
         """
         self.require_scenario_access(current_user, scenario_id)
-        threshold = self.db.get(RiskThreshold, scenario_id)
+        threshold = self._get_for_user(current_user.id, scenario_id)
         if threshold is None:
-            return ok(data=None, message="该场景尚未配置风险阈值")
+            return ok(data=None, message="该账号尚未配置该场景风险阈值")
         return ok(data=row_to_dict(threshold))
 
     @service_call
@@ -49,13 +59,13 @@ class RiskThresholdService(ServiceBase):
         medium_threshold: float,
         high_threshold: float,
     ):
-        """更新场景阈值（管理级角色，场景管理员仅自己场景）。
+        """更新当前账号在指定场景的阈值。
 
         - 校验 0 <= medium < high <= 1（需求 5.4.1.2）；
-        - 单值表 upsert（无行则插入）；
-        - 写 threshold_audit_log 审计（需求 5.4.1.5：操作人不得为空）。
+        - 按 user_id + scenario_id upsert（无行则插入）；
+        - 写 threshold_audit_log 审计。
         """
-        self.require_scenario_admin_of(current_user, scenario_id)
+        self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "场景不存在")
@@ -67,13 +77,14 @@ class RiskThresholdService(ServiceBase):
         if high <= medium:
             raise ServiceError(400, "high_threshold 必须大于 medium_threshold")
 
-        threshold = self.db.get(RiskThreshold, scenario_id)
-        old_medium = float(threshold.medium_threshold) if threshold else None
-        old_high = float(threshold.high_threshold) if threshold else None
+        threshold = self._get_for_user(current_user.id, scenario_id)
+        old_medium = float(threshold.medium_threshold) if threshold else medium
+        old_high = float(threshold.high_threshold) if threshold else high
 
         now = datetime.now(timezone.utc)
         if threshold is None:
             threshold = RiskThreshold(
+                user_id=current_user.id,
                 scenario_id=scenario_id,
                 medium_threshold=medium,
                 high_threshold=high,
@@ -87,13 +98,14 @@ class RiskThresholdService(ServiceBase):
             threshold.updated_by = current_user.id
             threshold.updated_at = now
 
-        # 审计日志（首次配置时旧值记为新值，表示"从无到有"）
+        # 首次配置时旧值记为新值，表示“从无到有”。
         audit = ThresholdAuditLog(
+            user_id=current_user.id,
             scenario_id=scenario_id,
             operator_id=current_user.id,
-            old_medium=old_medium if old_medium is not None else medium,
+            old_medium=old_medium,
             new_medium=medium,
-            old_high=old_high if old_high is not None else high,
+            old_high=old_high,
             new_high=high,
             operated_at=now,
         )

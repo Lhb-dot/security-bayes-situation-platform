@@ -33,6 +33,22 @@ const currentCsrfToken = () =>
   readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf') ||
   window.sessionStorage.getItem(CSRF_STORAGE_KEY);
 
+const extractErrorMessage = (error) => {
+  const data = error?.response?.data;
+  if (!data) return error?.message || '请求失败';
+  if (typeof data.message === 'string' && data.message) return data.message;
+  if (typeof data.detail === 'string' && data.detail) return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .join('; ');
+  }
+  if (data.detail && typeof data.detail === 'object' && data.detail.message) {
+    return data.detail.message;
+  }
+  return error?.message || '请求失败';
+};
+
 service.interceptors.request.use((config) => {
   const method = (config.method || 'get').toUpperCase();
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -55,7 +71,7 @@ service.interceptors.response.use(
         window.location.hash = '#/login';
       }
     }
-    return Promise.reject(error);
+    return Promise.reject(new Error(extractErrorMessage(error)));
   },
 );
 

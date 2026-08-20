@@ -36,10 +36,18 @@ def list_users(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
     keyword: Optional[str] = Query(None, description="用户名模糊搜索"),
+    role: Optional[str] = Query(
+        None,
+        description="按角色筛选：SUPER_ADMIN / SCENARIO_ADMIN / SCENARIO_USER",
+    ),
 ):
     return unwrap(
         UserService(db).get_list(
-            current_user=current_user, page=page, page_size=page_size, keyword=keyword
+            current_user=current_user,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            role=role,
         )
     )
 

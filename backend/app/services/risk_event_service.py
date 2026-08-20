@@ -97,17 +97,22 @@ class RiskEventService(ServiceBase):
             return RISK_LEVEL_MEDIUM
         return RISK_LEVEL_LOW
 
-    def _get_thresholds(self, scenario_id: int):
-        """获取场景阈值（risk_threshold 单值表，每场景一行）。
+    def _get_thresholds(self, user_id: int, scenario_id: int):
+        """获取当前推理账号在场景下的阈值。
 
         需求 5.4.1.6：本文不把未经验证的具体数值写成正式默认阈值；阈值应通过
         risk_threshold 配置提供。此处缺失时仅用兜底值并记录 warning，提示尽快配置。
         """
-        threshold = self.db.get(RiskThreshold, scenario_id)
+        threshold = self.db.scalar(
+            select(RiskThreshold).where(
+                RiskThreshold.user_id == user_id,
+                RiskThreshold.scenario_id == scenario_id,
+            )
+        )
         if threshold is None:
             logger.warning(
-                "场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s（需求 5.4.1：请通过 risk_threshold 表配置）",
-                scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
+                "账号 %s 在场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s",
+                user_id, scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
             )
             return float(DEFAULT_MEDIUM_THRESHOLD), float(DEFAULT_HIGH_THRESHOLD)
         return float(threshold.medium_threshold), float(threshold.high_threshold)
@@ -283,7 +288,7 @@ class RiskEventService(ServiceBase):
                 400,
                 f"数据集 {dataset.logical_id} 未登记风险类型映射（DATASET_RISK_TYPES），无法生成风险事件",
             )
-        medium, high = self._get_thresholds(dataset.scenario_id)
+        medium, high = self._get_thresholds(current_user.id, dataset.scenario_id)
         risk_level = self._calc_risk_level(risk_score, medium, high)
 
         # raw_features：只保存业务推理输入，不重复保存标签字段（需求 5.5.5）
