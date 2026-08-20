@@ -1,4 +1,4 @@
-import request, { unwrapData } from '@/utils/request';
+import request, { setCsrfToken, unwrapData } from '@/utils/request';
 import type { UserAccount, UserRole } from '@/types/security';
 
 interface ApiUser {
@@ -37,18 +37,23 @@ const toUserAccount = (user: ApiUser): UserAccount => ({
 const unwrapUser = (payload: AuthPayload | ApiUser): UserAccount =>
   toUserAccount('user' in payload ? payload.user : payload);
 
-export const login = async (username: string, password: string): Promise<UserAccount> =>
-  unwrapUser(
-    await unwrapData(
-      await request.post('/api/v1/auth/login', { username, password }),
-    ),
-  );
+export const login = async (username: string, password: string): Promise<UserAccount> => {
+  const payload = await unwrapData(
+    await request.post('/api/v1/auth/login', { username, password }),
+  ) as AuthPayload;
+  setCsrfToken(payload.csrf_token ?? null);
+  return unwrapUser(payload);
+};
 
 export const getMe = async (): Promise<UserAccount> =>
   unwrapUser(await unwrapData(await request.get('/api/v1/auth/me')));
 
 export const logout = async (): Promise<void> => {
-  await unwrapData(await request.post('/api/v1/auth/logout'));
+  try {
+    await unwrapData(await request.post('/api/v1/auth/logout'));
+  } finally {
+    setCsrfToken(null);
+  }
 };
 
 export const getUserList = async (params?: {

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import * as userApi from '@/api/userApi';
+import * as mockApi from '@/services/mockApi';
 import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const ALL_SCENARIO_IDS: ScenarioId[] = [
@@ -37,6 +38,7 @@ export const useUserStore = defineStore('user', {
       } catch {
         this.currentUser = null;
       } finally {
+        mockApi.syncSession(this.currentUser);
         this.initialized = true;
         this.loading = false;
       }
@@ -45,6 +47,7 @@ export const useUserStore = defineStore('user', {
       this.loading = true;
       try {
         this.currentUser = await userApi.login(username, password);
+        mockApi.syncSession(this.currentUser);
         this.initialized = true;
       } finally {
         this.loading = false;
@@ -56,6 +59,7 @@ export const useUserStore = defineStore('user', {
       } finally {
         this.currentUser = null;
         this.users = [];
+        mockApi.syncSession(null);
         this.initialized = true;
       }
     },

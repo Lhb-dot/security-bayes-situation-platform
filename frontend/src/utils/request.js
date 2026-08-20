@@ -1,7 +1,11 @@
 import axios from 'axios';
 
+const CSRF_STORAGE_KEY = 'bayes_csrf_token';
+
 const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:12312',
+  // Dev: empty baseURL + Vite /api proxy keeps cookies first-party.
+  // Prod: set VITE_API_BASE_URL to the backend origin when not same-origin.
+  baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 0,
   withCredentials: true,
   headers: {
@@ -17,10 +21,22 @@ const readCookie = (name) => {
   return item ? decodeURIComponent(item.slice(prefix.length)) : null;
 };
 
+export const setCsrfToken = (token) => {
+  if (token) {
+    window.sessionStorage.setItem(CSRF_STORAGE_KEY, token);
+  } else {
+    window.sessionStorage.removeItem(CSRF_STORAGE_KEY);
+  }
+};
+
+const currentCsrfToken = () =>
+  readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf') ||
+  window.sessionStorage.getItem(CSRF_STORAGE_KEY);
+
 service.interceptors.request.use((config) => {
   const method = (config.method || 'get').toUpperCase();
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    const csrf = readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf');
+    const csrf = currentCsrfToken();
     if (csrf) {
       config.headers = config.headers || {};
       config.headers['X-CSRF-Token'] = csrf;
@@ -33,6 +49,7 @@ service.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
+      setCsrfToken(null);
       window.localStorage.removeItem('bayes_session_user_id');
       if (window.location.hash !== '#/login') {
         window.location.hash = '#/login';

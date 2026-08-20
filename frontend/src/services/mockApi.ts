@@ -752,6 +752,17 @@ const ensureSession = () => {
 /** 获取当前登录用户（未登录时返回 null） */
 export const getCurrentUser = (): UserAccount | null => ensureSession();
 
+/** Bridge real cookie-auth session into transitional mockApi callers. */
+export const syncSession = (user: UserAccount | null): void => {
+  sessionUser = user ? { ...user } : null;
+  if (user) {
+    window.localStorage.setItem(SESSION_KEY, user.user_id || String(user.id));
+  } else {
+    window.localStorage.removeItem(SESSION_KEY);
+  }
+};
+
+
 /** 获取当前登录用户，未登录抛错（业务接口统一调用） */
 const requireLogin = (): UserAccount => {
   const user = ensureSession();
