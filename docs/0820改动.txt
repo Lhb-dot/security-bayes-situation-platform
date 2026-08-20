@@ -113,3 +113,38 @@
 结果：
 - 数据集中心列表、字段预览、数据预览均读 PostgreSQL + 真实 ARFF
 - 航母甲板 3 个数据集可见：carrier_feature2_biaoqian / carrier_feature2_lisan / carrier_paired_trail
+
+
+七、Bug 修复汇总
+
+1. 阈值保存报错 "aved.medium_threshold.toFixed is not a function"
+
+原因：后端用 Numeric(4,2) 字段，Python 返回的是 Decimal 对象，JSON 序列化后前端收到的不是 number 类型，调用 .toFixed() 报错。
+
+修改：
+- backend/app/utils/common.py
+  - row_to_dict 增加 Decimal → float 转换
+- frontend/src/views/Model/Settings.vue
+  - loadThresholds：用 Number() 强制转换阈值，不再链式 .toFixed()
+  - saveScenarioThreshold：保存返回值用 Number(Number(...).toFixed(2)) 防御性转换
+  - toFixed2 辅助函数：接受 number | string | null | undefined
+
+
+2. 数据集字段预览/数据预览显示异常（如 "(174.365-310.5 截断）
+
+原因：ARFF 文件解析器未处理反斜杠转义引号（\'），导致带括号的枚举值被错误切分。
+
+修改：
+- backend/app/utils/arff_reader.py
+  - _split_enum_values：添加 \' 转义序列识别，调整检查顺序（先判转义，再判结束引号，最后入缓冲）
+  - _split_data_row：同样添加 \' 转义处理，移除 strip("'\"") 避免误删合法引号
+
+
+3. 登录后出现两次"欢迎回来"消息
+
+原因：Login.vue 中密码框的 @keyup.enter 与表单的 @submit 同时触发 handleLogin，导致两个 ElMessage.success 都弹出。
+
+修改：
+- frontend/src/views/Login.vue
+  - handleLogin 开头加防重入守卫 if (loading.value) return
+  - 移除密码框冗余的 @keyup.enter（表单 submit 已覆盖 Enter 键提交）

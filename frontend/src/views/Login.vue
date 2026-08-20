@@ -18,6 +18,7 @@ const loading = ref(false);
 const errorMsg = ref('');
 
 const handleLogin = async () => {
+  if (loading.value) return;
   if (!username.value.trim() || !password.value) {
     errorMsg.value = '请输入用户名和密码';
     return;
@@ -78,7 +79,6 @@ const handleLogin = async () => {
             type="password"
             placeholder="请输入密码"
             autocomplete="current-password"
-            @keyup.enter="handleLogin"
           />
         </div>
         <p v-if="errorMsg" class="login-error">{{ errorMsg }}</p>

@@ -24,8 +24,8 @@ class RiskThreshold(Base):
     scenario_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("scenario.id"), primary_key=True
     )
-    medium_threshold: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
-    high_threshold: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    medium_threshold: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    high_threshold: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
     updated_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=False
     )

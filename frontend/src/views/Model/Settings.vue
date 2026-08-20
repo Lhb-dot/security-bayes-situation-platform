@@ -94,13 +94,20 @@ const scenarioSwitches = ref([
 
 const loadThresholds = async () => {
   const ths = await getRiskThresholds();
-  thresholds.value = ths;
+  thresholds.value = ths.map(t => ({
+    ...t,
+    medium_threshold: Number(t.medium_threshold ?? 0),
+    high_threshold: Number(t.high_threshold ?? 0),
+  }));
   const nextEditing: Record<string, { medium: number | null; high: number | null }> = {};
   for (const scenarioId of activeScenarios.value) {
     nextEditing[scenarioId] = { medium: null, high: null };
   }
-  for (const t of ths) {
-    nextEditing[t.scenario_id] = { medium: t.medium_threshold, high: t.high_threshold };
+  for (const t of thresholds.value) {
+    nextEditing[t.scenario_id] = {
+      medium: Number(t.medium_threshold),
+      high: Number(t.high_threshold),
+    };
   }
   editing.value = nextEditing;
 };
@@ -113,6 +120,11 @@ const loadChangeLogs = async () => {
   }
 };
 
+const toFixed2 = (v: number | string | null | undefined): string => {
+  if (v === null || v === undefined || v === '') return '-';
+  return Number(v).toFixed(2);
+};
+
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
   if (!e || e.medium === null || e.high === null || e.medium < 0 || e.medium > 1 || e.high < 0 || e.high > 1) {
@@ -123,15 +135,18 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('高风险阈值必须大于中风险阈值');
     return;
   }
+  if (Math.round(e.medium * 100) / 100 !== e.medium || Math.round(e.high * 100) / 100 !== e.high) {
+    ElMessage.warning('阈值最多只能有两位小数');
+    return;
+  }
   saving.value = true;
   try {
-    const medium = e.medium;
-    const high = e.high;
+    const medium = Math.round(e.medium * 100) / 100;
+    const high = Math.round(e.high * 100) / 100;
     const saved = await updateRiskThreshold(scenarioId, { medium_threshold: medium, high_threshold: high });
-    // Keep the form in sync with the persisted database row returned by PUT.
     editing.value[scenarioId] = {
-      medium: saved.medium_threshold,
-      high: saved.high_threshold,
+      medium: Number(Number(saved.medium_threshold).toFixed(2)),
+      high: Number(Number(saved.high_threshold).toFixed(2)),
     };
     syncThreshold(saved);
     ElMessage.success(`「${SCENARIO_LABEL[scenarioId]}」阈值已保存并实时生效`);
@@ -262,10 +277,16 @@ onMounted(async () => {
             <div class="threshold-field">
               <label>中风险阈值（0~1）</label>
               <input v-model.number="editing[sc].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+              <span v-if="thresholds.find(t => t.scenario_id === sc)?.medium_threshold !== undefined" class="threshold-card__current">
+                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === sc)?.medium_threshold) }}
+              </span>
             </div>
             <div class="threshold-field">
               <label>高风险阈值（0~1）</label>
               <input v-model.number="editing[sc].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+              <span v-if="thresholds.find(t => t.scenario_id === sc)?.high_threshold !== undefined" class="threshold-card__current">
+                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === sc)?.high_threshold) }}
+              </span>
             </div>
             <p class="threshold-card__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
             <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(sc)">
@@ -304,14 +325,14 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="中风险阈值" width="120" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.old_medium ?? row.old_medium_threshold ?? '-' }} →
-            <el-tag type="success" effect="plain">{{ row.new_medium ?? row.new_medium_threshold ?? '-' }}</el-tag>
+            {{ toFixed2(row.old_medium ?? row.old_medium_threshold) }} →
+            <el-tag type="success" effect="plain">{{ toFixed2(row.new_medium ?? row.new_medium_threshold) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="高风险阈值" width="120" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.old_high ?? row.old_high_threshold ?? '-' }} →
-            <el-tag type="success" effect="plain">{{ row.new_high ?? row.new_high_threshold ?? '-' }}</el-tag>
+            {{ toFixed2(row.old_high ?? row.old_high_threshold) }} →
+            <el-tag type="success" effect="plain">{{ toFixed2(row.new_high ?? row.new_high_threshold) }}</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -543,6 +564,11 @@ onMounted(async () => {
 .threshold-field label {
   font-size: 0.8rem;
   color: rgba(220, 234, 255, 0.65);
+}
+
+.threshold-card__current {
+  font-size: 0.72rem;
+  color: rgba(154, 214, 255, 0.6);
 }
 
 .threshold-card__rule {

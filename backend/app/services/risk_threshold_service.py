@@ -70,8 +70,8 @@ class RiskThresholdService(ServiceBase):
         if scenario is None:
             raise ServiceError(404, "场景不存在")
 
-        medium = float(medium_threshold)
-        high = float(high_threshold)
+        medium = round(float(medium_threshold), 2)
+        high = round(float(high_threshold), 2)
         if not (0 <= medium <= 1) or not (0 <= high <= 1):
             raise ServiceError(400, "阈值必须在 [0,1] 范围内")
         if high <= medium:

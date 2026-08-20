@@ -1385,6 +1385,9 @@ export const saveThreshold = async (scenarioId: ScenarioId, medium_threshold: nu
   if (medium_threshold < 0 || medium_threshold > 1 || high_threshold < 0 || high_threshold > 1) {
     throw new Error('阈值必须位于 [0,1] 范围内');
   }
+  if (Math.round(medium_threshold * 100) / 100 !== medium_threshold || Math.round(high_threshold * 100) / 100 !== high_threshold) {
+    throw new Error('阈值最多只能有两位小数');
+  }
   if (high_threshold <= medium_threshold) throw new Error('高风险阈值必须大于中风险阈值');
   const old = thresholdConfigFor(operator, scenarioId);
   thresholdChangeLogs.push({

@@ -23,10 +23,10 @@ class ThresholdAuditLog(Base):
     operator_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=False
     )
-    old_medium: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
-    new_medium: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
-    old_high: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
-    new_high: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    old_medium: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    new_medium: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    old_high: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    new_high: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
     operated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     target_user: Mapped["AppUser"] = relationship(
