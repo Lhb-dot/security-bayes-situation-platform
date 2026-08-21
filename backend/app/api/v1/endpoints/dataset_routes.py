@@ -6,7 +6,7 @@
 """
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin, require_scenario_admin
@@ -113,6 +113,34 @@ def create_dataset(
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
             visibility=payload.visibility,
+        )
+    )
+
+
+@router.post(
+    "/upload",
+    response_model=ResponseModel,
+    summary="上传数据集文件（自动识别 ARFF/CSV 并解析字段结构）",
+)
+async def upload_dataset(
+    file: UploadFile = File(..., description="数据集文件（.arff / .csv）"),
+    logical_id: str = Form(..., description="数据集逻辑 ID"),
+    scenario_id: int = Form(..., description="所属场景 ID"),
+    label_field: str = Form(..., description="标签字段名"),
+    visibility: Optional[str] = Form(None, description="可见性 platform/company/personal"),
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    file_bytes = await file.read()
+    return unwrap(
+        DatasetService(db).upload_from_file(
+            current_user=current_user,
+            logical_id=logical_id,
+            scenario_id=scenario_id,
+            label_field=label_field,
+            filename=file.filename or "",
+            file_bytes=file_bytes,
+            visibility=visibility,
         )
     )
 

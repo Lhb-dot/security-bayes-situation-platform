@@ -396,6 +396,33 @@ export const uploadDataset = async (params: {
   return mapApiDataset(item);
 };
 
+/** 上传数据集文件（multipart，后端自动识别 ARFF/CSV 并解析字段结构） */
+export const uploadDatasetFile = async (params: {
+  file: File;
+  logical_id: string;
+  scenario_id: number | string;
+  label_field: string;
+  visibility?: string;
+}): Promise<Dataset> => {
+  await ensureScenarioMaps();
+  // 后端 scenario_id 是数字 ID，这里把场景编码（如 power_system）转成数字
+  const scenarioNumeric =
+    typeof params.scenario_id === 'number'
+      ? params.scenario_id
+      : scenarioIdByCodeCache?.[params.scenario_id as ScenarioId];
+  if (scenarioNumeric == null) throw new Error('所属场景无效');
+  const form = new FormData();
+  form.append('file', params.file);
+  form.append('logical_id', params.logical_id);
+  form.append('scenario_id', String(scenarioNumeric));
+  form.append('label_field', params.label_field);
+  if (params.visibility) form.append('visibility', params.visibility);
+  const item = (await unwrapData(
+    await request.post('/api/v1/datasets/upload', form)
+  )) as ApiDataset;
+  return mapApiDataset(item);
+};
+
 /** 创建数据集版本（PUT /datasets/{dataset_id}） */
 export const createDatasetVersion = async (
   datasetId: string | number,

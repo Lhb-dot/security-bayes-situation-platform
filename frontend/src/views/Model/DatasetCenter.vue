@@ -13,7 +13,7 @@ import {
   getDatasetList,
   getDatasetFields,
   getDatasetVersions,
-  uploadDataset,
+  uploadDatasetFile,
   createDatasetVersion,
   disableDatasetVersion,
   deleteDatasetVersion,
@@ -73,7 +73,15 @@ const uploadForm = ref({
   data_format: 'arff' as Dataset['data_format'],
   record_count: 0,
   file_path: '',
+  label_field: '',
 });
+/** 上传模式下选择的文件 */
+const selectedFile = ref<File | null>(null);
+
+const onFileChange = (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  selectedFile.value = input.files?.[0] ?? null;
+};
 const uploadFields = ref<Array<{ field_name: string; field_type: string; field_role: '输入特征' | '分类标签'; description: string }>>([
   { field_name: '', field_type: 'float', field_role: '输入特征', description: '' },
 ]);
@@ -81,8 +89,9 @@ const uploadFields = ref<Array<{ field_name: string; field_type: string; field_r
 const openUploadDialog = () => {
   uploadDialogMode.value = 'upload';
   newVersionTarget.value = null;
-  uploadForm.value = { dataset_id: '', name: '', scenario_id: '', data_format: 'arff', record_count: 0, file_path: '' };
+  uploadForm.value = { dataset_id: '', name: '', scenario_id: '', data_format: 'arff', record_count: 0, file_path: '', label_field: '' };
   uploadFields.value = [{ field_name: '', field_type: 'float', field_role: '输入特征', description: '' }];
+  selectedFile.value = null;
   uploadDialogVisible.value = true;
 };
 
@@ -97,6 +106,7 @@ const openNewVersion = async (dataset: Dataset) => {
     data_format: dataset.data_format,
     record_count: dataset.record_count,
     file_path: '',
+    label_field: '',
   };
   try {
     const fields = await getDatasetFields(dataset.dataset_id);
@@ -125,6 +135,38 @@ const submitUpload = async () => {
     ElMessage.warning('必须指定所属场景');
     return;
   }
+
+  // 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段
+  if (uploadDialogMode.value === 'upload') {
+    if (!uploadForm.value.dataset_id.trim()) {
+      ElMessage.warning('请填写数据集编码');
+      return;
+    }
+    if (!selectedFile.value) {
+      ElMessage.warning('请选择要上传的 ARFF / CSV 文件');
+      return;
+    }
+    if (!uploadForm.value.label_field.trim()) {
+      ElMessage.warning('请填写标签字段名（通常是最后一列）');
+      return;
+    }
+    try {
+      await uploadDatasetFile({
+        file: selectedFile.value,
+        logical_id: uploadForm.value.dataset_id.trim(),
+        scenario_id: uploadForm.value.scenario_id,
+        label_field: uploadForm.value.label_field.trim(),
+      });
+      ElMessage.success('数据集上传成功（已自动识别格式并解析字段）');
+      uploadDialogVisible.value = false;
+      await loadDatasets();
+    } catch (err) {
+      ElMessage.error(err instanceof Error ? err.message : '上传失败');
+    }
+    return;
+  }
+
+  // 创建新版本：保留原有手动字段编辑流程（需求 2.3.3）
   if (!uploadForm.value.dataset_id.trim() || !uploadForm.value.name.trim()) {
     ElMessage.warning('请填写数据集编码和名称');
     return;
@@ -155,25 +197,13 @@ const submitUpload = async () => {
     return;
   }
   try {
-    if (uploadDialogMode.value === 'newVersion' && newVersionTarget.value) {
-      // 需求 2.3.3：修改已用数据集 → 创建新版本并保留旧版本
+    if (newVersionTarget.value) {
       const v = await createDatasetVersion(newVersionTarget.value.dataset_id, {
         file_path: uploadForm.value.file_path.trim(),
         fields: fieldDefs,
         label_field: fieldDefs.find((f) => f.field_role === '分类标签')?.field_name,
       });
       ElMessage.success(`已创建新版本 ${v.dataset_version}，旧版本保留`);
-    } else {
-      await uploadDataset({
-        dataset_id: uploadForm.value.dataset_id.trim(),
-        name: uploadForm.value.name.trim(),
-        scenario_id: uploadForm.value.scenario_id as ScenarioId,
-        data_format: uploadForm.value.data_format,
-        record_count: uploadForm.value.record_count,
-        file_path: uploadForm.value.file_path.trim(),
-        fields: fieldDefs,
-      });
-      ElMessage.success('数据集上传成功（v1）');
     }
     uploadDialogVisible.value = false;
     await loadDatasets();
@@ -491,23 +521,37 @@ onMounted(async () => {
             <option value="geological_risk">地质风险</option>
           </select>
         </div>
-        <div class="upload-form__row upload-form__row--split">
-          <div class="upload-form__half">
-            <label class="upload-form__label">数据格式</label>
-            <select v-model="uploadForm.data_format" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion'">
-              <option value="arff">ARFF</option>
-              <option value="csv">CSV</option>
-              <option value="json">JSON</option>
-            </select>
+        <!-- 上传模式：文件选择 + 标签字段（后端自动识别 ARFF/CSV 并解析字段） -->
+        <template v-if="uploadDialogMode === 'upload'">
+          <div class="upload-form__row">
+            <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv，自动识别格式并解析字段）</label>
+            <input type="file" accept=".arff,.csv" class="upload-form__input" @change="onFileChange" />
+            <p v-if="selectedFile" class="version-tip">已选择：{{ selectedFile.name }}（{{ (selectedFile.size / 1024).toFixed(1) }} KB）</p>
           </div>
-          <div class="upload-form__half">
-            <label class="upload-form__label">样本数量</label>
-            <input v-model.number="uploadForm.record_count" type="number" min="0" class="upload-form__input" placeholder="0" />
+          <div class="upload-form__row">
+            <label class="upload-form__label">标签字段名<span class="required">*</span></label>
+            <input v-model.trim="uploadForm.label_field" class="upload-form__input" placeholder="通常是最后一列，如 label / class / Collision" />
           </div>
-        </div>
-        <p v-if="uploadDialogMode === 'newVersion'" class="version-tip">创建新版本将保留旧版本，已产生的历史模型、推理记录和风险事件继续可追溯。</p>
+        </template>
 
-                  <div class="upload-form__row">
+        <!-- 新版本模式：保留原有手动字段编辑 -->
+        <template v-else>
+          <div class="upload-form__row upload-form__row--split">
+            <div class="upload-form__half">
+              <label class="upload-form__label">数据格式</label>
+              <select v-model="uploadForm.data_format" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion'">
+                <option value="arff">ARFF</option>
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+            <div class="upload-form__half">
+              <label class="upload-form__label">样本数量</label>
+              <input v-model.number="uploadForm.record_count" type="number" min="0" class="upload-form__input" placeholder="0" />
+            </div>
+          </div>
+          <p class="version-tip">创建新版本将保留旧版本，已产生的历史模型、推理记录和风险事件继续可追溯。</p>
+          <div class="upload-form__row">
             <label class="upload-form__label">文件路径<span class="required">*</span></label>
             <input
               v-model.trim="uploadForm.file_path"
@@ -515,25 +559,26 @@ onMounted(async () => {
               placeholder="data/场景目录/文件名.arff"
             />
           </div>
-<div class="upload-form__row">
-          <label class="upload-form__label">固定字段结构<span class="required">*</span>（至少一个字段，且必须包含一个分类标签）</label>
-          <div class="upload-fields">
-            <div v-for="(f, index) in uploadFields" :key="index" class="upload-field-row">
-              <input v-model.trim="f.field_name" class="upload-form__input upload-field-name" placeholder="字段名" />
-              <select v-model="f.field_type" class="upload-form__input upload-field-type">
-                <option value="float">float</option>
-                <option value="int">int</option>
-                <option value="string">string</option>
-              </select>
-              <select v-model="f.field_role" class="upload-form__input upload-field-role">
-                <option value="输入特征">输入特征</option>
-                <option value="分类标签">分类标签</option>
-              </select>
-              <button class="upload-field-del" @click="removeUploadField(index)">✕</button>
+          <div class="upload-form__row">
+            <label class="upload-form__label">固定字段结构<span class="required">*</span>（至少一个字段，且必须包含一个分类标签）</label>
+            <div class="upload-fields">
+              <div v-for="(f, index) in uploadFields" :key="index" class="upload-field-row">
+                <input v-model.trim="f.field_name" class="upload-form__input upload-field-name" placeholder="字段名" />
+                <select v-model="f.field_type" class="upload-form__input upload-field-type">
+                  <option value="float">float</option>
+                  <option value="int">int</option>
+                  <option value="string">string</option>
+                </select>
+                <select v-model="f.field_role" class="upload-form__input upload-field-role">
+                  <option value="输入特征">输入特征</option>
+                  <option value="分类标签">分类标签</option>
+                </select>
+                <button class="upload-field-del" @click="removeUploadField(index)">✕</button>
+              </div>
+              <button class="upload-add-field" @click="addUploadField">+ 添加字段</button>
             </div>
-            <button class="upload-add-field" @click="addUploadField">+ 添加字段</button>
           </div>
-        </div>
+        </template>
       </div>
       <template #footer>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
