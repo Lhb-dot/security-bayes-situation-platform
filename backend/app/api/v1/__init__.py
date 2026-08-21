@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     risk_event_routes,
     risk_threshold_routes,
     scenario_routes,
+    situation_routes,
     user_routes,
 )
 
@@ -34,3 +35,4 @@ api_router.include_router(inference_record_routes.router)
 api_router.include_router(risk_event_routes.router)
 api_router.include_router(risk_threshold_routes.router)
 api_router.include_router(report_routes.router)
+api_router.include_router(situation_routes.router)

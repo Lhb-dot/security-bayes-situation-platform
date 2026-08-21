@@ -6,43 +6,51 @@
  * 数据来源：getRiskEvents() 跨场景聚合
  */
 import { computed, onMounted, ref } from 'vue';
-import type { RiskEvent, ScenarioId } from '../../types/security';
-import { getRiskEvents } from '@/services/mockApi';
-import { useScenarioStore } from '@/stores/scenarioStore';
+import { getRiskEventList } from '@/api/riskEventApi';
 import { useUserStore } from '@/stores/userStore';
 
+/** 真实风险事件（后端 /api/v1/risk-events 返回结构） */
+interface RiskEventItem {
+  id: number;
+  scenario_id: number;
+  risk_type: string;
+  risk_level: string;
+  risk_score: number;
+  original_label: string;
+  description: string;
+  occurred_at: string;
+  status: string; // PENDING / PROCESSING / RESOLVED
+}
+
 /** 风险事件列表 */
-const events = ref<RiskEvent[]>([]);
+const events = ref<RiskEventItem[]>([]);
 const loading = ref(true);
 const error = ref('');
 
-const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
 
 /** 是否系统管理员（管理员/用户固定自己场景） */
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 
 /** 筛选条件 */
-const selectedScenario = ref<ScenarioId | 'all'>('all');
+const selectedScenario = ref<number | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
 const selectedStatus = ref<string>('all');
 
-/** 场景名称映射 */
-const scenarioLabel: Record<string, string> = {
-  network_security: '网络安全',
-  power_system: '电力系统',
-  geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+/** 场景数字 ID → 名称（与后端 scenario 表 id 对齐） */
+const SCENARIO_META: Record<number, { code: string; name: string }> = {
+  1: { code: 'network_security', name: '网络安全' },
+  2: { code: 'power_system', name: '电力系统' },
+  3: { code: 'flightdeck_operation', name: '航母甲板' },
+  4: { code: 'geological_risk', name: '地质风险' },
 };
+const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
 
-/** 场景选项（当前用户可见场景；管理员=全部+所有场景，场景管理员=仅自己场景，用户=自选/绑定） */
-const scenarioOptions = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
-  const role = userStore.currentUser?.role;
-  const list: { value: ScenarioId | 'all'; label: string }[] = [];
-  if (role !== 'SCENARIO_ADMIN') list.push({ value: 'all', label: '所有场景' });
-  list.push(...scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name })));
-  return list;
-});
+/** 场景选项（系统管理员可按场景过滤） */
+const scenarioOptions: Array<{ value: number | 'all'; label: string }> = [
+  { value: 'all', label: '所有场景' },
+  ...Object.entries(SCENARIO_META).map(([id, meta]) => ({ value: Number(id), label: meta.name })),
+];
 
 /** 风险等级选项 */
 const riskLevelOptions = [
@@ -52,13 +60,23 @@ const riskLevelOptions = [
   { value: 'LOW', label: '低危' },
 ];
 
-/** 状态选项 */
+/** 状态选项（前端中文 ↔ 后端枚举） */
 const statusOptions = [
   { value: 'all', label: '全部状态' },
   { value: '待处置', label: '待处置' },
   { value: '处理中', label: '处理中' },
   { value: '已处置', label: '已处置' },
 ];
+const STATUS_VALUE: Record<string, string> = {
+  '待处置': 'PENDING',
+  '处理中': 'PROCESSING',
+  '已处置': 'RESOLVED',
+};
+const STATUS_LABEL: Record<string, string> = {
+  PENDING: '待处置',
+  PROCESSING: '处理中',
+  RESOLVED: '已处置',
+};
 
 /** 筛选后的风险事件 */
 const filteredEvents = computed(() => {
@@ -70,7 +88,7 @@ const filteredEvents = computed(() => {
     result = result.filter((e) => e.risk_level === selectedRiskLevel.value);
   }
   if (selectedStatus.value !== 'all') {
-    result = result.filter((e) => e.status === selectedStatus.value);
+    result = result.filter((e) => e.status === STATUS_VALUE[selectedStatus.value]);
   }
   return result;
 });
@@ -80,7 +98,8 @@ const loadEvents = async () => {
   loading.value = true;
   error.value = '';
   try {
-    events.value = await getRiskEvents();
+    const items = await getRiskEventList({ page_size: 200 });
+    events.value = items as unknown as RiskEventItem[];
   } catch (err) {
     error.value = err instanceof Error ? err.message : '风险事件加载失败';
   } finally {
@@ -95,20 +114,7 @@ const riskLevelMap: Record<string, { label: string; type: string }> = {
   LOW: { label: '低危', type: 'info' },
 };
 
-/** 状态标签映射 */
-const statusMap: Record<string, string> = {
-  '待处置': '待处置',
-  '处理中': '处理中',
-  '已处置': '已处置',
-};
-
-onMounted(async () => {
-  await scenarioStore.fetchScenarioList();
-  // 管理员/用户：默认固定自己场景（隐藏场景下拉）
-  if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
-    const bound = userStore.currentUser?.scenario_code;
-    if (bound) selectedScenario.value = bound;
-  }
+onMounted(() => {
   loadEvents();
 });
 </script>
@@ -173,22 +179,22 @@ onMounted(async () => {
         style="width: 100%"
         row-class-name="event-table-row"
       >
-        <el-table-column prop="event_id" label="事件编号" width="200" show-overflow-tooltip />
+        <el-table-column prop="id" label="事件编号" width="200" show-overflow-tooltip />
 
         <el-table-column label="所属场景" width="110" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
-            <span class="event-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
+          <template #default="{ row }: { row: RiskEventItem }">
+            <span class="event-table__scenario-tag">{{ scenarioName(row.scenario_id) }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="风险类型" width="160" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
+          <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__risk-type">{{ row.risk_type }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="风险等级" width="90" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
+          <template #default="{ row }: { row: RiskEventItem }">
             <span
               class="ev-level-badge"
               :class="`ev-level--${row.risk_level}`"
@@ -199,13 +205,13 @@ onMounted(async () => {
         </el-table-column>
 
         <el-table-column label="风险概率" width="100" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
+          <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__score">{{ (row.risk_score * 100).toFixed(1) }}%</span>
           </template>
         </el-table-column>
 
         <el-table-column label="原始标签" width="100" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
+          <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__orig-label">{{ row.original_label }}</span>
           </template>
         </el-table-column>
@@ -215,12 +221,12 @@ onMounted(async () => {
         <el-table-column prop="occurred_at" label="发生时间" width="160" align="center" />
 
         <el-table-column label="处置状态" width="100" align="center">
-          <template #default="{ row }: { row: RiskEvent }">
+          <template #default="{ row }: { row: RiskEventItem }">
             <span
               class="event-table__status"
-              :class="`ev-status--${row.status}`"
+              :class="`ev-status--${STATUS_LABEL[row.status] ?? row.status}`"
             >
-              {{ statusMap[row.status] ?? row.status }}
+              {{ STATUS_LABEL[row.status] ?? row.status }}
             </span>
           </template>
         </el-table-column>

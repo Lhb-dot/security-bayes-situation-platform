@@ -23,6 +23,10 @@ from app.services.model_sim import PMWNB_SERVICE_URL, TRAINED_MODEL_DIR
 # Java 服务训练超时（秒）：大数据集（KDD 20% 约 45k 行）需留足余量
 PMWNB_TRAIN_TIMEOUT = 240
 
+# 独立预测服务地址与超时（PredictServer.java，默认 127.0.0.1:12314）
+PREDICT_SERVICE_URL = os.getenv("PREDICT_SERVICE_URL", "http://127.0.0.1:12314")
+PMWNB_PREDICT_TIMEOUT = 60
+
 
 def resolve_dataset_path(file_path: str) -> str:
     """把 dataset.file_path（相对项目根，如 data/power/xxx.arff）解析为绝对路径。"""
@@ -109,3 +113,33 @@ def build_model_save_path(model_id: int) -> str:
     """模型文件保存路径（backend/storage/models/pmwnb_mv{id}.model）。"""
     os.makedirs(TRAINED_MODEL_DIR, exist_ok=True)
     return os.path.join(TRAINED_MODEL_DIR, f"pmwnb_mv{model_id}.model")
+
+
+def execute_pmwnb_predict(model_path: str, arff_path: str, features: dict) -> dict:
+    """调用独立预测服务 /predict，返回 {prediction_label, probability, class_distribution}。
+
+    Java 服务按 ARFF 头读取完整字段结构，把 features 填成完整实例后预测。
+    抛错：FileNotFoundError / RuntimeError（服务不可达或预测失败）。
+    """
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"模型文件不存在: {model_path}")
+    if not os.path.exists(arff_path):
+        raise FileNotFoundError(f"数据集文件不存在: {arff_path}")
+
+    try:
+        resp = requests.post(
+            f"{PREDICT_SERVICE_URL}/predict",
+            json={"model_path": model_path, "arff_path": arff_path, "features": features},
+            timeout=PMWNB_PREDICT_TIMEOUT,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            f"无法连接到 PMWNB 预测服务（{PREDICT_SERVICE_URL}），"
+            f"请先启动：java -jar lib/predict-service.jar 12314"
+        )
+
+    if not result.get("success"):
+        raise RuntimeError(result.get("error", "PMWNB 预测失败"))
+    return result["data"]

@@ -8,14 +8,25 @@ $jar     = "$backend\lib\pmwnb-service.jar"
 $java25  = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe"
 $javaBin = if (Test-Path $java25) { $java25 } else { "java" }
 
-$javaPid = $null; $pyPid = $null; $vuePid = $null
+$javaPid = $null; $pyPid = $null; $vuePid = $null; $predictPid = $null
 
 # ---- cleanup ----
 function Stop-All {
-    if ($javaPid) { Stop-Process -Id $javaPid -Force -EA SilentlyContinue }
-    if ($pyPid)   { Stop-Process -Id $pyPid   -Force -EA SilentlyContinue }
-    if ($vuePid)  { Stop-Process -Id $vuePid  -Force -EA SilentlyContinue }
-    Get-Process -Name java,node -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    # ① 按本次启动时记录的 PID 杀
+    if ($javaPid)    { Stop-Process -Id $javaPid    -Force -EA SilentlyContinue }
+    if ($predictPid) { Stop-Process -Id $predictPid -Force -EA SilentlyContinue }
+    if ($pyPid)      { Stop-Process -Id $pyPid      -Force -EA SilentlyContinue }
+    if ($vuePid)     { Stop-Process -Id $vuePid     -Force -EA SilentlyContinue }
+
+    # ② 按名字兜底杀（java/node/python 一个不漏）
+    Get-Process -Name java,node,python -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+
+    # ③ 按端口兜底杀：谁占着 12312/12313/12314/5173 就杀谁（最彻底）
+    foreach ($port in 12312,12313,12314,5173) {
+        Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique |
+            ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
+    }
 }
 
 Clear-Host
@@ -29,6 +40,10 @@ if (-not (Get-Command python -EA SilentlyContinue)) { Write-Host "  [X] Python n
 if (-not (Get-Command node   -EA SilentlyContinue)) { Write-Host "  [X] Node.js not installed" -ForegroundColor Red;  $err=$true }
 if (-not (Test-Path $jar))  { Write-Host "  [X] lib/pmwnb-service.jar missing" -ForegroundColor Red; $err=$true }
 if ($err) { Write-Host ""; Read-Host "Press Enter to exit"; exit 1 }
+
+# ---- 先清掉上次可能残留的进程（不依赖上次是否正常退出）----
+Stop-All
+Start-Sleep 1
 
 # ---- PostgreSQL (数据库依赖, /api/v1 新世界必需) ----
 Write-Host "  PostgreSQL    " -NoNewline
@@ -68,6 +83,20 @@ while ((Get-Date) -lt $t) {
 if ($ok) { Write-Host ":12313  OK" -ForegroundColor Green }
 else     { Write-Host ":12313  FAIL" -ForegroundColor Red }
 
+# ---- Java Predict (通用预测服务, 12314) ----
+Write-Host "  Predict       " -NoNewline
+$p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\predict-service.jar","12314" `
+    -WorkingDirectory $backend -WindowStyle Hidden -PassThru
+if ($p) { $predictPid = $p.Id }
+$ok = $false
+$t = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $t) {
+    try { if ((Invoke-RestMethod "http://127.0.0.1:12314/health" -TimeoutSec 2).status -eq "ok") { $ok=$true; break } } catch {}
+    Start-Sleep 1
+}
+if ($ok) { Write-Host ":12314  OK" -ForegroundColor Green }
+else     { Write-Host ":12314  FAIL" -ForegroundColor Red }
+
 # ---- Python FastAPI ----
 Write-Host "  FastAPI       " -NoNewline
 $p = Start-Process -FilePath "python" -ArgumentList "-m","app.main" `
@@ -76,7 +105,7 @@ if ($p) { $pyPid = $p.Id }
 $ok = $false
 $t = (Get-Date).AddSeconds(20)
 while ((Get-Date) -lt $t) {
-    try { if (Invoke-RestMethod "http://127.0.0.1:12312/api/model/dataset-list" -TimeoutSec 2) { $ok=$true; break } } catch {}
+    try { if (Invoke-RestMethod "http://127.0.0.1:12312/openapi.json" -TimeoutSec 2) { $ok=$true; break } } catch {}
     Start-Sleep 1
 }
 if ($ok) { Write-Host ":12312  OK" -ForegroundColor Green }

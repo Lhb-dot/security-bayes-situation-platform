@@ -31,6 +31,7 @@ from app.services.constants import (
     RISK_LEVEL_HIGH,
     RISK_LEVEL_LOW,
     RISK_LEVEL_MEDIUM,
+    ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
 from app.utils.common import get_logger, paginate, row_to_dict
@@ -86,6 +87,34 @@ class SituationSnapshotService(ServiceBase):
             stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         events = self.db.scalars(stmt).all()
         return ok(data=self._aggregate(events))
+
+    @service_call
+    def get_scene_situation(self, current_user, scenario_id: int):
+        """场景态势（动态统计 + 最近风险事件），供场景大屏使用。
+
+        返回 {scenario_id, stats, recent_events}：
+        - stats：按风险等级/处置状态聚合的真实计数（口径同 _aggregate）；
+        - recent_events：最近 20 条真实风险事件（按发生时间倒序）。
+        """
+        self.require_scenario_access(current_user, scenario_id)
+        role = getattr(current_user, "role", None)
+        stmt = select(RiskEvent).where(RiskEvent.scenario_id == scenario_id)
+        if role == ROLE_SUPER_ADMIN:
+            stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
+                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
+        elif role == ROLE_SCENARIO_USER:
+            # 普通用户态势只统计本人数据（需求 6.8.1，后端强制按用户过滤）
+            stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
+        events = self.db.scalars(stmt).all()
+        recent = sorted(events, key=lambda e: e.occurred_at or datetime(1970, 1, 1), reverse=True)[:20]
+        return ok(
+            data={
+                "scenario_id": scenario_id,
+                "stats": self._aggregate(events),
+                "recent_events": [row_to_dict(e) for e in recent],
+            }
+        )
 
     # ------------------------------------------------------------------
     # 快照落库（仅 ADMIN / 定时任务；场景级统计）

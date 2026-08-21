@@ -8,9 +8,8 @@ const service = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 0,
   withCredentials: true,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  // 注意：不在此处写死 Content-Type。axios 会自动处理——
+  // JSON 对象请求自动带 application/json，FormData 上传自动带 multipart/form-data(boundary)。
 });
 
 const readCookie = (name) => {

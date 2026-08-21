@@ -7,18 +7,41 @@
 import request, { unwrapData } from '@/utils/request';
 import type { InferenceRecord } from '@/types/security';
 
+/** 服务端统一预测入口返回结果（POST /inference-records/predict）。 */
+export interface PredictResult {
+  id: number;
+  user_id: number;
+  model_version_id: number;
+  input_features: Record<string, unknown>;
+  prediction_label: string;
+  risk_score: number | null;
+  risk_level: string | null;
+  is_risk_event: boolean;
+  executed_at: string;
+  /** 预测为风险类时后端自动生成的风险事件；正常类为 null */
+  risk_event: RiskEventResult | null;
+}
+
+/** 风险事件最小字段（predict 响应中内嵌） */
+export interface RiskEventResult {
+  id: number;
+  risk_type: string;
+  risk_level: string;
+  risk_score: number;
+  description: string;
+  status: string;
+}
+
 /**
  * 执行单条推理（POST /inference-records/predict，风险类结果自动生成风险事件）
  *
- * TODO 联调占位：后端当前要求客户端传 prediction_label / risk_score，
- * 正式版将改为服务端统一预测入口，请求体不再携带这两个字段。
+ * 预测结果（prediction_label / risk_score）由服务端统一预测入口根据
+ * model_version_id + input_features 计算，客户端不再提交这两个字段。
  */
 export const predictInference = async (params: {
-  model_version_id: string;
+  model_version_id: string | number;
   input_features: Record<string, unknown>;
-  prediction_label: string;
-  risk_score?: number;
-}): Promise<InferenceRecord> =>
+}): Promise<PredictResult> =>
   unwrapData(await request.post('/api/v1/inference-records/predict', params));
 
 /** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */

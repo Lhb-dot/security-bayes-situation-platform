@@ -300,6 +300,73 @@ class DatasetService(ServiceBase):
         return ok(data=self._to_dict(dataset), message="数据集上传成功")
 
     @service_call
+    def upload_from_file(
+        self,
+        current_user,
+        logical_id: str,
+        scenario_id: int,
+        label_field: str,
+        filename: str,
+        file_bytes: bytes,
+        visibility: Optional[str] = None,
+    ):
+        """上传数据集文件（multipart）：保存到 data/<场景编码>/<文件名>，自动识别
+        ARFF/CSV 格式并解析字段结构，最后复用 create() 登记落库。
+
+        - 自动推断字段类型与枚举值域、样本数；
+        - label_field 必须存在于文件字段中（否则报错，前端可据此提示修正）。
+        """
+        from app.services.model_sim import PROJECT_ROOT
+        from app.utils.dataset_file_reader import (
+            build_fields_schema,
+            detect_format,
+            read_dataset_file,
+        )
+
+        scenario = self.db.get(Scenario, scenario_id)
+        if scenario is None:
+            raise ServiceError(404, "场景不存在")
+
+        fmt = detect_format(filename)
+        if fmt == "unknown":
+            raise ServiceError(400, "仅支持 .arff / .csv 格式文件")
+
+        # 保存到 data/<场景编码>/<安全文件名>（basename 防路径穿越）
+        safe_name = os.path.basename(filename)
+        target_dir = os.path.join(PROJECT_ROOT, "data", scenario.code, safe_name)
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        with open(target_dir, "wb") as f:
+            f.write(file_bytes)
+        relative_path = f"data/{scenario.code}/{safe_name}"
+
+        # 自动解析
+        try:
+            _, fields, _ = read_dataset_file(target_dir)
+        except Exception as exc:  # noqa: BLE001
+            raise ServiceError(400, f"文件解析失败: {exc}")
+
+        if not fields:
+            raise ServiceError(400, "文件没有解析出任何字段")
+
+        names = [f["name"] for f in fields]
+        if label_field not in names:
+            raise ServiceError(
+                400,
+                f"标签字段 {label_field} 不存在于文件字段中（可用字段: {', '.join(names[:10])}...）",
+            )
+
+        fields_schema = build_fields_schema(fields, label_field)
+        return self.create(
+            current_user,
+            logical_id=logical_id,
+            scenario_id=scenario_id,
+            file_path=relative_path,
+            fields_schema=fields_schema,
+            label_field=label_field,
+            visibility=visibility,
+        )
+
+    @service_call
     def update(
         self,
         current_user,
