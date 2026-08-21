@@ -2,33 +2,51 @@
 /**
  * ModelCenter - 模型中心
  *
- * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/OFFLINE）
- *  - 管理员：审核发布、下线、重新发布、设置默认推荐模型
+ * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED）
+ *  - 管理员：发布、禁用、删除、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useUserStore } from '@/stores/userStore';
+import { getAlgorithms } from '@/api/algorithmApi';
+import { getDatasets, getScenarios } from '@/api/trainingApi';
 import {
-  getModelVersions,
-  getAlgorithms,
+  deleteModelVersion,
+  disableModel,
+  getModelVersionList,
   publishModel,
-  offlineModel,
   setDefaultModel,
-  rePublishModel,
-  getCurrentUser,
-} from '@/services/mockApi';
-import type { ModelVersionRecord, AlgorithmDefinition, ScenarioId, UserAccount, EvaluationMetrics } from '@/types/security';
-import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
+} from '@/api/modelVersionApi';
+import type { BackendModelVersion } from '@/api/modelVersionApi';
+import type { EvaluationMetrics } from '@/types/security';
 
-const models = ref<ModelVersionRecord[]>([]);
-const algorithms = ref<AlgorithmDefinition[]>([]);
-const currentUser = ref<UserAccount | null>(null);
+const userStore = useUserStore();
+const models = ref<BackendModelVersion[]>([]);
+const algorithms = ref<Array<{ algorithm_id: string; display_name: string }>>([]);
+const currentUser = computed(() => userStore.currentUser);
 const loading = ref(true);
 const error = ref('');
-const selectedScenario = ref<ScenarioId | 'all'>('all');
+const selectedScenario = ref<string>('all');
 const selectedDataset = ref<string>('all');
+type ModelStatusFilter = 'all' | 'unpublished' | 'published' | 'disabled';
+const selectedStatus = ref<ModelStatusFilter>('all');
+interface ScenarioOption {
+  id: number;
+  code: string;
+  name: string;
+}
+interface DatasetOption {
+  id: number;
+  logical_id: string;
+  version: number;
+  scenario_id: number;
+  scenario_code: string;
+}
+const allScenarios = ref<ScenarioOption[]>([]);
+const allDatasets = ref<DatasetOption[]>([]);
 
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const isAdmin = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
@@ -38,7 +56,8 @@ const statusLabel: Record<string, string> = {
   FAILED: '训练失败',
   DRAFT: '待发布',
   PUBLISHED: '已发布',
-  OFFLINE: '已下线',
+  OFFLINE: '禁用中',
+  DISABLED: '禁用中',
 };
 
 const scenarioLabel: Record<string, string> = {
@@ -48,17 +67,14 @@ const scenarioLabel: Record<string, string> = {
   flightdeck_operation: '航母甲板',
 };
 
-/** 数据集选项（仅展示当前所选场景的数据集；未选场景时展示全部） */
+/** 数据集选项只按场景归属联动，不根据当前是否存在模型来生成选项。 */
 const datasetOptions = computed(() => {
-  const set = new Map<string, string>();
-  const base =
-    selectedScenario.value === 'all'
-      ? models.value
-      : models.value.filter((m) => m.scenario_id === selectedScenario.value);
-  for (const m of base) {
-    if (!set.has(m.dataset_id)) set.set(m.dataset_id, m.dataset_id);
-  }
-  return Array.from(set, ([id, name]) => ({ id, name }));
+  return allDatasets.value
+    .filter((dataset) => selectedScenario.value === 'all' || dataset.scenario_code === selectedScenario.value)
+    .map((dataset) => ({
+      id: String(dataset.id),
+      name: `${dataset.logical_id}（v${dataset.version}）`,
+    }));
 });
 
 /** 切换场景时重置数据集筛选 */
@@ -68,16 +84,27 @@ watch(selectedScenario, () => {
 
 const filteredModels = computed(() => {
   let list = models.value;
-  if (selectedScenario.value !== 'all') list = list.filter((m) => m.scenario_id === selectedScenario.value);
-  if (selectedDataset.value !== 'all') list = list.filter((m) => m.dataset_id === selectedDataset.value);
+  if (selectedScenario.value !== 'all') list = list.filter((m) => m.scenario_code === selectedScenario.value);
+  if (selectedDataset.value !== 'all') list = list.filter((m) => String(m.dataset_id) === selectedDataset.value);
+  if (isAdmin.value && selectedStatus.value === 'unpublished') {
+    list = list.filter((m) => ['TRAINING', 'FAILED', 'DRAFT'].includes(m.status));
+  } else if (isAdmin.value && selectedStatus.value === 'published') {
+    list = list.filter((m) => m.status === 'PUBLISHED');
+  } else if (isAdmin.value && selectedStatus.value === 'disabled') {
+    list = list.filter((m) => m.status === 'DISABLED');
+  }
   return list;
+});
+
+const scenarioOptions = computed(() => {
+  return allScenarios.value;
 });
 
 const loadModels = async () => {
   loading.value = true;
   error.value = '';
   try {
-    models.value = await getModelVersions();
+    models.value = await getModelVersionList({ page: 1, page_size: 200 });
   } catch (err) {
     error.value = err instanceof Error ? err.message : '模型数据加载失败';
   } finally {
@@ -86,40 +113,41 @@ const loadModels = async () => {
 };
 
 // ===================== 管理员操作 =====================
-const handlePublish = async (m: ModelVersionRecord) => {
+const handlePublish = async (m: BackendModelVersion) => {
   try {
-    await publishModel(m.model_version_id);
-    ElMessage.success(`模型 ${m.model_version_id} 已发布`);
+    await publishModel(m.id);
+    ElMessage.success(`模型 ${m.id} 已发布`);
     await loadModels();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '发布失败');
   }
 };
 
-const handleOffline = async (m: ModelVersionRecord) => {
+const handleDisable = async (m: BackendModelVersion) => {
   try {
-    await offlineModel(m.model_version_id);
-    ElMessage.success(`模型 ${m.model_version_id} 已下线`);
+    await disableModel(m.id);
+    ElMessage.success(`模型 ${m.id} 已禁用`);
     await loadModels();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '下线失败');
   }
 };
 
-const handleRepublish = async (m: ModelVersionRecord) => {
+const handleDelete = async (m: BackendModelVersion) => {
+  if (!window.confirm(`确定删除禁用中的模型 ${m.id} 吗？删除后不可恢复。`)) return;
   try {
-    await rePublishModel(m.model_version_id);
-    ElMessage.success(`模型 ${m.model_version_id} 已重新发布`);
+    await deleteModelVersion(m.id);
+    ElMessage.success(`模型 ${m.id} 已删除`);
     await loadModels();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '重新发布失败');
+    ElMessage.error(err instanceof Error ? err.message : '删除失败');
   }
 };
 
-const handleSetDefault = async (m: ModelVersionRecord) => {
+const handleSetDefault = async (m: BackendModelVersion) => {
   try {
-    await setDefaultModel(m.model_version_id);
-    ElMessage.success(`已将 ${m.model_version_id} 设为「${scenarioLabel[m.scenario_id]}」范围的默认推荐模型`);
+    await setDefaultModel(m.id);
+    ElMessage.success(`已将模型 ${m.id} 设为默认推荐模型`);
     await loadModels();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '设置默认模型失败');
@@ -127,10 +155,10 @@ const handleSetDefault = async (m: ModelVersionRecord) => {
 };
 
 // ===================== 模型版本对比（需求 6.2 P1；普通用户仅可对比已发布模型） =====================
-const compareIds = ref<string[]>([]);
+const compareIds = ref<number[]>([]);
 
-const toggleCompare = (m: ModelVersionRecord) => {
-  const idx = compareIds.value.indexOf(m.model_version_id);
+const toggleCompare = (m: BackendModelVersion) => {
+  const idx = compareIds.value.indexOf(m.id);
   if (idx >= 0) {
     compareIds.value.splice(idx, 1);
   } else {
@@ -138,12 +166,12 @@ const toggleCompare = (m: ModelVersionRecord) => {
       ElMessage.warning('最多选择 5 个模型进行对比');
       return;
     }
-    compareIds.value.push(m.model_version_id);
+    compareIds.value.push(m.id);
   }
 };
 
 const compareList = computed(() =>
-  models.value.filter((m) => compareIds.value.includes(m.model_version_id))
+  models.value.filter((m) => compareIds.value.includes(m.id))
 );
 
 const clearCompare = () => {
@@ -161,20 +189,37 @@ const metricRows: Array<{ label: string; key: keyof EvaluationMetrics }> = [
 ];
 
 /** 判断某模型在某指标上是否为最优（高亮） */
-const isBest = (m: ModelVersionRecord, key: keyof EvaluationMetrics) => {
+const isBest = (m: BackendModelVersion, key: keyof EvaluationMetrics) => {
   if (compareList.value.length < 2) return false;
-  const best = Math.max(...compareList.value.map((x) => x.evaluation_metrics[key]));
-  return m.evaluation_metrics[key] === best;
+  const best = Math.max(...compareList.value.map((x) => Number(x.evaluation_metrics[key]) || 0));
+  return Number(m.evaluation_metrics[key]) === best;
 };
 
+const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) => {
+  const value = Number(model.evaluation_metrics?.[key]);
+  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
+};
+
+const canPublish = (model: BackendModelVersion) => currentUser.value?.id === model.trained_by;
+
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
-  // 管理员/用户：默认固定自己场景（不显示场景下拉）
-  if (currentUser.value?.role !== 'SUPER_ADMIN') {
-    const bound = currentUser.value?.scenario_ids?.[0];
-    if (bound) selectedScenario.value = bound;
+  await userStore.bootstrap();
+  if (currentUser.value?.role !== 'SUPER_ADMIN' && currentUser.value?.scenario_code) {
+    selectedScenario.value = currentUser.value.scenario_code;
   }
-  algorithms.value = await getAlgorithms();
+  const rows = await getAlgorithms() as unknown as Array<{ id: number; code: string; display_name: string }>;
+  algorithms.value = rows.map((a) => ({ algorithm_id: String(a.id), display_name: a.display_name || a.code }));
+  const scenarioRows = await getScenarios() as Array<{ id: number; code: string; name: string; access_status: string }>;
+  allScenarios.value = scenarioRows
+    .filter((scenario) => scenario.access_status === 'ACTUAL')
+    .map((scenario) => ({ id: scenario.id, code: scenario.code, name: scenario.name }));
+  const datasetRows = await Promise.all(allScenarios.value.map((scenario) => getDatasets(scenario.id)));
+  allDatasets.value = datasetRows.flatMap((rows) =>
+    (rows as Array<{ id: number; logical_id: string; version: number; scenario_id: number }>).map((dataset) => ({
+      ...dataset,
+      scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
+    }))
+  );
   await loadModels();
 });
 </script>
@@ -186,18 +231,27 @@ onMounted(async () => {
         <p class="eyebrow">Model Center</p>
         <h2>模型中心</h2>
         <p class="model-center__desc">
-          {{ isAdmin ? '全平台模型版本生命周期管理（发布 / 下线 / 默认推荐）' : '仅展示已发布模型及其评估指标' }}
+          {{ isAdmin ? '模型版本管理（发布 / 禁用 / 删除）' : '仅展示已发布模型及其评估指标' }}
         </p>
       </div>
     </div>
 
-    <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
+    <!-- 筛选栏：管理员可按模型状态查看；普通用户只显示已发布模型 -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
-        <ScenarioSelector v-if="isSuperAdmin" v-model="selectedScenario" />
+        <select v-if="isSuperAdmin" v-model="selectedScenario" class="model-filter-select">
+          <option value="all">所有场景</option>
+          <option v-for="s in scenarioOptions" :key="s.code" :value="s.code">{{ s.name }}</option>
+        </select>
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
+        </select>
+        <select v-if="isAdmin" v-model="selectedStatus" class="model-filter-select">
+          <option value="all">全部状态</option>
+          <option value="unpublished">未发布</option>
+          <option value="published">已发布</option>
+          <option value="disabled">禁用中</option>
         </select>
       </div>
       <span class="model-center__count">
@@ -233,35 +287,35 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>指标</th>
-              <th v-for="m in compareList" :key="m.model_version_id">{{ m.model_version_id }}</th>
+              <th v-for="m in compareList" :key="m.id">{{ m.id }}</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>算法</td>
-              <td v-for="m in compareList" :key="'algo-' + m.model_version_id">{{ algoName(m.algorithm_id) }}</td>
+              <td v-for="m in compareList" :key="'algo-' + m.id">{{ algoName(String(m.algorithm_id)) }}</td>
             </tr>
             <tr>
               <td>数据集</td>
-              <td v-for="m in compareList" :key="'ds-' + m.model_version_id">{{ m.dataset_id }} v{{ m.dataset_version }}</td>
+              <td v-for="m in compareList" :key="'ds-' + m.id">{{ m.dataset_logical_id || m.dataset_id }} v{{ m.dataset_version || '—' }}</td>
             </tr>
             <tr>
               <td>状态</td>
-              <td v-for="m in compareList" :key="'st-' + m.model_version_id">{{ statusLabel[m.status] ?? m.status }}</td>
+              <td v-for="m in compareList" :key="'st-' + m.id">{{ statusLabel[m.status] ?? m.status }}</td>
             </tr>
             <tr v-for="row in metricRows" :key="row.key">
               <td>{{ row.label }}</td>
               <td
                 v-for="m in compareList"
-                :key="'m-' + row.key + '-' + m.model_version_id"
+                :key="'m-' + row.key + '-' + m.id"
                 :class="{ 'compare-best': isBest(m, row.key) }"
               >
-                {{ (m.evaluation_metrics[row.key] * 100).toFixed(1) }}%
+                {{ metricValue(m, row.key) }}
               </td>
             </tr>
             <tr>
               <td>训练时间</td>
-              <td v-for="m in compareList" :key="'t-' + m.model_version_id">{{ m.trained_at }}</td>
+              <td v-for="m in compareList" :key="'t-' + m.id">{{ m.trained_at }}</td>
             </tr>
           </tbody>
         </table>
@@ -272,13 +326,13 @@ onMounted(async () => {
     <div v-else class="model-center__list">
       <div
         v-for="model in filteredModels"
-        :key="model.model_version_id"
+        :key="model.id"
         class="model-card card"
       >
         <div class="model-card__header">
           <div class="model-card__titles">
-            <h3 class="model-card__id">{{ model.model_version_id }}</h3>
-            <span class="model-card__scenario-tag">{{ scenarioLabel[model.scenario_id] || model.scenario_id }}</span>
+            <h3 class="model-card__id">模型 #{{ model.id }}</h3>
+            <span class="model-card__scenario-tag">{{ model.scenario_name || scenarioLabel[model.scenario_code || ''] || model.scenario_code || model.scenario_id }}</span>
             <span
               v-if="model.is_default"
               class="model-card__default-tag"
@@ -287,7 +341,7 @@ onMounted(async () => {
           <div class="model-card__header-right">
             <button
               class="compare-btn"
-              :class="{ 'is-on': compareIds.includes(model.model_version_id) }"
+              :class="{ 'is-on': compareIds.includes(model.id) }"
               @click="toggleCompare(model)"
             >
               对比
@@ -304,45 +358,53 @@ onMounted(async () => {
         <div class="model-card__meta">
           <div class="model-card__meta-item">
             <span class="model-card__meta-label">数据集</span>
-            <span class="model-card__meta-value">{{ model.dataset_id }} <em class="model-card__version">v{{ model.dataset_version }}</em></span>
+            <span class="model-card__meta-value">{{ model.dataset_logical_id || '未知数据集' }} <em class="model-card__version">v{{ model.dataset_version || '—' }}</em></span>
           </div>
           <div class="model-card__meta-item">
             <span class="model-card__meta-label">算法</span>
-            <span class="model-card__meta-value">{{ algoName(model.algorithm_id) }}</span>
+            <span class="model-card__meta-value">{{ model.algorithm_name || algoName(String(model.algorithm_id)) }}</span>
           </div>
           <div class="model-card__meta-item">
             <span class="model-card__meta-label">训练人</span>
-            <span class="model-card__meta-value">{{ model.trained_by }} · {{ model.trained_at }}</span>
+            <span class="model-card__meta-value">{{ model.trained_by_name || model.trained_by }}</span>
+          </div>
+          <div class="model-card__meta-item">
+            <span class="model-card__meta-label">训练时间</span>
+            <span class="model-card__meta-value">{{ model.trained_at }}</span>
           </div>
           <div v-if="model.published_by" class="model-card__meta-item">
             <span class="model-card__meta-label">发布人</span>
-            <span class="model-card__meta-value">{{ model.published_by }} · {{ model.published_at }}</span>
+            <span class="model-card__meta-value">{{ model.published_by_name || model.published_by }}</span>
+          </div>
+          <div v-if="model.published_at" class="model-card__meta-item">
+            <span class="model-card__meta-label">发布时间</span>
+            <span class="model-card__meta-value">{{ model.published_at }}</span>
           </div>
         </div>
 
         <div class="model-card__metrics">
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.accuracy * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'accuracy') }}</span>
             <span class="model-card__metric-label">Accuracy</span>
           </div>
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.precision * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'precision') }}</span>
             <span class="model-card__metric-label">Precision</span>
           </div>
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.recall * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'recall') }}</span>
             <span class="model-card__metric-label">Recall</span>
           </div>
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.specificity * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'specificity') }}</span>
             <span class="model-card__metric-label">Specificity</span>
           </div>
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.f1 * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'f1') }}</span>
             <span class="model-card__metric-label">F1</span>
           </div>
           <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ (model.evaluation_metrics.g_mean * 100).toFixed(1) }}%</span>
+            <span class="model-card__metric-value">{{ metricValue(model, 'g_mean') }}</span>
             <span class="model-card__metric-label">G-mean</span>
           </div>
         </div>
@@ -360,8 +422,11 @@ onMounted(async () => {
 
         <!-- 管理员操作区 -->
         <div v-if="isAdmin" class="model-card__footer">
-          <template v-if="model.status === 'DRAFT'">
-            <button class="op-btn op-btn--publish" @click="handlePublish(model)">审核发布</button>
+          <template v-if="model.status === 'DRAFT' && canPublish(model)">
+            <button class="op-btn op-btn--publish" @click="handlePublish(model)">发布模型</button>
+          </template>
+          <template v-else-if="model.status === 'DRAFT'">
+            <span class="model-card__failed-tip">仅训练人可发布</span>
           </template>
           <template v-else-if="model.status === 'PUBLISHED'">
             <button
@@ -372,10 +437,10 @@ onMounted(async () => {
             >
               设为默认推荐
             </button>
-            <button class="op-btn op-btn--danger" @click="handleOffline(model)">下线</button>
+            <button class="op-btn op-btn--danger" @click="handleDisable(model)">禁用</button>
           </template>
-          <template v-else-if="model.status === 'OFFLINE'">
-            <button class="op-btn op-btn--publish" @click="handleRepublish(model)">重新发布</button>
+          <template v-else-if="model.status === 'DISABLED'">
+            <button class="op-btn op-btn--danger" @click="handleDelete(model)">删除</button>
           </template>
           <span v-if="model.status === 'FAILED'" class="model-card__failed-tip">训练失败，不可发布</span>
           <span v-if="model.status === 'TRAINING'" class="model-card__failed-tip">训练中...</span>
@@ -537,6 +602,11 @@ onMounted(async () => {
 .model-status--OFFLINE {
   background: rgba(220, 234, 255, 0.08);
   color: rgba(220, 234, 255, 0.55);
+}
+
+.model-status--DISABLED {
+  background: rgba(255, 123, 114, 0.14);
+  color: #ff8c84;
 }
 
 .model-card__meta {

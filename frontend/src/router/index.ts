@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
-import { getCurrentUser } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 import { setupRouterGuards } from './guards';
 
 // 告警态势页面
@@ -25,9 +25,10 @@ const routes = [
     path: '/',
     // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；其余 → /home
     redirect: () => {
-      const role = getCurrentUser()?.role;
+      const user = useUserStore().currentUser;
+      const role = user?.role;
       if (role === 'SUPER_ADMIN') return '/overview';
-      const bound = getCurrentUser()?.scenario_ids?.[0];
+      const bound = user?.scenario_code;
       if (bound) return `/scenarios/${bound}/dashboard`;
       return '/home';
     },

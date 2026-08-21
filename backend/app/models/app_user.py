@@ -46,5 +46,15 @@ class AppUser(Base):
     reports_targeted: Mapped[list["Report"]] = relationship(
         back_populates="target_user", foreign_keys="Report.target_user_id"
     )
-    threshold_updates: Mapped[list["RiskThreshold"]] = relationship(back_populates="updater")
-    audit_operations: Mapped[list["ThresholdAuditLog"]] = relationship(back_populates="operator")
+    thresholds: Mapped[list["RiskThreshold"]] = relationship(
+        back_populates="user", foreign_keys="RiskThreshold.user_id"
+    )
+    threshold_updates: Mapped[list["RiskThreshold"]] = relationship(
+        back_populates="updater", foreign_keys="RiskThreshold.updated_by"
+    )
+    threshold_audit_logs: Mapped[list["ThresholdAuditLog"]] = relationship(
+        back_populates="target_user", foreign_keys="ThresholdAuditLog.user_id"
+    )
+    audit_operations: Mapped[list["ThresholdAuditLog"]] = relationship(
+        back_populates="operator", foreign_keys="ThresholdAuditLog.operator_id"
+    )

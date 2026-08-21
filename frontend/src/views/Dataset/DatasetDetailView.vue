@@ -32,7 +32,9 @@ const fields = computed(() =>
   datasetStore.fields.length > 0 ? datasetStore.fields : (dataset.value?.fields ?? [])
 );
 const labelField = computed(() =>
-  fields.value.find((f) => f.field_role === '分类标签')?.field_name ?? ''
+  fields.value.find((f) => f.field_role === '分类标签')?.field_name
+  ?? datasetStore.preview?.label_field
+  ?? ''
 );
 
 onMounted(async () => {

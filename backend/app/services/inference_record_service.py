@@ -25,6 +25,7 @@ from app.models.risk_event import RiskEvent
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_VISIBILITY_PLATFORM,
     INFERENCE_ALLOWED_MODEL_STATUSES,
     ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
@@ -49,6 +50,24 @@ class InferenceRecordService(ServiceBase):
         if record is None:
             raise ServiceError(404, "推理记录不存在")
         return record
+
+    def _can_infer_from_model(self, current_user, model: ModelVersion, dataset: Dataset) -> bool:
+        """Enforce model scenario and dataset-visibility boundaries before inference."""
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            return self.is_platform_visibility(dataset.visibility)
+        if role == ROLE_SCENARIO_ADMIN:
+            return (
+                model.scenario_id == getattr(current_user, "scenario_id", None)
+                and dataset.visibility in ("platform", "company")
+            )
+        return (
+            model.scenario_id == getattr(current_user, "scenario_id", None)
+            and (
+                dataset.visibility in ("platform", "company")
+                or dataset.uploaded_by == getattr(current_user, "id", None)
+            )
+        )
 
     # ------------------------------------------------------------------
     # 执行推理（需求 6.7.3 / 5.2 / 5.3）
@@ -81,6 +100,8 @@ class InferenceRecordService(ServiceBase):
         dataset = self.db.get(Dataset, model.dataset_id)
         if dataset is None:
             raise ServiceError(404, "模型绑定的数据集不存在")
+        if not self._can_infer_from_model(current_user, model, dataset):
+            raise ServiceError(403, "无权限使用该模型")
 
         # 输入校验（需求 3.1.2/3.1.5）：固定字段齐全 + 枚举值域
         err = validate_input_features(dataset.fields_schema, input_features)
@@ -139,6 +160,35 @@ class InferenceRecordService(ServiceBase):
     # ------------------------------------------------------------------
     # 查询（需求 6.8：USER 仅本人；ADMIN 全部）
     # ------------------------------------------------------------------
+    def _require_record_access(self, current_user, record: InferenceRecord) -> None:
+        """推理记录访问控制（需求 0.2 / 6.8）。
+
+        - SUPER_ADMIN：仅 platform 数据集派生模型的推理记录
+        - SCENARIO_ADMIN：仅绑定场景
+        - SCENARIO_USER：仅本人
+        """
+        self.require_login(current_user)
+        role = getattr(current_user, "role", None)
+        model = self.db.get(ModelVersion, record.model_version_id)
+        if model is None:
+            raise ServiceError(404, "关联模型不存在")
+        if role == ROLE_SUPER_ADMIN:
+            dataset = self.db.get(Dataset, model.dataset_id)
+            if dataset is None or not self.is_platform_visibility(dataset.visibility):
+                raise ServiceError(403, "无权限操作")
+            return
+        if role == ROLE_SCENARIO_ADMIN:
+            dataset = self.db.get(Dataset, model.dataset_id)
+            if (
+                model.scenario_id != getattr(current_user, "scenario_id", None)
+                or dataset is None
+                or dataset.visibility not in ("platform", "company")
+            ):
+                raise ServiceError(403, "无权限操作")
+            return
+        if record.user_id != getattr(current_user, "id", None):
+            raise ServiceError(403, "无权限操作")
+
     @service_call
     def get_list(
         self,
@@ -149,15 +199,27 @@ class InferenceRecordService(ServiceBase):
     ):
         """推理记录列表。
 
-        最外层管理员：全部记录；场景管理员：自己场景全部记录；
-        场景用户：强制按 user_id 过滤（后端强制，需求 6.8.2）。
+        - SUPER_ADMIN：仅 platform 数据集派生记录；
+        - SCENARIO_ADMIN：自己场景全部记录；
+        - SCENARIO_USER：强制按 user_id 过滤（后端强制，需求 6.8.2）。
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
         stmt = select(InferenceRecord)
-        if role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.where(InferenceRecord.scenario_id == getattr(current_user, "scenario_id", None))
-        elif role != ROLE_SUPER_ADMIN:
+        if role == ROLE_SUPER_ADMIN:
+            stmt = (
+                stmt.join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id)
+                .join(Dataset, Dataset.id == ModelVersion.dataset_id)
+                .where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
+            )
+        elif role == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.join(
+                ModelVersion, ModelVersion.id == InferenceRecord.model_version_id
+            ).join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
+                ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
+                Dataset.visibility.in_(("platform", "company")),
+            )
+        else:
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         if model_version_id is not None:
             stmt = stmt.where(InferenceRecord.model_version_id == model_version_id)
@@ -169,9 +231,8 @@ class InferenceRecordService(ServiceBase):
     @service_call
     def get(self, current_user, record_id: int):
         """推理记录详情。"""
-        self.require_login(current_user)
         record = self._get(record_id)
-        self.require_owner_or_admin(current_user, record.user_id)
+        self._require_record_access(current_user, record)
         return ok(data=row_to_dict(record))
 
     # ------------------------------------------------------------------
@@ -186,6 +247,7 @@ class InferenceRecordService(ServiceBase):
         """
         self.require_admin(current_user)
         record = self._get(record_id)
+        self._require_record_access(current_user, record)
         event_exists = self.db.scalar(
             select(RiskEvent).where(RiskEvent.inference_record_id == record_id)
         )

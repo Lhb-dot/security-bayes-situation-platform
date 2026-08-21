@@ -12,8 +12,6 @@ import { useScenarioStore } from '@/stores/scenarioStore';
 import { useUserStore } from '@/stores/userStore';
 import {
   getInferenceRecords,
-  getUserList,
-  getCurrentUser,
   getAlgorithms,
   getRiskEventByInferenceRecordId,
 } from '@/services/mockApi';
@@ -82,14 +80,17 @@ const goEventDetail = async (r: InferenceRecord) => {
 };
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  currentUser.value = userStore.currentUser;
   const algos = await getAlgorithms();
   algorithms.value = algos;
   await scenarioStore.fetchScenarioList();
-  if (isAdmin.value) users.value = await getUserList();
+  if (isAdmin.value) {
+    await userStore.fetchUsers({ page: 1, page_size: 200 });
+    users.value = userStore.users;
+  }
   // 管理员/用户：场景固定为自己场景（隐藏场景筛选）
   if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
-    scenarioFilter.value = userStore.currentUser?.scenario_ids?.[0] ?? '';
+    scenarioFilter.value = userStore.currentUser?.scenario_code ?? userStore.currentUser?.scenario_ids?.[0] ?? '';
   }
   await loadRecords();
 });

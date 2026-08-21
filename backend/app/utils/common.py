@@ -14,6 +14,8 @@ import hmac
 import logging
 import secrets
 from datetime import datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import func, select
@@ -58,10 +60,14 @@ def paginate(
 # ORM 行序列化
 # ---------------------------------------------------------------------------
 
+_CST = ZoneInfo("Asia/Shanghai")
+
+
 def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
-    - DateTime → ISO 8601 字符串
+    - DateTime → MM-DD HH:MM:SS（北京时间 UTC+8）
+    - Decimal → float（避免 JSON 序列化问题）
     - JSONB / dict / list 原样保留
     - exclude 用于隐藏敏感字段（如 password_hash）
     """
@@ -72,7 +78,13 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
             continue
         value = getattr(obj, name)
         if isinstance(value, datetime):
-            value = value.isoformat()
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=_CST)
+            else:
+                value = value.astimezone(_CST)
+            value = value.strftime("%m-%d %H:%M:%S")
+        elif isinstance(value, Decimal):
+            value = float(value)
         result[name] = value
     return result
 

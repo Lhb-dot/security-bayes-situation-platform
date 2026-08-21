@@ -8,7 +8,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import type { Dataset, DatasetField, DatasetVersion, ScenarioId, UserAccount } from '@/types/security';
+import type { Dataset, DatasetField, DatasetVersion, ScenarioId } from '@/types/security';
 import {
   getDatasetList,
   getDatasetFields,
@@ -17,9 +17,9 @@ import {
   createDatasetVersion,
   disableDatasetVersion,
   deleteDatasetVersion,
-  getCurrentUser,
-} from '@/services/mockApi';
+} from '@/api/datasetApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
+import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
 
@@ -56,15 +56,11 @@ const fieldDialogTitle = ref('');
 const fieldDialogFields = ref<DatasetField[]>([]);
 const fieldDialogLoading = ref(false);
 
-/** 是否选中航母甲板（辅助模板判断，绕过类型收窄） */
-const isFlightdeckSelected = computed(() => selectedScenario.value === ('flightdeck_operation' as ScenarioId | 'all'));
+/** current user (admin-only mutations) */
+const userStore = useUserStore();
+const isAdmin = computed(() => userStore.isManagement);
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
-/** 当前登录用户（需求 2.3.1：仅管理员可上传/修改/停用/删除数据集） */
-const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
-const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
-
-// ===================== 上传数据集 / 创建新版本（需求 2.3.2 / 2.3.3） =====================
 const uploadDialogVisible = ref(false);
 /** 弹窗模式：upload=上传新数据集(v1)；newVersion=修改已用数据集→创建新版本（保留旧版本） */
 const uploadDialogMode = ref<'upload' | 'newVersion'>('upload');
@@ -76,6 +72,7 @@ const uploadForm = ref({
   scenario_id: '' as ScenarioId | '',
   data_format: 'arff' as Dataset['data_format'],
   record_count: 0,
+  file_path: '',
 });
 const uploadFields = ref<Array<{ field_name: string; field_type: string; field_role: '输入特征' | '分类标签'; description: string }>>([
   { field_name: '', field_type: 'float', field_role: '输入特征', description: '' },
@@ -84,7 +81,7 @@ const uploadFields = ref<Array<{ field_name: string; field_type: string; field_r
 const openUploadDialog = () => {
   uploadDialogMode.value = 'upload';
   newVersionTarget.value = null;
-  uploadForm.value = { dataset_id: '', name: '', scenario_id: '', data_format: 'arff', record_count: 0 };
+  uploadForm.value = { dataset_id: '', name: '', scenario_id: '', data_format: 'arff', record_count: 0, file_path: '' };
   uploadFields.value = [{ field_name: '', field_type: 'float', field_role: '输入特征', description: '' }];
   uploadDialogVisible.value = true;
 };
@@ -99,6 +96,7 @@ const openNewVersion = async (dataset: Dataset) => {
     scenario_id: dataset.scenario_id,
     data_format: dataset.data_format,
     record_count: dataset.record_count,
+    file_path: '',
   };
   try {
     const fields = await getDatasetFields(dataset.dataset_id);
@@ -152,10 +150,18 @@ const submitUpload = async () => {
     sample_value: '',
     nullable: false,
   }));
+  if (!uploadForm.value.file_path.trim()) {
+    ElMessage.warning('请填写 data/ 目录下的相对文件路径，例如 data/carrier/xxx.arff');
+    return;
+  }
   try {
     if (uploadDialogMode.value === 'newVersion' && newVersionTarget.value) {
       // 需求 2.3.3：修改已用数据集 → 创建新版本并保留旧版本
-      const v = await createDatasetVersion(newVersionTarget.value.dataset_id, fieldDefs);
+      const v = await createDatasetVersion(newVersionTarget.value.dataset_id, {
+        file_path: uploadForm.value.file_path.trim(),
+        fields: fieldDefs,
+        label_field: fieldDefs.find((f) => f.field_role === '分类标签')?.field_name,
+      });
       ElMessage.success(`已创建新版本 ${v.dataset_version}，旧版本保留`);
     } else {
       await uploadDataset({
@@ -164,6 +170,7 @@ const submitUpload = async () => {
         scenario_id: uploadForm.value.scenario_id as ScenarioId,
         data_format: uploadForm.value.data_format,
         record_count: uploadForm.value.record_count,
+        file_path: uploadForm.value.file_path.trim(),
         fields: fieldDefs,
       });
       ElMessage.success('数据集上传成功（v1）');
@@ -275,11 +282,13 @@ const goDatasetDetail = (dataset: Dataset) => {
 };
 
 // ===================== 生命周期 =====================
-onMounted(() => {
-  currentUser.value = getCurrentUser();
+onMounted(async () => {
+  if (!userStore.initialized) {
+    await userStore.bootstrap();
+  }
   // 管理员/用户：默认固定自己场景（不显示下拉）
-  if (currentUser.value?.role !== 'SUPER_ADMIN') {
-    const bound = currentUser.value?.scenario_ids?.[0];
+  if (!userStore.isSuperAdmin) {
+    const bound = userStore.boundScenarioId ?? userStore.currentUser?.scenario_ids?.[0];
     if (bound) selectedScenario.value = bound;
   }
   loadDatasets();
@@ -318,23 +327,13 @@ onMounted(() => {
       <button class="ghost-button" @click="loadDatasets">重试</button>
     </section>
 
-    <!-- 航母甲板场景提示 -->
-    <section v-if="isFlightdeckSelected" class="state-card">
-      <div class="flightdeck-placeholder">
-        <span class="flightdeck-placeholder__icon">🚢</span>
-        <h3>暂未接入数据集</h3>
-        <p>航母甲板保障作业场景在第一阶段仅预留接口，尚未配置实际数据集。</p>
-        <p class="flightdeck-placeholder__hint">待正式数据集接入后，将在此展示数据集列表。</p>
-      </div>
-    </section>
-
-    <!-- 数据集表格 -->
+        <!-- 数据集表格 -->
     <div v-else class="dataset-center__table-wrap">
       <el-table
         :data="filteredDatasets"
         stripe
         style="width: 100%"
-        :empty-text="selectedScenario === 'flightdeck_operation' ? '' : '暂无数据集'"
+        empty-text="暂无数据集"
         row-class-name="dataset-table-row"
       >
         <el-table-column
@@ -508,7 +507,15 @@ onMounted(() => {
         </div>
         <p v-if="uploadDialogMode === 'newVersion'" class="version-tip">创建新版本将保留旧版本，已产生的历史模型、推理记录和风险事件继续可追溯。</p>
 
-        <div class="upload-form__row">
+                  <div class="upload-form__row">
+            <label class="upload-form__label">文件路径<span class="required">*</span></label>
+            <input
+              v-model.trim="uploadForm.file_path"
+              class="upload-form__input"
+              placeholder="data/场景目录/文件名.arff"
+            />
+          </div>
+<div class="upload-form__row">
           <label class="upload-form__label">固定字段结构<span class="required">*</span>（至少一个字段，且必须包含一个分类标签）</label>
           <div class="upload-fields">
             <div v-for="(f, index) in uploadFields" :key="index" class="upload-field-row">

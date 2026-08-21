@@ -41,7 +41,7 @@ const roleLabel = computed(() => {
 /** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
 const myScenarioName = computed(() => {
   if (isSuperAdmin.value) return '';
-  const id = userStore.currentUser?.scenario_ids?.[0];
+  const id = userStore.currentUser?.scenario_code;
   if (!id) return '';
   const map: Record<string, string> = {
     network_security: '网络安全',
@@ -80,7 +80,7 @@ const goScenarioCenter = () => {
     router.push({ path: '/scenarios' });
     return;
   }
-  const bound = userStore.currentUser?.scenario_ids?.[0];
+  const bound = userStore.currentUser?.scenario_code;
   router.push(bound ? { path: `/scenarios/${bound}/dashboard` } : { path: '/scenarios' });
 };
 
@@ -212,8 +212,8 @@ onMounted(async () => {
   // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
   if (route.path === '/') {
     if (isSuperAdmin.value) router.push('/overview');
-    else if (userStore.currentUser?.scenario_ids?.[0]) {
-      router.push(`/scenarios/${userStore.currentUser.scenario_ids[0]}/dashboard`);
+    else if (userStore.currentUser?.scenario_code) {
+      router.push(`/scenarios/${userStore.currentUser.scenario_code}/dashboard`);
     } else router.push('/home');
   }
 });

@@ -29,6 +29,7 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_RISK_TYPES,
+    DATASET_VISIBILITY_PLATFORM,
     DEFAULT_HIGH_THRESHOLD,
     DEFAULT_MEDIUM_THRESHOLD,
     RISK_EVENT_STATUS_PENDING,
@@ -58,6 +59,32 @@ class RiskEventService(ServiceBase):
             raise ServiceError(404, "风险事件不存在")
         return event
 
+    def _require_event_access(self, current_user, event: RiskEvent) -> None:
+        """风险事件访问控制（需求 0.2 / 5.2）。
+
+        - SUPER_ADMIN：仅 platform 数据集派生事件
+        - SCENARIO_ADMIN：仅绑定场景事件
+        - SCENARIO_USER：仅本人创建的事件
+        """
+        self.require_login(current_user)
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            dataset = self.db.get(Dataset, event.dataset_id)
+            if dataset is None or not self.is_platform_visibility(dataset.visibility):
+                raise ServiceError(403, "无权限操作")
+            return
+        if role == ROLE_SCENARIO_ADMIN:
+            dataset = self.db.get(Dataset, event.dataset_id)
+            if (
+                event.scenario_id != getattr(current_user, "scenario_id", None)
+                or dataset is None
+                or dataset.visibility not in ("platform", "company")
+            ):
+                raise ServiceError(403, "无权限操作")
+            return
+        if event.created_by_user_id != getattr(current_user, "id", None):
+            raise ServiceError(403, "无权限操作")
+
     @staticmethod
     def _calc_risk_level(risk_score: float, medium: float, high: float) -> str:
         """需求 5.4 风险等级生成规则：
@@ -70,17 +97,22 @@ class RiskEventService(ServiceBase):
             return RISK_LEVEL_MEDIUM
         return RISK_LEVEL_LOW
 
-    def _get_thresholds(self, scenario_id: int):
-        """获取场景阈值（risk_threshold 单值表，每场景一行）。
+    def _get_thresholds(self, user_id: int, scenario_id: int):
+        """获取当前推理账号在场景下的阈值。
 
         需求 5.4.1.6：本文不把未经验证的具体数值写成正式默认阈值；阈值应通过
         risk_threshold 配置提供。此处缺失时仅用兜底值并记录 warning，提示尽快配置。
         """
-        threshold = self.db.get(RiskThreshold, scenario_id)
+        threshold = self.db.scalar(
+            select(RiskThreshold).where(
+                RiskThreshold.user_id == user_id,
+                RiskThreshold.scenario_id == scenario_id,
+            )
+        )
         if threshold is None:
             logger.warning(
-                "场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s（需求 5.4.1：请通过 risk_threshold 表配置）",
-                scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
+                "账号 %s 在场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s",
+                user_id, scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
             )
             return float(DEFAULT_MEDIUM_THRESHOLD), float(DEFAULT_HIGH_THRESHOLD)
         return float(threshold.medium_threshold), float(threshold.high_threshold)
@@ -256,7 +288,7 @@ class RiskEventService(ServiceBase):
                 400,
                 f"数据集 {dataset.logical_id} 未登记风险类型映射（DATASET_RISK_TYPES），无法生成风险事件",
             )
-        medium, high = self._get_thresholds(dataset.scenario_id)
+        medium, high = self._get_thresholds(current_user.id, dataset.scenario_id)
         risk_level = self._calc_risk_level(risk_score, medium, high)
 
         # raw_features：只保存业务推理输入，不重复保存标签字段（需求 5.5.5）
@@ -312,20 +344,32 @@ class RiskEventService(ServiceBase):
     ):
         """风险事件列表。
 
-        最外层管理员：全部事件（可按场景/状态过滤）；
-        场景管理员：自己场景内全部事件；
-        场景用户：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
+        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态过滤）；
+        - SCENARIO_ADMIN：自己场景内全部事件；
+        - SCENARIO_USER：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
         stmt = select(RiskEvent)
         if role == ROLE_SUPER_ADMIN:
+            stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
+                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
             if scenario_id is not None:
                 stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         elif role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.where(RiskEvent.scenario_id == getattr(current_user, "scenario_id", None))
+            bound = getattr(current_user, "scenario_id", None)
+            if scenario_id is not None and scenario_id != bound:
+                raise ServiceError(403, "无权限操作")
+            stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
+                RiskEvent.scenario_id == bound,
+                Dataset.visibility.in_(("platform", "company")),
+            )
         else:
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
+            if scenario_id is not None:
+                self.require_scenario_access(current_user, scenario_id)
+                stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         if status is not None:
             stmt = stmt.where(RiskEvent.status == status)
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())
@@ -335,10 +379,9 @@ class RiskEventService(ServiceBase):
 
     @service_call
     def get(self, current_user, event_id: int):
-        """风险事件详情（USER 仅本人事件）。"""
-        self.require_login(current_user)
+        """风险事件详情（按角色与数据边界校验）。"""
         event = self._get(event_id)
-        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        self._require_event_access(current_user, event)
         return ok(data=row_to_dict(event))
 
     # ------------------------------------------------------------------
@@ -359,7 +402,7 @@ class RiskEventService(ServiceBase):
         """
         self.require_login(current_user)
         event = self._get(event_id)
-        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        self._require_event_access(current_user, event)
 
         allowed = RISK_EVENT_STATUS_TRANSITIONS.get(event.status, ())
         if new_status not in allowed:
@@ -388,7 +431,7 @@ class RiskEventService(ServiceBase):
         """给风险事件追加处置说明（写 handling_record，不改状态）。"""
         self.require_login(current_user)
         event = self._get(event_id)
-        self.require_owner_or_admin(current_user, event.created_by_user_id)
+        self._require_event_access(current_user, event)
         if not comment or not str(comment).strip():
             raise ServiceError(400, "comment 不能为空")
         record = HandlingRecord(

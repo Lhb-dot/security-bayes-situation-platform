@@ -106,7 +106,7 @@ onMounted(async () => {
   await scenarioStore.fetchScenarioList();
   // 管理员/用户：默认固定自己场景（隐藏场景下拉）
   if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
-    const bound = userStore.currentUser?.scenario_ids?.[0];
+    const bound = userStore.currentUser?.scenario_code;
     if (bound) selectedScenario.value = bound;
   }
   loadEvents();
