@@ -63,8 +63,24 @@ const loadRecords = async () => {
 
 // 查看输入特征
 const featureTarget = ref<InferenceRecordItem | null>(null);
+const featureDialogVisible = ref(false);
 const openFeatures = (r: InferenceRecordItem) => {
   featureTarget.value = r;
+  featureDialogVisible.value = true;
+};
+
+const featureRows = computed(() =>
+  featureTarget.value
+    ? Object.entries(featureTarget.value.input_features ?? {}).map(([name, value]) => ({
+        name,
+        value: value == null ? '—' : String(value),
+      }))
+    : [],
+);
+
+const closeFeatures = () => {
+  featureDialogVisible.value = false;
+  featureTarget.value = null;
 };
 
 /** 风险记录 → 跳转风险事件详情 */
@@ -147,18 +163,28 @@ onMounted(() => {
       </div>
     </section>
 
-    <!-- 输入特征弹窗 -->
-    <div v-if="featureTarget" class="modal-mask" @click.self="featureTarget = null">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>推理输入特征 — {{ featureTarget.id }}</h3>
-          <button class="modal-close" @click="featureTarget = null">✕</button>
-        </div>
-        <div class="modal-card__body">
-          <pre class="feature-json">{{ JSON.stringify(featureTarget.input_features, null, 2) }}</pre>
-        </div>
-      </div>
-    </div>
+    <!-- 输入特征弹窗：与数据集中心的字段预览使用同一套 Element Plus 弹窗/表格样式 -->
+    <el-dialog
+      v-model="featureDialogVisible"
+      class="inference-feature-dialog"
+      :title="`输入特征 - 推理记录 ${featureTarget?.id ?? ''}`"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+      @close="closeFeatures"
+    >
+      <el-table
+        :data="featureRows"
+        stripe
+        max-height="62vh"
+        style="width: 100%"
+        empty-text="该推理记录暂无输入特征"
+      >
+        <el-table-column prop="name" label="特征名" min-width="220" />
+        <el-table-column prop="value" label="特征值" min-width="260" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -309,61 +335,63 @@ onMounted(() => {
   color: #9ad6ff;
 }
 
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(3, 8, 16, 0.7);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+</style>
+
+<style>
+/* 该弹窗与 DatasetCenter 的字段预览弹窗保持一致；append-to-body 后需使用独立全局选择器。 */
+.inference-feature-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
 }
 
-.modal-card {
-  width: 520px;
-  max-width: calc(100vw - 40px);
-  border-radius: 14px;
-  border: 1px solid rgba(125, 201, 255, 0.22);
-  background: linear-gradient(160deg, rgba(13, 26, 46, 0.96), rgba(8, 17, 31, 0.98));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+.inference-feature-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
 }
 
-.modal-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
+.inference-feature-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(220, 234, 255, 0.5) !important;
 }
 
-.modal-card__head h3 {
-  margin: 0;
-  font-size: 1.02rem;
+.inference-feature-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: #e8f1ff !important;
 }
 
-.modal-close {
-  border: none;
-  background: transparent;
-  color: rgba(220, 234, 255, 0.6);
-  font-size: 1rem;
-  cursor: pointer;
+.inference-feature-dialog .el-dialog__body {
+  padding: 20px 24px !important;
 }
 
-.modal-card__body {
-  padding: 18px 20px;
-  max-height: 60vh;
-  overflow: auto;
+.inference-feature-dialog .el-table,
+.inference-feature-dialog .el-table__inner-wrapper,
+.inference-feature-dialog .el-table__body-wrapper,
+.inference-feature-dialog .el-table__header-wrapper {
+  background-color: transparent !important;
 }
 
-.feature-json {
-  margin: 0;
-  padding: 14px;
-  border-radius: 8px;
-  background: rgba(6, 15, 28, 0.85);
-  color: #9ad6ff;
-  font-size: 0.82rem;
-  line-height: 1.6;
-  overflow: auto;
+.inference-feature-dialog .el-table th.el-table__cell {
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
+}
+
+.inference-feature-dialog .el-table td.el-table__cell {
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
+}
+
+.inference-feature-dialog .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: rgba(10, 24, 44, 0.85) !important;
+}
+
+.inference-feature-dialog .el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(20, 44, 72, 0.9) !important;
+}
+
+.inference-feature-dialog .el-table__empty-text {
+  color: rgba(180, 200, 235, 0.3) !important;
 }
 </style>

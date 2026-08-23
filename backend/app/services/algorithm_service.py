@@ -8,7 +8,7 @@
 1. 算法只能由开发人员通过代码接入系统；管理员不能通过页面新增、修改或删除算法实现。
 2. 因此 create / update / delete 一律返回 403（无权限操作）。
 3. 查看已注册算法：所有登录用户允许。
-4. 算法编码（A2WNB/MAWNB/EMAWNB/DIWNB/PMWNB）为硬编码数据字典（ALGORITHM_CODES），
+4. 算法编码（A2WNB/MAWNB/EMAWNB/CAVWNB/PMWNB）为硬编码数据字典（ALGORITHM_CODES），
    仅开发人员可维护，Service 层不做增删改。
 """
 from typing import Optional

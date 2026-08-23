@@ -6,7 +6,7 @@ Create Date: 2026-08-02 12:40:31.456836
 
 静态基础数据初始化（对应《数据库设计文档v2》第 8 章）：
 - scenario：3 个场景（network_security / power_system / flightdeck_operation）
-- algorithm：5 个算法（A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB）
+- algorithm：5 个算法（A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB）
 
 display_name / param_schema 待算法组确认后以增量迁移更新，Seed 阶段先写入编码与状态。
 使用原生 SQL + ::jsonb 强转，保证 online / offline（--sql）两种模式均可执行。
@@ -41,7 +41,7 @@ ALGORITHMS = [
     {"code": "A2WNB", "desc": "矩阵加权贝叶斯系"},
     {"code": "MAWNB", "desc": "矩阵加权贝叶斯系"},
     {"code": "EMAWNB", "desc": "矩阵加权贝叶斯系"},
-    {"code": "DIWNB", "desc": "矩阵加权贝叶斯系"},
+    {"code": "CAVWNB", "desc": "矩阵加权贝叶斯系"},
     {"code": "PMWNB", "desc": "当前项目已接入算法"},
 ]
 
@@ -73,6 +73,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     """删除 seed 数据（按唯一编码删除）。"""
     op.execute("DELETE FROM algorithm WHERE code IN "
-               "('A2WNB', 'MAWNB', 'EMAWNB', 'DIWNB', 'PMWNB')")
+               "('A2WNB', 'MAWNB', 'EMAWNB', 'CAVWNB', 'PMWNB')")
     op.execute("DELETE FROM scenario WHERE code IN "
                "('network_security', 'power_system', 'flightdeck_operation')")
+

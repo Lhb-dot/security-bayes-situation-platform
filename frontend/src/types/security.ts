@@ -308,6 +308,7 @@ export interface Report {
   scenario_id: ScenarioId;
   scenario_name: string;
   summary: string;
+  content?: string;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';
@@ -318,6 +319,7 @@ export interface Report {
   interval_days?: number;
   /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
   generated_by?: string;
+  target_user_id?: string;
 }
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================
@@ -359,7 +361,7 @@ export interface AlgorithmParamDef {
 
 /** 算法注册定义（需求 6.6.2 算法接入规则） */
 export interface AlgorithmDefinition {
-  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB
+  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB
   display_name: string;
   available: boolean;                                     // 可用状态
   input_constraints: string;                              // 支持的输入类型或数据约束
@@ -474,3 +476,4 @@ export interface ScenarioDashboardData {
   recent_events: RiskEvent[];             // 风险事件列表/时间线
   charts: ScenarioDashboardCharts;        // 场景特有图表数据
 }
+

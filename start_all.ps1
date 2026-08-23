@@ -8,13 +8,14 @@ $jar     = "$backend\lib\pmwnb-service.jar"
 $java25  = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe"
 $javaBin = if (Test-Path $java25) { $java25 } else { "java" }
 
-$javaPid = $null; $pyPid = $null; $vuePid = $null; $predictPid = $null
+$javaPid = $null; $pyPid = $null; $vuePid = $null; $predictPid = $null; $algoPids = @()
 
 # ---- cleanup ----
 function Stop-All {
     # ① 按本次启动时记录的 PID 杀
     if ($javaPid)    { Stop-Process -Id $javaPid    -Force -EA SilentlyContinue }
     if ($predictPid) { Stop-Process -Id $predictPid -Force -EA SilentlyContinue }
+    foreach ($algoPid in $algoPids) { if ($algoPid) { Stop-Process -Id $algoPid -Force -EA SilentlyContinue } }
     if ($pyPid)      { Stop-Process -Id $pyPid      -Force -EA SilentlyContinue }
     if ($vuePid)     { Stop-Process -Id $vuePid     -Force -EA SilentlyContinue }
 
@@ -22,7 +23,7 @@ function Stop-All {
     Get-Process -Name java,node,python -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
 
     # ③ 按端口兜底杀：谁占着 12312/12313/12314/5173 就杀谁（最彻底）
-    foreach ($port in 12312,12313,12314,5173) {
+    foreach ($port in 12312,12313,12314,12315,12316,12317,12318,5173) {
         Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique |
             ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
@@ -96,6 +97,33 @@ while ((Get-Date) -lt $t) {
 }
 if ($ok) { Write-Host ":12314  OK" -ForegroundColor Green }
 else     { Write-Host ":12314  FAIL" -ForegroundColor Red }
+
+# ---- Java algorithm services ----
+$algorithmServices = @(
+    @{ Name = "A2WNB"; Jar = "a2wnb-service.jar"; Port = 12315; Code = "A2WNB" },
+    @{ Name = "CAVWNB"; Jar = "cavwnb-service.jar"; Port = 12316; Code = "CAVWNB" },
+    @{ Name = "EMAWNB"; Jar = "emawnb-service.jar"; Port = 12317; Code = "EMAWNB" },
+    @{ Name = "MAWNB"; Jar = "mawnb-service.jar"; Port = 12318; Code = "MAWNB" }
+)
+$algoLogDir = Join-Path $backend "storage\logs"
+New-Item -ItemType Directory -Path $algoLogDir -Force | Out-Null
+foreach ($svc in $algorithmServices) {
+    Write-Host ("  Java {0}    " -f $svc.Name) -NoNewline
+    $svcArgs = @("-jar", (Join-Path $backend ("lib\{0}" -f $svc.Jar)), [string]$svc.Port, $svc.Code)
+    $svcProc = Start-Process -FilePath $javaBin -ArgumentList $svcArgs `
+        -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $algoLogDir ("{0}.out.log" -f $svc.Name)) `
+        -RedirectStandardError (Join-Path $algoLogDir ("{0}.err.log" -f $svc.Name))
+    if ($svcProc) { $algoPids += $svcProc.Id }
+    $svcOk = $false
+    $t = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $t) {
+        try { if ((Invoke-RestMethod ("http://127.0.0.1:{0}/health" -f $svc.Port) -TimeoutSec 2).status -eq "ok") { $svcOk = $true; break } } catch {}
+        Start-Sleep 1
+    }
+    if ($svcOk) { Write-Host (":{0}  OK" -f $svc.Port) -ForegroundColor Green }
+    else { Write-Host (":{0}  FAIL" -f $svc.Port) -ForegroundColor Red }
+}
 
 # ---- Python FastAPI ----
 Write-Host "  FastAPI       " -NoNewline

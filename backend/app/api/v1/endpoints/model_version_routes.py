@@ -113,7 +113,7 @@ def create_model_version(
 @router.post(
     "/train",
     response_model=ResponseModel,
-    summary="训练并保存模型版本（仅管理员）：PMWNB 真实调用 Java 训练，其余算法 mock 占位",
+    summary="训练并保存模型版本（仅管理员）：所有算法调用 Java/Weka 真实训练",
 )
 def train_model_version(
     payload: ModelVersionCreate,
