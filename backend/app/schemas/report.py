@@ -14,6 +14,7 @@ ReportFormat = Literal["markdown", "html", "pdf"]
 class ReportCreate(BaseModel):
     """生成态势报告（普通用户仅本人数据）。"""
 
+    title: str = Field(..., min_length=1, max_length=128, description="报告标题")
     report_type: ReportType = Field(..., description="报告类型")
     content: str = Field(..., min_length=1, description="报告内容")
     target_user_id: Optional[int] = Field(
@@ -25,4 +26,13 @@ class ReportCreate(BaseModel):
     scheduled: bool = Field(False, description="是否定时生成")
     interval_days: Optional[int] = Field(
         None, ge=1, description="定时生成周期（天），定时时必填"
+    )
+
+
+class ReportScheduleUpdate(BaseModel):
+    """只保存定时配置；具体调度执行暂不在本接口实现。"""
+
+    scheduled: bool = Field(..., description="是否启用定时配置")
+    interval_days: Optional[int] = Field(
+        None, ge=1, description="定时周期（天），启用时必填"
     )

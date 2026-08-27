@@ -100,14 +100,15 @@ class InferenceRecordService(ServiceBase):
         """
         from app.services.training_executor import (
             build_model_save_path,
-            execute_pmwnb_predict,
+            execute_algorithm_predict,
             resolve_dataset_path,
         )
 
-        model_path = build_model_save_path(model.id)
+        algorithm_code = model.algorithm.code if model.algorithm else "PMWNB"
+        model_path = build_model_save_path(model.id, algorithm_code)
         arff_path = resolve_dataset_path(dataset.file_path)
         try:
-            result = execute_pmwnb_predict(model_path, arff_path, input_features)
+            result = execute_algorithm_predict(algorithm_code, model_path, arff_path, input_features)
         except FileNotFoundError as exc:
             raise ServiceError(400, str(exc))
         except RuntimeError as exc:

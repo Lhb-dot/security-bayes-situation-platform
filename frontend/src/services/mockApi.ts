@@ -1307,7 +1307,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
     ],
   },
   {
-    algorithm_id: 'DIWNB',
+    algorithm_id: 'CAVWNB',
     display_name: '差分加权朴素贝叶斯',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
@@ -1467,7 +1467,7 @@ const initModelVersions = (): ModelVersionRecord[] => {
     makeModelVersion('network_security', 'kdd_train_20_percent', 'EMAWNB', 'OFFLINE', false),
     // NF-UNSW：2 个已发布（无默认，演示"需手动选择"）+ 1 个失败
     makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'A2WNB', 'PUBLISHED', false),
-    makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'DIWNB', 'PUBLISHED', false),
+    makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'CAVWNB', 'PUBLISHED', false),
     makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'PMWNB', 'FAILED', false),
     // PowerGrid：1 个默认已发布 + 1 个草稿
     makeModelVersion('power_system', 'powergrid_knowledgebase', 'MAWNB', 'PUBLISHED', true),
@@ -1476,7 +1476,7 @@ const initModelVersions = (): ModelVersionRecord[] => {
     makeModelVersion('geological_risk', 'dis_raw_data', 'PMWNB', 'PUBLISHED', true),
     makeModelVersion('geological_risk', 'dis_raw_data', 'A2WNB', 'DRAFT', false),
     makeModelVersion('geological_risk', 'dis_landslides', 'MAWNB', 'PUBLISHED', false),
-    makeModelVersion('geological_risk', 'dis_landslides', 'DIWNB', 'DRAFT', false),
+    makeModelVersion('geological_risk', 'dis_landslides', 'CAVWNB', 'DRAFT', false),
     makeModelVersion('geological_risk', 'dis_causative_factors', 'EMAWNB', 'PUBLISHED', false),
     makeModelVersion('geological_risk', 'dis_guaruja_random', 'A2WNB', 'PUBLISHED', false),
     // 航母甲板：3 个数据集各至少 1 个已发布
@@ -1814,12 +1814,12 @@ const initInferenceAndEvents = (): void => {
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'PMWNB', day: 25, hour: 10, is_risk: true, risk_prob: 0.93, features: buildSeedFeatures('nf_unsw_nb15_v2') },
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'A2WNB', day: 26, hour: 14, is_risk: false, risk_prob: 0.21, features: buildSeedFeatures('kdd_train_20_percent') },
     { user_id: 'user_000018', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'MAWNB', day: 28, hour: 9, is_risk: true, risk_prob: 0.78, features: buildSeedFeatures('powergrid_knowledgebase') },
-    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'DIWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: buildSeedFeatures('nf_unsw_nb15_v2') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'CAVWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: buildSeedFeatures('nf_unsw_nb15_v2') },
     { user_id: 'user_000031', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'A2WNB', day: 29, hour: 11, is_risk: false, risk_prob: 0.3, features: buildSeedFeatures('powergrid_knowledgebase') },
     { user_id: 'user_000042', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'EMAWNB', day: 30, hour: 20, is_risk: true, risk_prob: 0.85, features: buildSeedFeatures('kdd_train_20_percent') },
     // 今日告警（需求 7.1 指标卡"今日告警数"非零演示）
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'A2WNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.88, today: true, features: buildSeedFeatures('nf_unsw_nb15_v2') },
-    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'DIWNB', day: 1, hour: 10, is_risk: true, risk_prob: 0.72, today: true, features: buildSeedFeatures('kdd_train_20_percent') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'CAVWNB', day: 1, hour: 10, is_risk: true, risk_prob: 0.72, today: true, features: buildSeedFeatures('kdd_train_20_percent') },
     // 地质风险（carol）：4 个可训练数据集，features 保存完整字段
     { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'PMWNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.86, features: buildSeedFeatures('dis_raw_data') },
     { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'A2WNB', day: 2, hour: 8, is_risk: false, risk_prob: 0.18, features: buildSeedFeatures('dis_raw_data') },

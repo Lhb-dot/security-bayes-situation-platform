@@ -17,6 +17,7 @@ class Report(Base):
     generated_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=False
     )
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="未命名报告")
     report_type: Mapped[str] = mapped_column(String(16), nullable=False)
     target_user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=True

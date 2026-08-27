@@ -14,7 +14,7 @@ from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.schemas.common import ResponseModel
-from app.schemas.report import ReportCreate
+from app.schemas.report import ReportCreate, ReportScheduleUpdate
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["报告管理"])
@@ -68,12 +68,34 @@ def create_report(
     return unwrap(
         ReportService(db).create(
             current_user=current_user,
+            title=payload.title,
             report_type=payload.report_type,
             content=payload.content,
             target_user_id=payload.target_user_id,
             file_path=payload.file_path,
             scenario_id=payload.scenario_id,
             format=payload.format,
+            scheduled=payload.scheduled,
+            interval_days=payload.interval_days,
+        )
+    )
+
+
+@router.put(
+    "/{report_id}/schedule",
+    response_model=ResponseModel,
+    summary="保存报告定时配置（暂不执行调度）",
+)
+def update_report_schedule(
+    report_id: int,
+    payload: ReportScheduleUpdate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        ReportService(db).update_schedule(
+            current_user=current_user,
+            report_id=report_id,
             scheduled=payload.scheduled,
             interval_days=payload.interval_days,
         )

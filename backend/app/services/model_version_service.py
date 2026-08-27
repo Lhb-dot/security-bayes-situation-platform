@@ -53,8 +53,6 @@ from app.utils.common import (
     row_to_dict,
     validate_params_schema,
 )
-from app.services.training_executor import mock_training_metrics
-
 logger = get_logger("model_version")
 
 
@@ -261,9 +259,8 @@ class ModelVersionService(ServiceBase):
         """训练并落库（需求 6.7.1 训练执行接口，单次调用完成真实训练）。
 
         复用 create() 完成场景/数据集/算法/参数校验并创建 TRAINING 版本，随后：
-        - PMWNB：调用 Java 服务（weka 真实算法）对数据集真实训练；
-        - 其余算法：算法实现待算法组交付，暂以 mock 占位指标落库。
-        成功 → TRAINING → DRAFT（保存真实/占位指标）；失败 → TRAINING → FAILED。
+        所有算法均调用对应 Java/Weka 真实服务，成功 → TRAINING → DRAFT；
+        服务异常 → TRAINING → FAILED。
         """
         created = self.create(
             current_user, scenario_id, dataset_id, algorithm_id, training_parameters
@@ -276,10 +273,9 @@ class ModelVersionService(ServiceBase):
         model = self._get(created.data["id"])
         algorithm = self.db.get(Algorithm, algorithm_id)
         try:
-            if algorithm.code == "PMWNB":
-                metrics = self._run_pmwnb_training(model)
-            else:
-                metrics = mock_training_metrics(algorithm.code)
+            metrics = self._run_algorithm_training(
+                model, algorithm.code, model.training_parameters or {}
+            )
             self._transition(model, MODEL_STATUS_DRAFT)
             model.evaluation_metrics = metrics
             self.commit()
@@ -290,11 +286,13 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(500, f"训练失败：{exc}")
         return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
 
-    def _run_pmwnb_training(self, model: ModelVersion) -> dict:
-        """调用 Java PMWNB 真实训练：解析数据集 ARFF 绝对路径 → /train → 真实指标。"""
+    def _run_algorithm_training(
+        self, model: ModelVersion, algorithm_code: str, training_parameters: dict
+    ) -> dict:
+        """调用对应 Java 算法服务，并把注册 schema 校验后的参数传入 /train。"""
         from app.services.training_executor import (
             build_model_save_path,
-            execute_pmwnb_training,
+            execute_algorithm_training,
             resolve_dataset_path,
         )
 
@@ -302,8 +300,10 @@ class ModelVersionService(ServiceBase):
         if dataset is None:
             raise ServiceError(404, "数据集不存在")
         dataset_path = resolve_dataset_path(dataset.file_path)
-        model_save_path = build_model_save_path(model.id)
-        return execute_pmwnb_training(dataset_path, model_save_path)
+        model_save_path = build_model_save_path(model.id, algorithm_code)
+        return execute_algorithm_training(
+            algorithm_code, dataset_path, model_save_path, training_parameters
+        )
 
     @service_call
     def complete_training(
