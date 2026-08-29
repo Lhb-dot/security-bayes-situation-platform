@@ -70,6 +70,27 @@ if (-not $pgOk) {
 if ($pgOk) { Write-Host ":5432  OK" -ForegroundColor Green }
 else { Write-Host ":5432  FAIL (数据库不可用, /api/v1 接口将报错; 旧 /api/model 演示不受影响)" -ForegroundColor Red }
 
+# ---- 数据库迁移 (alembic: 对齐数据库结构与最新代码) ----
+if ($pgOk) {
+    Write-Host "  DB Migrate    " -NoNewline
+    Push-Location $backend
+    $migExit = 0
+    $migMsg = ""
+    try {
+        $migMsg = (& python -m alembic upgrade head 2>&1 | Out-String).Trim()
+        $migExit = $LASTEXITCODE
+    } catch {
+        $migExit = 1
+        $migMsg = $_.Exception.Message
+    }
+    Pop-Location
+    if ($migExit -eq 0) { Write-Host "OK" -ForegroundColor Green }
+    else {
+        Write-Host "WARN (迁移失败)" -ForegroundColor Yellow
+        Write-Host "      $migMsg" -ForegroundColor DarkYellow
+    }
+}
+
 # ---- Java PMWNB ----
 Write-Host "  Java PMWNB    " -NoNewline
 $p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
@@ -131,7 +152,7 @@ $p = Start-Process -FilePath "python" -ArgumentList "-m","app.main" `
     -WorkingDirectory $backend -WindowStyle Hidden -PassThru
 if ($p) { $pyPid = $p.Id }
 $ok = $false
-$t = (Get-Date).AddSeconds(20)
+$t = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $t) {
     try { if (Invoke-RestMethod "http://127.0.0.1:12312/openapi.json" -TimeoutSec 2) { $ok=$true; break } } catch {}
     Start-Sleep 1

@@ -38,3 +38,4 @@ requirements-analysis.md
 # ==================== OS ====================
 .DS_Store
 Thumbs.db
+.aider*

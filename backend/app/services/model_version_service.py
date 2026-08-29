@@ -378,6 +378,19 @@ class ModelVersionService(ServiceBase):
         return ok(data=self._to_dict(model), message="模型已禁用，默认推荐状态已清除")
 
     @service_call
+    def enable(self, current_user, model_id: int):
+        """重新启用模型：DISABLED → PUBLISHED。
+
+禁用时已清除默认推荐标记，重新启用后不自动恢复，需管理员根据当前场景单独设置。
+        """
+        model = self._get(model_id)
+        self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
+        self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
+        self.commit()
+        return ok(data=self._to_dict(model), message="模型已重新启用")
+
+    @service_call
     def set_default(self, current_user, model_id: int):
         """设置默认推荐模型（需求 6.7.4）。
 

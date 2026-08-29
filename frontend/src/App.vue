@@ -1,28 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 // 路由实例
 const router = useRouter();
 const route = useRoute();
 
-import AlertDetailView from './views/Alert/AlertDetailView.vue';
-import AlertsView from './views/Alert/AlertsView.vue';
-import DashboardView from './views/Dashboard/DashboardView.vue';
-import MetricTrendModal from './components/MetricTrendModal.vue';
-import WarRoomModal from './components/WarRoomModal.vue';
-import { getAlertById, getAlerts, getDashboardSnapshot } from './services/mockApi';
-import type { AlertRecord, DashboardSnapshot, MetricHistory, UserRole } from './types/security';
+import type { UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
-
-// 页面数据
-const dashboard = ref<DashboardSnapshot | null>(null);
-const alerts = ref<AlertRecord[]>([]);
-const selectedAlert = ref<AlertRecord | null>(null);
-const loading = ref(true);
-const error = ref('');
-const warRoomOpen = ref(false);
-const activeMetric = ref<MetricHistory | null>(null);
 
 // ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
 // 登录/登出统一走 userStore，避免页面直连 mockApi 导致 Pinia 状态与守卫判断不同步
@@ -134,50 +119,8 @@ const goInferenceRecords = () => {
   router.push({ path: '/inference-records' });
 };
 
-/**
- * 跳转告警列表页
- */
 const goAlertsList = () => {
   router.push({ path: '/alerts' });
-};
-
-/**
- * 跳转单条告警详情
- */
-const goAlertDetail = (id: string) => {
-  router.push({ path: `/alerts/${id}` });
-};
-
-// ===================== 数据加载逻辑 =====================
-const loadData = async () => {
-  loading.value = true;
-  error.value = '';
-  try {
-    const [snapshot, alertList] = await Promise.all([getDashboardSnapshot(), getAlerts()]);
-    dashboard.value = snapshot;
-    alerts.value = alertList;
-
-    // 如果当前路由是告警详情，单独拉取详情数据
-    if (route.path.startsWith('/alerts/')) {
-      const alertId = route.params.id as string;
-      selectedAlert.value = await getAlertById(alertId);
-    }
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '数据加载失败';
-  } finally {
-    loading.value = false;
-  }
-};
-
-// 作战大屏打开后跳转告警
-const openAlertFromWarRoom = (id: string) => {
-  warRoomOpen.value = false;
-  goAlertDetail(id);
-};
-
-// 指标弹窗打开
-const openMetric = (id: string) => {
-  activeMetric.value = dashboard.value?.metricHistories.find((item) => item.id === id) ?? null;
 };
 
 // ===================== 页面标题计算属性 =====================
@@ -185,8 +128,7 @@ const pageTitle = computed(() => {
   if (route.path === '/login') return '用户登录';
   if (route.path === '/home') return '首页';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
-  if (route.path === '/alerts') return '告警详情总览';
-  if (route.path.startsWith('/alerts/')) return '告警处置分析';
+  if (route.path === '/alerts') return '风险事件列表';
   if (route.path === '/overview') return '首页';
   if (route.path === '/scenarios') return '场景中心';
   if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';
@@ -201,14 +143,7 @@ const pageTitle = computed(() => {
   return '态势感知与威胁可视化平台';
 });
 
-// ===================== 路由监听与生命周期 =====================
-// 注册路由后置钩子，页面切换时重新加载数据（保存返回的取消注册函数）
-const unregisterAfterEach = router.afterEach(() => {
-  loadData();
-});
-
 onMounted(async () => {
-  await loadData();
   // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
   if (route.path === '/') {
     if (isSuperAdmin.value) router.push('/overview');
@@ -218,17 +153,10 @@ onMounted(async () => {
   }
 });
 
-onBeforeUnmount(() => {
-  // 调用取消注册函数移除监听器，防止内存泄漏
-  unregisterAfterEach();
-});
-
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');
 const isHomePage = computed(() => route.path === '/home');
-const isDashboardPage = computed(() => route.path === '/dashboard');
 const isAlertsListPage = computed(() => route.path === '/alerts');
-const isAlertDetailPage = computed(() => route.path.startsWith('/alerts/'));
 const isRiskPage = computed(() => route.path === '/risk');
 const isOverviewPage = computed(() => route.path === '/overview');
 const isScenarioCenterPage = computed(() => route.path === '/scenarios');
@@ -244,7 +172,7 @@ const isNewRoutePage = computed(() => {
   const path = route.path;
   return path === '/home' || path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
     || path === '/models' || path === '/inference' || path === '/inference-records' || path === '/situation'
-    || path === '/reports' || path === '/users' || path === '/settings' || path.startsWith('/events/');
+    || path === '/reports' || path === '/users' || path === '/settings' || path === '/alerts' || path.startsWith('/events/');
 });
 
 // ===================== 顶部导航（三级角色驱动渲染） =====================
@@ -286,14 +214,13 @@ const visibleNavItems = computed(() => {
 const isNavActive = (item: NavItem): boolean => {
   switch (item.path) {
     case '/home': return isHomePage.value;
-    case '/dashboard': return isDashboardPage.value;
     case '/overview': return isOverviewPage.value;
     case '/scenarios':
       // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
       if (isSuperAdmin.value) return isScenarioCenterPage.value;
       return route.path.startsWith('/scenarios/') || isScenarioCenterPage.value;
     case '/datasets': return isDatasetCenterPage.value;
-    case '/alerts': return isAlertsListPage.value || isAlertDetailPage.value;
+    case '/alerts': return isAlertsListPage.value;
     case '/risk': return isRiskPage.value;
     case '/models': return isModelCenterPage.value;
     case '/inference': return isRiskInferencePage.value;
@@ -352,24 +279,6 @@ const handleNavClick = (item: NavItem): void => {
       </div>
     </header>
 
-    <!-- 非AI研判页：渲染首页/告警列表/告警详情 -->
-    <main v-if="!isRiskPage && !loading && !error && dashboard" class="page-container">
-      <DashboardView
-        v-if="isDashboardPage"
-        :snapshot="dashboard"
-        :alerts="alerts"
-        @open-alert="goAlertDetail($event)"
-        @open-war-room="warRoomOpen = true"
-        @open-metric="openMetric"
-      />
-      <AlertsView
-        v-else-if="isAlertsListPage"
-        :alerts="alerts"
-        @open-alert="goAlertDetail($event)"
-      />
-      <AlertDetailView v-else-if="isAlertDetailPage && selectedAlert" :alert="selectedAlert" @back="goAlertsList()" />
-    </main>
-
     <!-- AI风险研判页面 单独路由视图渲染 -->
     <div v-if="isRiskPage" class="risk-page-wrap">
       <router-view />
@@ -380,25 +289,6 @@ const handleNavClick = (item: NavItem): void => {
       <router-view />
     </div>
 
-    <!-- 加载、错误状态 -->
-    <section v-else-if="loading" class="state-card">
-      <div class="loader"></div>
-      <p>正在生成威胁感知数据与可视化面板...</p>
-    </section>
-    <section v-else-if="error" class="state-card state-card--error">
-      <p>{{ error }}</p>
-      <button class="ghost-button" @click="loadData">重试</button>
-    </section>
-
-    <!-- 弹窗组件不受路由影响 -->
-    <WarRoomModal
-      v-if="warRoomOpen && dashboard"
-      :snapshot="dashboard"
-      :alerts="alerts"
-      @close="warRoomOpen = false"
-      @open-alert="openAlertFromWarRoom"
-    />
-    <MetricTrendModal v-if="activeMetric" :metric="activeMetric" @close="activeMetric = null" />
   </div>
 </template>
 

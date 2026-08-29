@@ -8,13 +8,16 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { GlobalOverview, RiskEvent, TypeDistribution } from '@/types/security';
-import { getGlobalOverview, getRiskEvents } from '@/services/mockApi';
+import { useSituationStore } from '@/stores/situationStore';
+import { getRiskEventList } from '@/api/riskEventApi';
+import { mapRiskEvent } from '@/api/situationApi';
 import ScenarioCard from '@/components/common/ScenarioCard.vue';
 import LineTrendChart from '@/components/LineTrendChart.vue';
 import DonutChart from '@/components/DonutChart.vue';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
 
 const router = useRouter();
+const situationStore = useSituationStore();
 
 /** 概览数据 */
 const overview = ref<GlobalOverview | null>(null);
@@ -47,14 +50,12 @@ const loadData = async () => {
   loading.value = true;
   error.value = '';
   try {
-    const [ov, events] = await Promise.all([
-      getGlobalOverview(),
-      getRiskEvents(),
-    ]);
-    overview.value = ov;
-    allEvents.value = events;
+    await situationStore.fetchGlobalOverview();
+    overview.value = situationStore.overview;
+    const raw = (await getRiskEventList({ page_size: 200 })) as unknown as Array<Record<string, unknown>>;
+    allEvents.value = raw.map(mapRiskEvent);
     // 筛选高风险事件，最多取 5 条
-    highRiskEvents.value = events
+    highRiskEvents.value = allEvents.value
       .filter((e) => e.risk_level === 'HIGH')
       .slice(0, 5);
   } catch (err) {
