@@ -405,7 +405,7 @@ onMounted(async () => {
 
         <el-table-column prop="field_count" label="字段数" width="80" align="center" />
 
-        <el-table-column label="版本" width="70" align="center">
+        <el-table-column label="版本" width="110" align="center">
           <template #default="{ row }: { row: Dataset }">
             <span class="version-badge" :class="row.enabled ? 'version-badge--on' : 'version-badge--off'">
               {{ row.dataset_version }}{{ row.enabled ? '' : '（停用）' }}
@@ -599,6 +599,7 @@ onMounted(async () => {
         <span class="version-dialog-toolbar__tip">修改已用数据集时将创建新版本并保留旧版本（需求 2.3.3）</span>
         <el-button
           v-if="versionTarget"
+          class="version-create-button"
           size="small"
           type="primary"
           plain
@@ -919,6 +920,10 @@ onMounted(async () => {
   color: #9ad6ff;
   font-size: 0.78rem;
 }
+/* 去掉 Element Plus 默认的相邻按钮左边距（12px），让间距只由上面的 flex gap 控制 */
+.dataset-ops .el-button + .el-button {
+  margin-left: 0;
+}
 .dataset-ops .el-button:hover {
   background: rgba(91, 166, 255, 0.26);
   border-color: rgba(91, 166, 255, 0.55);
@@ -932,6 +937,7 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 0.78rem;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .version-badge--on {
@@ -1135,6 +1141,13 @@ onMounted(async () => {
   --el-button-hover-bg-color: rgba(91, 166, 255, 0.22) !important;
   --el-button-hover-border-color: rgba(91, 166, 255, 0.5) !important;
   --el-button-hover-text-color: #bae3ff !important;
+}
+
+/* append-to-body 的版本管理弹窗不在 .dataset-center 内，需为创建版本按钮单独提高默认背景与边框对比度。 */
+.version-create-button.el-button--primary.is-plain {
+  background: rgba(91, 166, 255, 0.24) !important;
+  border-color: rgba(125, 201, 255, 0.56) !important;
+  color: #fff !important;
 }
 
 </style>

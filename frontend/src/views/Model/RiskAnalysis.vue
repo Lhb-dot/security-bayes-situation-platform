@@ -15,11 +15,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AlgorithmParamDef, UserAccount } from '@/types/security';
-import { getCurrentUser } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 import { getScenarios, getDatasets, getAlgorithms, trainModel } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
+const userStore = useUserStore();
 
 // ===================== 权限 =====================
 const currentUser = ref<UserAccount | null>(null);
@@ -251,7 +252,7 @@ interface ApiAlgorithmRow {
 }
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  currentUser.value = userStore.currentUser;
   try {
     scenarios.value = await getScenarios();
     algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({

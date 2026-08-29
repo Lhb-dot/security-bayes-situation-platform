@@ -75,6 +75,10 @@ export const offlineModel = async (modelId: string | number): Promise<BackendMod
 export const disableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/disable`));
 
+/** 重新启用模型（POST /model-versions/{model_id}/enable，仅管理员；不自动恢复默认推荐状态） */
+export const enableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
+  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/enable`));
+
 /** 删除禁用中的模型（DELETE /model-versions/{model_id}，仅管理员） */
 export const deleteModelVersion = async (modelId: number | string): Promise<void> => {
   await unwrapData(await request.delete(`/api/v1/model-versions/${modelId}`));

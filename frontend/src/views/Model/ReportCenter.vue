@@ -9,8 +9,8 @@ import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { useUserStore } from '@/stores/userStore';
-import { getReportList, generateReport, updateReportSchedule } from '@/api/reportApi';
-import { ElMessage } from 'element-plus';
+import { getReportList, generateReport, updateReportSchedule, removeReport } from '@/api/reportApi';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 const reports = ref<Report[]>([]);
 const loading = ref(true);
@@ -82,6 +82,26 @@ const handleRegenerate = async (report: Report) => {
     await loadReports();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
+  }
+};
+
+/** 删除报告（生成者本人或管理员） */
+const handleDelete = async (report: Report) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除报告「${report.title}」？删除后不可恢复。`,
+      '删除报告',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await removeReport(report.report_id);
+    ElMessage.success('报告已删除');
+    await loadReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '删除失败');
   }
 };
 
@@ -297,13 +317,14 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="300" align="center" fixed="right">
+        <el-table-column label="操作" width="360" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
               <el-button size="small" @click="handleDownload(row)">下载</el-button>
               <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="success" plain @click="openSchedule(row)">定时</el-button>
               <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
+              <el-button v-if="row.generated_by === currentUser?.user_id || isAdmin" size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
             </div>
           </template>
         </el-table-column>

@@ -14,6 +14,7 @@ import { getDatasets, getScenarios } from '@/api/trainingApi';
 import {
   deleteModelVersion,
   disableModel,
+  enableModel,
   getModelVersionList,
   publishModel,
   setDefaultModel,
@@ -130,6 +131,16 @@ const handleDisable = async (m: BackendModelVersion) => {
     await loadModels();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '下线失败');
+  }
+};
+
+const handleEnable = async (m: BackendModelVersion) => {
+  try {
+    await enableModel(m.id);
+    ElMessage.success(`模型 ${m.id} 已重新启用`);
+    await loadModels();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '重新启用失败');
   }
 };
 
@@ -440,6 +451,7 @@ onMounted(async () => {
             <button class="op-btn op-btn--danger" @click="handleDisable(model)">禁用</button>
           </template>
           <template v-else-if="model.status === 'DISABLED'">
+            <button class="op-btn op-btn--publish" @click="handleEnable(model)">重新启用</button>
             <button class="op-btn op-btn--danger" @click="handleDelete(model)">删除</button>
           </template>
           <span v-if="model.status === 'FAILED'" class="model-card__failed-tip">训练失败，不可发布</span>

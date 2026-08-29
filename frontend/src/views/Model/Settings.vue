@@ -10,19 +10,19 @@
  *   场景启停、自动刷新、主题。
  */
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import {
-  changeOwnPassword,
-  getCurrentUser,
-  syncThreshold,
-} from '@/services/mockApi';
+import { syncThreshold } from '@/services/mockApi';
 import {
   getRiskThresholdAuditLogs,
   getRiskThresholds,
   updateRiskThreshold,
 } from '@/api/riskThresholdApi';
+import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
+const userStore = useUserStore();
+const router = useRouter();
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
 const canConfigureThresholds = computed(() =>
@@ -43,9 +43,11 @@ const changePwd = async () => {
   }
   changingPwd.value = true;
   try {
-    await changeOwnPassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
-    ElMessage.success('密码修改成功');
+    await userStore.changePassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
+    ElMessage.success('密码修改成功，请重新登录');
     pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+    await userStore.logout();
+    router.push('/login');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '修改失败');
   } finally {
@@ -168,7 +170,7 @@ const saveAdminSettings = () => {
 };
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  currentUser.value = userStore.currentUser;
   if (canConfigureThresholds.value) await loadThresholds();
 });
 </script>

@@ -230,6 +230,21 @@ def disable_model(
 
 
 @router.post(
+    "/{model_id}/enable",
+    response_model=ResponseModel,
+    summary="重新启用模型（仅管理员）：DISABLED → PUBLISHED，不自动恢复默认推荐",
+)
+def enable_model(
+    model_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    return unwrap(
+        ModelVersionService(db).enable(current_user=current_user, model_id=model_id)
+    )
+
+
+@router.post(
     "/{model_id}/set-default",
     response_model=ResponseModel,
     summary="设为默认推荐模型（仅管理员；每个场景+数据集最多一个）",
