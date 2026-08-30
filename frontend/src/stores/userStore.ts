@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import * as userApi from '@/api/userApi';
 import * as mockApi from '@/services/mockApi';
-import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { PlatformUserStats, ScenarioId, UserAccount, UserRole } from '@/types/security';
 
 const ALL_SCENARIO_IDS: ScenarioId[] = [
   'network_security',
@@ -15,6 +15,7 @@ export const useUserStore = defineStore('user', {
     currentUser: null as UserAccount | null,
     users: [] as UserAccount[],
     usersTotal: 0,
+    platformStats: null as PlatformUserStats | null,
     loading: false,
     initialized: false,
   }),
@@ -63,6 +64,7 @@ export const useUserStore = defineStore('user', {
         this.currentUser = null;
         this.users = [];
         this.usersTotal = 0;
+        this.platformStats = null;
         mockApi.syncSession(null);
         this.initialized = true;
       }
@@ -88,6 +90,9 @@ export const useUserStore = defineStore('user', {
       } finally {
         this.loading = false;
       }
+    },
+    async fetchPlatformStats(): Promise<void> {
+      this.platformStats = await mockApi.getPlatformUserStats();
     },
     async createUser(params: {
       username: string;
