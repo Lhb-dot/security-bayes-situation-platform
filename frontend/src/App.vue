@@ -129,7 +129,7 @@ const pageTitle = computed(() => {
   if (route.path === '/home') return '首页';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
   if (route.path === '/alerts') return '风险事件列表';
-  if (route.path === '/overview') return '首页';
+  if (route.path === '/overview') return '平台运行总览';
   if (route.path === '/scenarios') return '场景中心';
   if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';
   if (route.path === '/datasets') return '数据集中心';
