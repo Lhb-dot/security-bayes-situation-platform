@@ -30,6 +30,10 @@ import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
 import LineChart from '@/components/charts/LineChart.vue';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
+import platformDataBackground from '@/assets/quick-links/platform-data.png';
+import modelTopologyBackground from '@/assets/quick-links/model-topology.png';
+import accessControlBackground from '@/assets/quick-links/access-control.png';
+import intelligenceFlowBackground from '@/assets/quick-links/intelligence-flow.png';
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -263,17 +267,18 @@ interface QuickLink {
   path: string;
   accent: 'cyan' | 'violet' | 'blue' | 'green';
   iconPath: string;
+  backgroundImage: string;
 }
 
 const quickLinks: QuickLink[] = [
-  { key: 'scenarios', label: '场景中心', desc: '管理各业务场景与接入状态', path: '/scenarios', accent: 'cyan', iconPath: 'M3 4h18v4H3zM3 10h18v4H3zM3 16h18v4H3z' },
-  { key: 'train', label: '模型训练', desc: '算法选择与训练任务', path: '/risk', accent: 'violet', iconPath: 'M4 19V9m6 10V5m6 14v-7m4 7H2M4 7l6-3 6 5 4-3' },
-  { key: 'models', label: '模型中心', desc: '模型发布、下线与版本管理', path: '/models', accent: 'violet', iconPath: 'm12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 9 8-4.5M12 12 4 7.5M12 12v9' },
-  { key: 'datasets', label: '数据集中心', desc: '平台数据与版本管理', path: '/datasets', accent: 'cyan', iconPath: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6m-16 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6' },
-  { key: 'users', label: '用户管理', desc: '账号、角色与场景绑定', path: '/users', accent: 'blue', iconPath: 'M16 20v-1.5c0-2.5-2.7-4.5-6-4.5s-6 2-6 4.5V20m6-9a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 2c2 0 3.5 1.4 3.5 3.2V20m-2-9a2.8 2.8 0 1 0 0-5.6' },
-  { key: 'inference', label: '推理记录', desc: '全平台风险推理记录', path: '/inference-records', accent: 'green', iconPath: 'M5 4h10l4 4v12H5V4Zm10 0v4h4M8 13h8M8 17h5M8 9h3' },
-  { key: 'reports', label: '报告中心', desc: '态势报告生成与管理', path: '/reports', accent: 'green', iconPath: 'M5 3h10l4 4v14H5V3Zm10 0v4h4M8 12h8M8 16h8M8 8h2' },
-  { key: 'settings', label: '系统设置', desc: '阈值与系统参数配置', path: '/settings', accent: 'blue', iconPath: 'M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Zm0-12.2v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17.4l-1.4 1.4m0-13.2L7 7m10 10 1.4 1.4' },
+  { key: 'scenarios', label: '场景中心', desc: '管理各业务场景与接入状态', path: '/scenarios', accent: 'cyan', iconPath: 'M3 4h18v4H3zM3 10h18v4H3zM3 16h18v4H3z', backgroundImage: platformDataBackground },
+  { key: 'train', label: '模型训练', desc: '算法选择与训练任务', path: '/risk', accent: 'violet', iconPath: 'M4 19V9m6 10V5m6 14v-7m4 7H2M4 7l6-3 6 5 4-3', backgroundImage: modelTopologyBackground },
+  { key: 'models', label: '模型中心', desc: '模型发布、下线与版本管理', path: '/models', accent: 'violet', iconPath: 'm12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 9 8-4.5M12 12 4 7.5M12 12v9', backgroundImage: modelTopologyBackground },
+  { key: 'datasets', label: '数据集中心', desc: '平台数据与版本管理', path: '/datasets', accent: 'cyan', iconPath: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6m-16 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6', backgroundImage: platformDataBackground },
+  { key: 'users', label: '用户管理', desc: '账号、角色与场景绑定', path: '/users', accent: 'blue', iconPath: 'M16 20v-1.5c0-2.5-2.7-4.5-6-4.5s-6 2-6 4.5V20m6-9a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 2c2 0 3.5 1.4 3.5 3.2V20m-2-9a2.8 2.8 0 1 0 0-5.6', backgroundImage: accessControlBackground },
+  { key: 'inference', label: '推理记录', desc: '全平台风险推理记录', path: '/inference-records', accent: 'green', iconPath: 'M5 4h10l4 4v12H5V4Zm10 0v4h4M8 13h8M8 17h5M8 9h3', backgroundImage: intelligenceFlowBackground },
+  { key: 'reports', label: '报告中心', desc: '态势报告生成与管理', path: '/reports', accent: 'green', iconPath: 'M5 3h10l4 4v14H5V3Zm10 0v4h4M8 12h8M8 16h8M8 8h2', backgroundImage: intelligenceFlowBackground },
+  { key: 'settings', label: '系统设置', desc: '阈值与系统参数配置', path: '/settings', accent: 'blue', iconPath: 'M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Zm0-12.2v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17.4l-1.4 1.4m0-13.2L7 7m10 10 1.4 1.4', backgroundImage: accessControlBackground },
 ];
 
 interface QuickLinkState {
@@ -614,6 +619,7 @@ onBeforeUnmount(() => {
             type="button"
             class="admin-quick-tile"
             :class="`admin-quick-tile--${link.accent}`"
+            :style="{ '--quick-background': `url(${link.backgroundImage})` }"
             :aria-label="`前往${link.label}，${quickLinkState(link.key).text}`"
             @click="router.push({ path: link.path })"
           >
@@ -1349,6 +1355,7 @@ onBeforeUnmount(() => {
   --quick-accent: #75c7ff;
   --quick-tint: rgba(91, 166, 255, 0.12);
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1364,6 +1371,20 @@ onBeforeUnmount(() => {
   cursor: pointer;
   overflow: hidden;
   transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.admin-quick-tile::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--quick-background);
+  background-size: cover;
+  background-position: center;
+  opacity: 0.12;
+  mix-blend-mode: screen;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .admin-quick-tile::after {
@@ -1411,6 +1432,16 @@ onBeforeUnmount(() => {
 .admin-quick-tile:hover::after {
   opacity: 0.95;
   transform: scale(1.12);
+}
+
+.admin-quick-tile:hover::before {
+  opacity: 0.17;
+  transform: scale(1.025);
+}
+
+.admin-quick-tile > span {
+  position: relative;
+  z-index: 1;
 }
 
 .admin-quick-tile:focus-visible {
