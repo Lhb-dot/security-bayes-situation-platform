@@ -5,11 +5,12 @@
  * 职责：获取 route.params.scenarioId → 调用 store 校验/加载 → 按场景分发子看板。
  * 数据链路：页面 → scenarioStore / situationStore → mockApi（页面不直接调用 mockApi）。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { useSituationStore } from '@/stores/situationStore';
 import { useDatasetStore } from '@/stores/datasetStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
 import type { ScenarioDetail, ScenarioId, SituationData } from '@/types/security';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
@@ -23,12 +24,14 @@ const route = useRoute();
 const scenarioStore = useScenarioStore();
 const situationStore = useSituationStore();
 const datasetStore = useDatasetStore();
+const settingsStore = useSettingsStore();
 const userStore = useUserStore();
 
 const loading = ref(true);
 const error = ref('');
 const notFound = ref(false);
 const denied = ref(false);
+let refreshTimer: number | null = null;
 
 const scenarioId = computed(() => String(route.params.scenarioId ?? ''));
 const detail = computed<ScenarioDetail | null>(() => scenarioStore.detail);
@@ -61,6 +64,20 @@ const loadData = async () => {
   }
 };
 
+const startAutoRefresh = (): void => {
+  if (refreshTimer !== null) window.clearInterval(refreshTimer);
+  refreshTimer = null;
+  if (!settingsStore.autoRefresh) return;
+  refreshTimer = window.setInterval(() => {
+    if (!loading.value) void loadData();
+  }, settingsStore.refreshInterval * 1000);
+};
+
+watch(
+  [() => settingsStore.autoRefresh, () => settingsStore.refreshInterval],
+  startAutoRefresh,
+);
+
 // 场景切换（快捷跳转到另一场景）：清空旧数据并重新加载，避免残留上一场景数据
 watch(scenarioId, () => {
   scenarioStore.resetDetail();
@@ -68,7 +85,15 @@ watch(scenarioId, () => {
   loadData();
 });
 
-onMounted(loadData);
+onMounted(async () => {
+  settingsStore.loadForUser(userStore.currentUser?.user_id);
+  await loadData();
+  startAutoRefresh();
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer !== null) window.clearInterval(refreshTimer);
+});
 </script>
 
 <template>

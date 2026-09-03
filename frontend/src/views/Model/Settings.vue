@@ -18,10 +18,12 @@ import {
   getRiskThresholds,
   updateRiskThreshold,
 } from '@/api/riskThresholdApi';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
 const userStore = useUserStore();
+const settingsStore = useSettingsStore();
 const router = useRouter();
 const currentUser = ref<UserAccount | null>(null);
 const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
@@ -55,10 +57,8 @@ const changePwd = async () => {
   }
 };
 
-const darkTheme = ref(true);
-const autoRefresh = ref(true);
-const refreshInterval = ref(30);
 const savePersonalSettings = () => {
+  settingsStore.saveRefreshSettings();
   ElMessage.success('个人设置已保存');
 };
 
@@ -166,11 +166,13 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
 };
 
 const saveAdminSettings = () => {
+  settingsStore.saveRefreshSettings();
   ElMessage.success('系统设置已保存');
 };
 
 onMounted(async () => {
   currentUser.value = userStore.currentUser;
+  settingsStore.loadForUser(currentUser.value?.user_id);
   if (canConfigureThresholds.value) await loadThresholds();
 });
 </script>
@@ -218,23 +220,6 @@ onMounted(async () => {
       <section class="card settings-section">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Theme</p>
-            <h3>主题设置</h3>
-          </div>
-        </div>
-        <div class="settings-form">
-          <div class="settings-form__item settings-form__item--row">
-            <label class="settings-form__label">深色主题</label>
-            <button class="settings-switches__toggle" :class="{ 'is-on': darkTheme }" @click="darkTheme = !darkTheme">
-              <span class="settings-switches__knob"></span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
             <p class="eyebrow">Refresh</p>
             <h3>自动刷新设置</h3>
           </div>
@@ -242,13 +227,13 @@ onMounted(async () => {
         <div class="settings-form">
           <div class="settings-form__item settings-form__item--row">
             <label class="settings-form__label">启用自动刷新</label>
-            <button class="settings-switches__toggle" :class="{ 'is-on': autoRefresh }" @click="autoRefresh = !autoRefresh">
+            <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
               <span class="settings-switches__knob"></span>
             </button>
           </div>
           <div class="settings-form__item">
             <label class="settings-form__label">刷新间隔（秒）</label>
-            <select v-model.number="refreshInterval" class="settings-form__input" :disabled="!autoRefresh">
+            <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
               <option :value="10">10 秒</option>
               <option :value="30">30 秒</option>
               <option :value="60">60 秒</option>
@@ -381,13 +366,13 @@ onMounted(async () => {
           <div class="settings-form">
             <div class="settings-form__item settings-form__item--row">
               <label class="settings-form__label">启用自动刷新</label>
-              <button class="settings-switches__toggle" :class="{ 'is-on': autoRefresh }" @click="autoRefresh = !autoRefresh">
+              <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
                 <span class="settings-switches__knob"></span>
               </button>
             </div>
             <div class="settings-form__item">
               <label class="settings-form__label">刷新间隔（秒）</label>
-              <select v-model.number="refreshInterval" class="settings-form__input" :disabled="!autoRefresh">
+              <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
                 <option :value="10">10 秒</option>
                 <option :value="30">30 秒</option>
                 <option :value="60">60 秒</option>
@@ -398,22 +383,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card settings-section">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Theme</p>
-              <h3>主题设置</h3>
-            </div>
-          </div>
-          <div class="settings-form">
-            <div class="settings-form__item settings-form__item--row">
-              <label class="settings-form__label">深色主题</label>
-              <button class="settings-switches__toggle" :class="{ 'is-on': darkTheme }" @click="darkTheme = !darkTheme">
-                <span class="settings-switches__knob"></span>
-              </button>
-            </div>
-          </div>
-        </section>
       </div>
 
       <div class="settings-actions">
