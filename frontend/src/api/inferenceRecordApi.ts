@@ -5,7 +5,7 @@
  * 权限边界由后端强制（需求 6.8）：执行推理需登录；普通用户仅本人记录。
  */
 import request, { unwrapData } from '@/utils/request';
-import type { InferenceRecord } from '@/types/security';
+import type { InferenceExplain, InferenceRecord } from '@/types/security';
 
 /** 服务端统一预测入口返回结果（POST /inference-records/predict）。 */
 export interface PredictResult {
@@ -57,6 +57,14 @@ export const getInferenceRecordList = async (params?: {
 /** 推理记录详情（GET /inference-records/{record_id}，普通用户仅本人） */
 export const getInferenceRecordDetail = async (recordId: string): Promise<InferenceRecord> =>
   unwrapData(await request.get(`/api/v1/inference-records/${recordId}`));
+
+/** 推理记录可解释性信息（GET /inference-records/{record_id}/explain） */
+export const getInferenceExplain = async (recordId: string): Promise<{
+  inference_record_id: number;
+  prediction_label: string;
+  explain_data: InferenceExplain;
+}> =>
+  unwrapData(await request.get(`/api/v1/inference-records/${recordId}/explain`));
 
 /** 删除推理记录（DELETE /inference-records/{record_id}，仅管理员；已生成风险事件的记录后端禁止删除） */
 export const removeInferenceRecord = async (recordId: string): Promise<void> =>

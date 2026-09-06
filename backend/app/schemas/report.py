@@ -36,3 +36,17 @@ class ReportScheduleUpdate(BaseModel):
     interval_days: Optional[int] = Field(
         None, ge=1, description="定时周期（天），启用时必填"
     )
+
+
+class ReportGenerate(BaseModel):
+    """自动生成态势报告（服务端基于真实数据 + 算法解释组装内容）。"""
+
+    title: str = Field(..., min_length=1, max_length=128, description="报告标题")
+    scenario_id: Optional[int] = Field(
+        None, description="所属场景 ID（非超管强制为本人绑定场景）"
+    )
+    scope: Literal["self", "all", "user"] = Field("self", description="数据范围")
+    target_user_id: Optional[int] = Field(
+        None, description="目标用户 ID（scope=user 时，仅管理员生效）"
+    )
+    format: ReportFormat = Field("markdown", description="报告格式")

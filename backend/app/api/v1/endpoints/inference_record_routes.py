@@ -87,6 +87,23 @@ def get_inference_record(
     )
 
 
+@router.get(
+    "/{record_id}/explain",
+    response_model=ResponseModel,
+    summary="推理记录可解释性信息（多视图预测 / 特征加权条件概率）",
+)
+def get_inference_explain(
+    record_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        InferenceRecordService(db).get_explain(
+            current_user=current_user, record_id=record_id
+        )
+    )
+
+
 @router.delete(
     "/{record_id}",
     response_model=ResponseModel,

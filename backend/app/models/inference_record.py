@@ -28,6 +28,8 @@ class InferenceRecord(Base):
     prediction_label: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_score: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
     risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 算法可解释性信息（多视图预测 / 视图权重 / 特征加权条件概率），由 Java /predict 返回
+    explain_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_risk_event: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -10,12 +10,17 @@ import weka.classifiers.meta.FilteredClassifier;
 import weka.classifiers.zh.A2WNB.A2WNB;
 import weka.classifiers.zh.A2WNB.RODE;
 import weka.classifiers.zh.CAVWNB.CAVWNB;
+import weka.classifiers.zh.CAVWNB.WANBDistribution;
+import weka.classifiers.zh.MVCAVWNB.EMAWNB;
+import weka.classifiers.zh.MVCAVWNB.MVCAVWNB;
+import weka.classifiers.mkx.DIWNB.DIWNB_HE;
 import weka.core.Attribute;
 import weka.core.DenseInstance;
 import weka.core.Instance;
 import weka.core.Instances;
 import weka.core.SerializationHelper;
 import weka.core.converters.ConverterUtils.DataSource;
+import weka.filters.Filter;
 import weka.filters.unsupervised.attribute.Remove;
 import weka.filters.unsupervised.attribute.Discretize;
 
@@ -154,10 +159,158 @@ public final class NbAlgorithmService {
             }
             JSONObject data = new JSONObject().put("prediction_label", header.classAttribute().value(argmax))
                     .put("probability", round(dist[argmax])).put("class_distribution", classes);
+            // 追加多视图预测 / 视图权重 / 特征加权条件概率（未接入算法返回空数组）
+            JSONObject explain = buildExplain(classifier, instance, header);
+            data.put("views", explain.getJSONArray("views"));
+            data.put("view_weights", explain.getJSONArray("view_weights"));
+            data.put("feature_evidence", explain.getJSONArray("feature_evidence"));
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
         } catch (Exception e) {
             respond(ex, 500, new JSONObject().put("success", false).put("error", message(e)));
         }
+    }
+
+    /**
+     * 组装可解释性信息：多视图预测、视图权重、特征加权条件概率。
+     *
+     * 说明：序列化后的模型是 FilteredClassifierWithDiscretize（外层离散化包裹内层
+     * 研究算法），因此先解包拿到真实算法实例，并用训练好的离散化过滤器把原始实例
+     * 转成离散实例，再调用各算法的 per-view 方法。任一环节异常都回退为空解释，
+     * 不影响预测主流程。PMWNB / DIWNB 本次未接入，返回空 views / feature_evidence。
+     */
+    private static JSONObject buildExplain(Classifier classifier, Instance instance, Instances header) {
+        JSONObject explain = new JSONObject();
+        explain.put("views", new JSONArray());
+        explain.put("view_weights", new JSONArray());
+        explain.put("feature_evidence", new JSONArray());
+        try {
+            if (!(classifier instanceof FilteredClassifier)) {
+                return explain;
+            }
+            FilteredClassifier fc = (FilteredClassifier) classifier;
+            Classifier base = fc.getClassifier();
+            if (base == null) {
+                return explain;
+            }
+
+            // 复刻 FilteredClassifier.distributionForInstance 的离散化步骤，得到离散实例
+            Instance disc = instance;
+            if (fc.getFilter() != null) {
+                fc.getFilter().input(instance);
+                disc = fc.getFilter().output();
+            }
+
+            JSONArray views = new JSONArray();
+            JSONArray viewWeights = new JSONArray();
+            JSONArray featureEvidence = new JSONArray();
+            String calculationMethod = null;
+
+            if (base instanceof CAVWNB) {
+                // 单视图（原始属性视图），无独立视图；但提供特征加权条件概率
+                CAVWNB cav = (CAVWNB) base;
+                featureEvidence = buildCavwnbEvidence(cav, disc, header);
+                calculationMethod = "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）";
+            } else if (base instanceof MVCAVWNB) {
+                MVCAVWNB mv = (MVCAVWNB) base;
+                views.put(viewObj("原始属性视图", mv.classifier_view1.distributionForInstance(disc), header));
+                views.put(viewObj("SPODE 标签视图", mv.distributionForInstance_SPODE_Label(disc), header));
+                views.put(viewObj("RT 标签视图", mv.distributionForInstance_RT_Label(disc), header));
+                double third = 1.0 / 3.0;
+                viewWeights.put(third).put(third).put(third);
+                if (mv.classifier_view1 instanceof CAVWNB) {
+                    featureEvidence = buildCavwnbEvidence((CAVWNB) mv.classifier_view1, disc, header);
+                }
+                calculationMethod = "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）";
+            } else if (base instanceof EMAWNB) {
+                EMAWNB ema = (EMAWNB) base;
+                ema.LearningViewWweight(disc);
+                views.put(viewObj("原始属性视图", ema.distributionForInstance1(disc), header));
+                views.put(viewObj("SPODE 标签视图", ema.distributionForInstance2(disc), header));
+                views.put(viewObj("RT 标签视图", ema.distributionForInstance3(disc), header));
+                viewWeights.put(round(ema.w_view1)).put(round(ema.w_view2)).put(round(ema.w_view3));
+                if (ema.classifier_view1 instanceof CAVWNB) {
+                    featureEvidence = buildCavwnbEvidence((CAVWNB) ema.classifier_view1, disc, header);
+                }
+                calculationMethod = "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）";
+            } else if (base instanceof DIWNB_HE) {
+                // 双视图：原始视图 + 生成视图（KNN 生成）
+                DIWNB_HE diwnb = (DIWNB_HE) base;
+                views.put(viewObj("原始视图", diwnb.distributionForView1(disc), header));
+                views.put(viewObj("生成视图", diwnb.distributionForView2(disc), header));
+                double[] vw = diwnb.getViewWeightsForReport();
+                viewWeights.put(round(vw[0])).put(round(vw[1]));
+            } else if (base instanceof A2WNB) {
+                // 增广单视图，无独立视图；特征证据暂未接入
+            }
+
+            explain.put("views", views);
+            explain.put("view_weights", viewWeights);
+            explain.put("feature_evidence", featureEvidence);
+            if (calculationMethod != null) {
+                explain.put("calculation_method", calculationMethod);
+            }
+        } catch (Exception ignored) {
+            // 解释提取失败不阻断预测，返回空解释
+        }
+        return explain;
+    }
+
+    private static JSONObject viewObj(String name, double[] dist, Instances header) {
+        JSONObject obj = new JSONObject().put("name", name);
+        JSONArray arr = new JSONArray();
+        int argmax = 0;
+        for (int i = 1; i < dist.length; i++) {
+            if (dist[i] > dist[argmax]) argmax = i;
+        }
+        for (int i = 0; i < dist.length; i++) {
+            arr.put(new JSONObject().put("class", header.classAttribute().value(i))
+                    .put("probability", round(dist[i])));
+        }
+        obj.put("predicted_label", header.classAttribute().value(argmax));
+        return obj.put("distribution", arr);
+    }
+
+    /** 提取 CAVWNB 每个特征值对各风险类的加权条件概率贡献。 */
+    private static JSONArray buildCavwnbEvidence(CAVWNB cav, Instance disc, Instances header) throws Exception {
+        WANBDistribution wd = cav.geDistribution();
+        if (wd == null) {
+            return new JSONArray();
+        }
+        double[] weights = wd.getWeights();       // 长度 = attrValueCounts * numClasses
+        int[] card = wd.getCardinalities();       // 每个属性的取值数
+        int[] offset = wd.getOffset();            // 每个属性在权重数组中的偏移
+        double[][][] theta = wd.getThetaUC();     // n x nc x card[u]，条件概率 P(x_u|class)
+        int attrValueCounts = wd.getAttValueCounts();
+        int nc = theta[0].length;
+
+        JSONArray arr = new JSONArray();
+        for (int u = 0; u < card.length; u++) {
+            if (disc.isMissing(u)) {
+                continue;
+            }
+            int v = (int) disc.value(u);
+            if (v < 0 || v >= card[u]) {
+                continue;
+            }
+            JSONObject feat = new JSONObject();
+            feat.put("attribute", disc.attribute(u).name());
+            feat.put("value", disc.attribute(u).value(v));
+            feat.put("view", "原始属性视图");
+            JSONArray contribs = new JSONArray();
+            for (int c = 0; c < nc; c++) {
+                double w = weights[attrValueCounts * c + offset[u] + v];
+                double p = theta[u][c][v];
+                double logp = Math.log(Math.max(p, 1e-75));
+                contribs.put(new JSONObject()
+                        .put("class", header.classAttribute().value(c))
+                        .put("weight", round(w))
+                        .put("cond_prob", round(p))
+                        .put("contribution", round(w * logp)));
+            }
+            feat.put("class_contributions", contribs);
+            arr.put(feat);
+        }
+        return arr;
     }
 
     private static void handleShutdown(HttpExchange ex) throws IOException {
