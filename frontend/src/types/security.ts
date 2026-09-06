@@ -301,6 +301,134 @@ export interface SituationData {
   metrics: MetricItem[];
 }
 
+// ===================== 态势报告：算法解释 + 结构化报告数据 =====================
+
+/** 单个类别的概率 */
+export interface ClassProb {
+  class: string;
+  probability: number;
+}
+
+/** 多视图中的一个视图 */
+export interface ViewDistribution {
+  name: string;
+  distribution: ClassProb[];
+}
+
+/** 特征值对单个风险类的加权条件概率贡献 */
+export interface ClassContribution {
+  class: string;
+  weight: number;
+  cond_prob?: number;
+  contribution?: number;
+}
+
+/** 单个特征值的可解释性证据 */
+export interface FeatureEvidence {
+  attribute: string;
+  value: string;
+  class_contributions: ClassContribution[];
+}
+
+/** 算法可解释性信息（Java /predict 返回，落库 explain_data） */
+export interface InferenceExplain {
+  prediction_label: string;
+  probability: number | null;
+  class_distribution: ClassProb[];
+  views: ViewDistribution[];
+  view_weights: number[];
+  feature_evidence: FeatureEvidence[];
+}
+
+/** 报告单个特征的加权条件概率信息 */
+export interface ReportFeature {
+  attribute: string;
+  value: string;
+  view: string | null;
+  weight: number | null;
+  cond_probs: Array<{ class: string; cond_prob: number | null }>;
+  weighted_contribution: number | null;
+  support_direction: string;
+  salience: number;
+  rank: number;
+}
+
+/** 报告结构化数据（report_data，6.10 定义的完整结构） */
+export interface ReportData {
+  report_info: {
+    title: string;
+    generated_at: string;
+    report_period: string | null;
+    generated_by: string;
+    scenario_name: string | null;
+    scenario_code: string | null;
+    data_scope: string;
+    datasets: Array<{ logical_id: string; version: number | null }>;
+    algorithms: Array<{ code: string; name: string }>;
+    model_versions: Array<{ id: number; algorithm_code: string | null }>;
+  };
+  overview: {
+    total_inferences: number;
+    risk_count: number;
+    normal_count: number;
+    risk_ratio: number | null;
+    normal_ratio: number | null;
+    high_count: number;
+    medium_count: number;
+    low_count: number;
+    pending_count: number;
+    processing_count: number;
+    resolved_count: number;
+    avg_risk_prob: number | null;
+    risk_trend: string;
+  };
+  prediction: {
+    label_distribution: Array<{ label: string; count: number; ratio: number | null }>;
+    class_probability: Array<{ class: string; probability: number | null }>;
+    risk_prob_buckets: Array<{ range: string; count: number }>;
+    low_confidence_count: number;
+  };
+  model_analysis: Array<{
+    model_version_id: number;
+    algorithm_code: string | null;
+    algorithm_name: string | null;
+    inference_count: number;
+    risk_count: number;
+    views: Array<{
+      name: string;
+      predicted_label: string;
+      distribution: ClassProb[];
+      consistent_with_final: boolean;
+    }>;
+    view_weights: number[];
+    calculation_method: string | null;
+    has_views: boolean;
+  }>;
+  feature_analysis: {
+    calculation_method: string | null;
+    top_features: Array<ReportFeature>;
+    all_features: Array<ReportFeature>;
+  };
+  trend: Array<{
+    date: string;
+    inference_count: number;
+    risk_count: number;
+    risk_ratio: number;
+    avg_risk_prob: number | null;
+  }>;
+  key_events: Array<{
+    time: string | null;
+    risk_level: string;
+    probability: number | null;
+    risk_type: string;
+    status: string;
+    key_features: string[];
+  }>;
+  data_notes: string;
+  analysis_nl: string;
+  guidance_nl: string;
+}
+
 /** 报告定义 */
 export interface Report {
   report_id: string;
@@ -309,6 +437,8 @@ export interface Report {
   scenario_name: string;
   summary: string;
   content?: string;
+  /** 结构化报告数据（自动生成报告时由后端返回，供详情页渲染图表与 NL 文本） */
+  report_data?: ReportData;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';

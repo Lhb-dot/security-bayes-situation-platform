@@ -14,7 +14,7 @@ from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.schemas.common import ResponseModel
-from app.schemas.report import ReportCreate, ReportScheduleUpdate
+from app.schemas.report import ReportCreate, ReportGenerate, ReportScheduleUpdate
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["报告管理"])
@@ -77,6 +77,28 @@ def create_report(
             format=payload.format,
             scheduled=payload.scheduled,
             interval_days=payload.interval_days,
+        )
+    )
+
+
+@router.post(
+    "/generate",
+    response_model=ResponseModel,
+    summary="自动生成态势报告（真实数据 + 算法多视图研判 + NL 分析）",
+)
+def generate_report(
+    payload: ReportGenerate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        ReportService(db).generate(
+            current_user=current_user,
+            title=payload.title,
+            scenario_id=payload.scenario_id,
+            scope=payload.scope,
+            target_user_id=payload.target_user_id,
+            format=payload.format,
         )
     )
 

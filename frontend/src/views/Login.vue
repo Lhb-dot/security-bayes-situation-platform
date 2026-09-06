@@ -92,20 +92,6 @@ const handleLogin = async () => {
         </button>
       </form>
 
-      <div class="login-demo">
-        <p class="login-demo__title">演示账号（密码均为 123456）</p>
-        <div class="login-demo__btns">
-          <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
-            系统管理员 admin
-          </button>
-          <button class="login-demo__btn" @click="quickLogin('net_admin', '123456')">
-            场景管理员 net_admin
-          </button>
-          <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
-            场景用户 alice
-          </button>
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -250,39 +236,5 @@ const handleLogin = async () => {
   to {
     transform: rotate(360deg);
   }
-}
-
-.login-demo {
-  margin-top: 26px;
-  padding-top: 18px;
-  border-top: 1px solid rgba(125, 201, 255, 0.1);
-}
-
-.login-demo__title {
-  margin: 0 0 10px;
-  font-size: 0.8rem;
-  color: rgba(220, 234, 255, 0.5);
-  text-align: center;
-}
-
-.login-demo__btns {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-}
-
-.login-demo__btn {
-  padding: 8px 18px;
-  border: 1px solid rgba(125, 201, 255, 0.28);
-  border-radius: 8px;
-  background: rgba(91, 166, 255, 0.08);
-  color: #9ad6ff;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.login-demo__btn:hover {
-  background: rgba(91, 166, 255, 0.18);
 }
 </style>

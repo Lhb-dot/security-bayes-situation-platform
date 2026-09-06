@@ -5,6 +5,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -26,6 +27,8 @@ class Report(Base):
         BigInteger, ForeignKey("scenario.id"), nullable=True
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 结构化报告数据（统计 + 算法解释 + NL 分析），供前端渲染图表与溯源
+    report_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     format: Mapped[str] = mapped_column(String(16), nullable=False, default="markdown")
     scheduled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

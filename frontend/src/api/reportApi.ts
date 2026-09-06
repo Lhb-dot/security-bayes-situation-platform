@@ -5,7 +5,7 @@
  * 权限边界由后端强制（需求 6.8.5）：普通用户仅本人数据；管理员可全平台或指定用户。
  */
 import request, { unwrapData } from '@/utils/request';
-import type { Report, ScenarioId } from '@/types/security';
+import type { Report, ReportData, ScenarioId } from '@/types/security';
 
 interface ApiReport {
   id: number;
@@ -16,6 +16,7 @@ interface ApiReport {
   scenario_code?: ScenarioId;
   scenario_name?: string;
   content: string;
+  report_data?: ReportData;
   format: Report['format'];
   scheduled: boolean;
   interval_days: number | null;
@@ -39,6 +40,7 @@ const toReport = (raw: ApiReport): Report => ({
   scenario_name: raw.scenario_name ?? '',
   summary: raw.content,
   content: raw.content,
+  report_data: raw.report_data,
   created_at: raw.created_at ?? raw.generated_at,
   format: raw.format,
   status: raw.status ?? 'completed',
@@ -62,7 +64,7 @@ export const getReportList = async (params?: {
 export const getReportDetail = async (reportId: string): Promise<Report> =>
   toReport(await unwrapData(await request.get(`/api/v1/reports/${reportId}`)) as ApiReport);
 
-/** 生成态势报告（POST /reports，普通用户仅本人数据） */
+/** 生成态势报告（POST /reports/generate，服务端基于真实数据 + 算法解释自动组装内容） */
 export const generateReport = async (params: {
   scenario_id: ScenarioId;
   title: string;
@@ -74,17 +76,13 @@ export const generateReport = async (params: {
 }): Promise<Report> => {
   const { resolveScenarioId } = await import('@/api/scenarioApi');
   const scenarioId = await resolveScenarioId(params.scenario_id);
-  const scopeLabel = params.scope === 'all' ? '全平台' : params.scope === 'user' ? `指定用户 ${params.target_user_id}` : '本人';
   const raw = await unwrapData(
-    await request.post('/api/v1/reports', {
+    await request.post('/api/v1/reports/generate', {
       title: params.title,
-      report_type: params.scope === 'self' ? 'USER_SNAPSHOT' : 'SCENE_SNAPSHOT',
-      content: `# ${params.title}\n\n数据范围：${scopeLabel}\n\n报告已创建并保存，后续可根据该配置执行具体定时生成。`,
-      target_user_id: params.target_user_id ? Number(params.target_user_id) : undefined,
       scenario_id: scenarioId,
+      scope: params.scope,
+      target_user_id: params.target_user_id ? Number(params.target_user_id) : undefined,
       format: params.format ?? 'markdown',
-      scheduled: params.scheduled ?? false,
-      interval_days: params.scheduled ? params.interval_days : undefined,
     }),
   );
   return toReport(raw as ApiReport);

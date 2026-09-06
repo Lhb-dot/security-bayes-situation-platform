@@ -27,6 +27,15 @@ logs/
 .claude/
 requirements-analysis.md
 项目要求.md
+docs/工作日志-*.md
+docs/v3.2.1需求分析9.1.md
+
+# ==================== Java build artifacts ====================
+backend/java/.build-*/
+backend/java/.check*/
+*.jar
+backend/java/algorithm-src/PMWNB/dataset_59/
+backend/java/algorithm-src/PMWNB/PMWNB.zip
 
 # ==================== IDE ====================
 .vscode/
@@ -39,3 +48,5 @@ requirements-analysis.md
 .DS_Store
 Thumbs.db
 .aider*
+
+*.pdf

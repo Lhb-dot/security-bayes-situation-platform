@@ -93,10 +93,12 @@ class InferenceRecordService(ServiceBase):
         )
 
     def _predict(self, model: ModelVersion, dataset: Dataset, input_features: Dict[str, Any]) -> tuple:
-        """调用服务端统一预测入口，返回 (prediction_label, probability)。
+        """调用服务端统一预测入口，返回 (prediction_label, probability, explain_data)。
 
         - prediction_label：模型预测的分类标签（argmax 类别）；
-        - probability：模型对预测类别的输出概率（当预测为风险类时用作 risk_score）。
+        - probability：模型对预测类别的输出概率（当预测为风险类时用作 risk_score）；
+        - explain_data：算法可解释性信息（多视图预测 / 视图权重 / 特征加权条件概率），
+          由 Java /predict 返回，用于态势报告可视化与自然语言分析。
         """
         from app.services.training_executor import (
             build_model_save_path,
@@ -121,7 +123,16 @@ class InferenceRecordService(ServiceBase):
         probability = float(prob) if prob is not None else None
         if probability is not None and not (0 <= probability <= 1):
             raise ServiceError(500, "预测服务返回的概率超出 [0,1]")
-        return label, probability
+
+        explain_data = {
+            "prediction_label": label,
+            "probability": probability,
+            "class_distribution": result.get("class_distribution") or [],
+            "views": result.get("views") or [],
+            "view_weights": result.get("view_weights") or [],
+            "feature_evidence": result.get("feature_evidence") or [],
+        }
+        return label, probability, explain_data
 
     # ------------------------------------------------------------------
     # 执行推理（需求 6.7.3 / 5.2 / 5.3）
@@ -160,7 +171,7 @@ class InferenceRecordService(ServiceBase):
             raise ServiceError(400, err)
 
         # 服务端统一预测入口（需求 6.6.2）：按 model_version_id + input_features 计算
-        prediction_label, probability = self._predict(model, dataset, input_features)
+        prediction_label, probability, explain_data = self._predict(model, dataset, input_features)
 
         # 风险类判定（需求 6.4.1 显式映射：禁止自动推断正类；
         # DIS_Causative 等数值标签走 DATASET_RISK_GT_ZERO 规则，需求 5.3）
@@ -176,6 +187,7 @@ class InferenceRecordService(ServiceBase):
             risk_score=score,
             risk_level=None,  # 仅当预测为风险时由事件回填（数据库设计文档 v2 2.6）
             is_risk_event=is_risk,
+            explain_data=explain_data,
             executed_at=now,
         )
         self.db.add(record)
@@ -280,6 +292,22 @@ class InferenceRecordService(ServiceBase):
         record = self._get(record_id)
         self._require_record_access(current_user, record)
         return ok(data=self._to_dict(record))
+
+    @service_call
+    def get_explain(self, current_user, record_id: int):
+        """推理记录的可解释性信息（多视图预测 / 视图权重 / 特征加权条件概率）。
+
+        供态势报告与详情页复用；权限同详情（普通用户仅本人，需求 6.8）。
+        """
+        record = self._get(record_id)
+        self._require_record_access(current_user, record)
+        return ok(
+            data={
+                "inference_record_id": record.id,
+                "prediction_label": record.prediction_label,
+                "explain_data": record.explain_data or {},
+            }
+        )
 
     # ------------------------------------------------------------------
     # 删除（仅 ADMIN；已生成风险事件的记录禁止删除，保持可追溯）
