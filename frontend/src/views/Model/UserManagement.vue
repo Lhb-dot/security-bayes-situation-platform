@@ -26,23 +26,6 @@ const users = computed(() => userStore.users);
 const loading = computed(() => userStore.loading);
 const keyword = ref('');
 
-<<<<<<< HEAD
-/** 角色名称（区分系统管理员 / 场景管理员 / 场景用户） */
-const roleLabel = (role: UserRole | undefined): string => {
-  if (role === 'SUPER_ADMIN') return '系统管理员';
-  if (role === 'SCENARIO_ADMIN') return '场景管理员';
-  if (role === 'SCENARIO_USER') return '场景用户';
-  return '未登录';
-};
-
-const roleBadgeClass = (role: UserRole | undefined): string => {
-  if (role === 'SUPER_ADMIN') return 'role-badge--super';
-  if (role === 'SCENARIO_ADMIN') return 'role-badge--admin';
-  return 'role-badge--user';
-};
-
-// ========== 创建用户弹窗（最外层管理员建场景管理员/用户；场景管理员只在自己场景建用户） ==========
-=======
 const scenarioOptions = ref<ScenarioOption[]>([]);
 const scenarioNameByCode = ref<Record<string, string>>({});
 const scenarioNameById = ref<Record<number, string>>({});
@@ -98,7 +81,6 @@ const loadUsers = async () => {
 };
 
 // ========== 创建用户 ==========
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
 const createOpen = ref(false);
 const createSubmitting = ref(false);
 const createForm = ref<{
@@ -283,13 +265,6 @@ onMounted(async () => {
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
         <p class="users-page__desc">
-<<<<<<< HEAD
-          当前登录：{{ currentUser?.display_name }}（{{ roleLabel(currentUser?.role) }}）
-        </p>
-      </div>
-      <button v-if="isAdmin()" class="users-btn users-btn--primary" @click="openCreate">
-        + 创建{{ isSuperAdmin() ? '账号' : '场景用户' }}
-=======
           当前登录：{{ currentUser?.username }}（{{ roleLabel(currentUser?.role || 'SCENARIO_USER') }}）
           <template v-if="isSuperAdmin"> · 可查看全部用户与场景管理员，并创建账号绑定场景</template>
           <template v-else-if="isManagement"> · 仅管理本场景用户</template>
@@ -297,7 +272,6 @@ onMounted(async () => {
       </div>
       <button v-if="isManagement" class="users-btn users-btn--primary" @click="openCreate">
         {{ isSuperAdmin ? '创建账号' : '创建用户' }}
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
       </button>
     </div>
 
@@ -336,14 +310,10 @@ onMounted(async () => {
               <td>{{ user.id }}</td>
               <td>{{ user.username }}</td>
               <td>
-<<<<<<< HEAD
-                <span class="role-badge" :class="roleBadgeClass(user.role)">
-=======
                 <span
                   class="role-badge"
                   :class="user.role === 'SCENARIO_USER' ? 'role-badge--user' : 'role-badge--admin'"
                 >
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
                   {{ roleLabel(user.role) }}
                 </span>
               </td>
@@ -429,18 +399,10 @@ onMounted(async () => {
       </div>
     </section>
 
-<<<<<<< HEAD
-    <!-- 创建账号弹窗（系统管理员可建场景管理员/场景用户；场景管理员只在自己场景建场景用户） -->
-    <el-dialog
-      v-model="createOpen"
-      title="创建账号"
-      width="460px"
-=======
     <el-dialog
       v-model="createOpen"
       :title="isSuperAdmin ? '创建账号并绑定场景' : '创建本场景用户'"
       width="480px"
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
       align-center
       append-to-body
       lock-scroll
@@ -466,11 +428,6 @@ onMounted(async () => {
         </div>
         <div class="pwd-form__field">
           <label class="pwd-form__label">角色</label>
-<<<<<<< HEAD
-          <select v-model="createForm.role" class="pwd-form__input" :disabled="!isSuperAdmin()">
-            <option v-if="isSuperAdmin()" value="SCENARIO_ADMIN">场景管理员</option>
-            <option value="SCENARIO_USER">场景用户</option>
-=======
           <select
             v-model="createForm.role"
             class="pwd-form__input"
@@ -478,7 +435,6 @@ onMounted(async () => {
           >
             <option v-if="isSuperAdmin" value="SCENARIO_ADMIN">场景管理员</option>
             <option value="SCENARIO_USER">普通用户</option>
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
           </select>
           <p v-if="isSuperAdmin" class="bind-tip">系统管理员可创建场景管理员或普通用户</p>
           <p v-else class="bind-tip">场景管理员只能创建本场景普通用户</p>
@@ -498,13 +454,7 @@ onMounted(async () => {
               {{ sc.name }}
             </option>
           </select>
-<<<<<<< HEAD
-          <p class="bind-tip">
-            {{ isSuperAdmin() ? '系统管理员可创建场景管理员或场景用户，均需绑定场景' : '场景管理员只能在自己场景内创建场景用户' }}
-          </p>
-=======
           <p v-if="!isSuperAdmin" class="bind-tip">固定绑定当前场景，不可更改</p>
->>>>>>> eb1467fce627a5fd2e4400a4615dcf33a254ad53
         </div>
       </div>
       <template #footer>

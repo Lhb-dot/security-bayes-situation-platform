@@ -1297,7 +1297,7 @@ const buildNumParam = (param_name: string, label: string, default_value: number,
 let algorithmRegistry: AlgorithmDefinition[] = [
   {
     algorithm_id: 'A2WNB',
-    display_name: 'A²加权朴素贝叶斯',
+    display_name: '属性增广和加权朴素贝叶斯(A2WNB)',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
     description: 'Adaptive Attribute Weighted Naive Bayes，按属性权重指数自适应加权',
@@ -1310,7 +1310,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
   },
   {
     algorithm_id: 'MAWNB',
-    display_name: '模型平均加权朴素贝叶斯',
+    display_name: '多视图加权朴素贝叶斯(MAWNB)',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
     description: 'Model Averaging Weighted Naive Bayes，多个子模型加权平均',
@@ -1323,7 +1323,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
   },
   {
     algorithm_id: 'EMAWNB',
-    display_name: '指数移动平均加权朴素贝叶斯',
+    display_name: '增强多视图朴素贝叶斯(EMAWNB)',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
     description: 'Exponential Moving Average Weighted Naive Bayes，利用滑动窗口估计加权概率',
@@ -1336,7 +1336,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
   },
   {
     algorithm_id: 'CAVWNB',
-    display_name: '差分加权朴素贝叶斯',
+    display_name: '类依赖属性值加权朴素贝叶斯(CAVWNB)',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
     description: 'Differential Weighted Naive Bayes，基于特征差分信号加权',
@@ -1349,7 +1349,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
   },
   {
     algorithm_id: 'PMWNB',
-    display_name: '概率均值加权朴素贝叶斯',
+    display_name: '矩阵视图加权朴素贝叶斯(PMWNB)',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
     description: 'Probability Mean Weighted Naive Bayes，以概率均值作为加权依据',

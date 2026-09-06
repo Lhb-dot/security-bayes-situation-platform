@@ -23,7 +23,7 @@ function Stop-All {
     Get-Process -Name java,node,python -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
 
     # ③ 按端口兜底杀：谁占着 12312/12313/12314/5173 就杀谁（最彻底）
-    foreach ($port in 12312,12313,12314,12315,12316,12317,12318,5173) {
+    foreach ($port in 12312,12313,12314,12315,12316,12317,12318,12319,5173) {
         Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique |
             ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
@@ -124,7 +124,8 @@ $algorithmServices = @(
     @{ Name = "A2WNB"; Jar = "a2wnb-service.jar"; Port = 12315; Code = "A2WNB" },
     @{ Name = "CAVWNB"; Jar = "cavwnb-service.jar"; Port = 12316; Code = "CAVWNB" },
     @{ Name = "EMAWNB"; Jar = "emawnb-service.jar"; Port = 12317; Code = "EMAWNB" },
-    @{ Name = "MAWNB"; Jar = "mawnb-service.jar"; Port = 12318; Code = "MAWNB" }
+    @{ Name = "MAWNB"; Jar = "mawnb-service.jar"; Port = 12318; Code = "MAWNB" },
+    @{ Name = "DIWNB"; Jar = "diwnb-service.jar"; Port = 12319; Code = "DIWNB" }
 )
 $algoLogDir = Join-Path $backend "storage\logs"
 New-Item -ItemType Directory -Path $algoLogDir -Force | Out-Null
