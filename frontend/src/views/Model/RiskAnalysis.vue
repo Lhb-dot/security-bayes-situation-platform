@@ -362,7 +362,7 @@ onBeforeUnmount(() => {
               :value="a.id"
               :disabled="!a.available"
             >
-              {{ a.display_name }}（{{ a.code }}）
+              {{ a.display_name }}
             </option>
           </select>
           <p v-if="currentAlgo" class="form-hint">{{ currentAlgo.description }}</p>

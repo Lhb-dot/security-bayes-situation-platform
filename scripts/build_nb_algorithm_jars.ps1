@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-$nbRoot = "D:\001Mine\005   Download\NB"
+$nbRoot = Join-Path $repo "backend\java\algorithm-src\NB"
 $pmwnbJar = Join-Path $repo "backend\lib\pmwnb-service.jar"
 $buildRoot = Join-Path $repo "backend\java\.build-nb"
 $classes = Join-Path $buildRoot "classes"
