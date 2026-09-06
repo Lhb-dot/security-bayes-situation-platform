@@ -7,23 +7,21 @@ import org.json.JSONObject;
 import weka.classifiers.Classifier;
 import weka.classifiers.Evaluation;
 import weka.classifiers.bayes.PMWNB.PMWNB.PMWNB;
-import weka.classifiers.meta.FilteredClassifier;
 import weka.core.Attribute;
 import weka.core.DenseInstance;
 import weka.core.Instance;
 import weka.core.Instances;
 import weka.core.SerializationHelper;
 import weka.core.converters.ConverterUtils.DataSource;
-import weka.filters.unsupervised.attribute.Discretize;
-
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
-/** PMWNB HTTP service with training-time discretization parameters. */
+/** PMWNB HTTP service. */
 public final class PmwnbService {
     private static final ConcurrentHashMap<String, Classifier> MODEL_CACHE = new ConcurrentHashMap<>();
 
@@ -55,20 +53,17 @@ public final class PmwnbService {
             if (parameters == null) parameters = new JSONObject();
 
             Instances data = loadDataset(datasetPath);
-            int bins = parameters.optInt("discrete_bins", 10);
-            String method = parameters.optString("discrete_method", "equal_width");
-            if (bins < 2 || bins > 100) throw new IllegalArgumentException("discrete_bins must be between 2 and 100");
 
             long started = System.nanoTime();
-            FilteredClassifier classifier = new FilteredClassifier();
-            classifier.setFilter(createDiscretizer(bins, method));
-            classifier.setClassifier(new PMWNB());
+            PMWNB classifier = new PMWNB();
             classifier.buildClassifier(data);
             SerializationHelper.write(modelSavePath, classifier);
             MODEL_CACHE.put(modelSavePath, classifier);
 
+            // 评估指标改用分层 10 折交叉验证（避免训练集重代入偏乐观）；
+            // 保存的模型仍用上面的全量数据训练。
             Evaluation evaluation = new Evaluation(data);
-            evaluation.evaluateModel(classifier, data);
+            evaluation.crossValidateModel(classifier, data, 10, new Random(1));
             double accuracy = evaluation.pctCorrect() / 100.0;
             double recall = evaluation.weightedRecall();
             double precision = evaluation.weightedPrecision();
@@ -143,14 +138,6 @@ public final class PmwnbService {
         data.deleteWithMissingClass();
         if (!data.classAttribute().isNominal()) throw new IllegalArgumentException("分类标签必须是名义型字段");
         return data;
-    }
-
-    private static Discretize createDiscretizer(int bins, String method) {
-        Discretize discretize = new Discretize();
-        discretize.setBins(bins);
-        discretize.setUseEqualFrequency("equal_freq".equalsIgnoreCase(method));
-        discretize.setUseBinNumbers(true);
-        return discretize;
     }
 
     private static Instance buildInstance(Instances header, JSONObject features) {

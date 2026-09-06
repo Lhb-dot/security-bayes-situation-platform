@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -86,10 +87,10 @@ public final class NbAlgorithmService {
             SerializationHelper.write(modelSavePath, classifier);
             MODEL_CACHE.put(modelSavePath, classifier);
 
-            // 这些研究算法（尤其 CAVWNB/MVCAVWNB）每次 buildClassifier 都会做权重优化。
-            // 训练一次后用同一真实分类器评估，避免交叉验证重复优化导致平台训练不可用。
+            // 评估指标改用分层 10 折交叉验证（避免训练集重代入偏乐观）；
+            // 保存的模型仍用全量数据训练（上面的 classifier.buildClassifier(data)）。
             Evaluation evaluation = new Evaluation(data);
-            evaluation.evaluateModel(classifier, data);
+            evaluation.crossValidateModel(classifier, data, 10, new Random(1));
 
             double accuracy = evaluation.pctCorrect() / 100.0;
             double recall = evaluation.weightedRecall();

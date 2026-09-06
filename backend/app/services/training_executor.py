@@ -19,8 +19,7 @@ ALGORITHM_SERVICE_URLS = {
     "CAVWNB": os.getenv("CAVWNB_SERVICE_URL", "http://127.0.0.1:12316"),
     "EMAWNB": os.getenv("EMAWNB_SERVICE_URL", "http://127.0.0.1:12317"),
     "MAWNB": os.getenv("MAWNB_SERVICE_URL", "http://127.0.0.1:12318"),
-    # 兼容旧模型记录；新算法字典已用 CAVWNB 替换 DIWNB。
-    "DIWNB": os.getenv("DIWNB_SERVICE_URL", "http://127.0.0.1:12318"),
+    "DIWNB": os.getenv("DIWNB_SERVICE_URL", "http://127.0.0.1:12319"),
 }
 
 
