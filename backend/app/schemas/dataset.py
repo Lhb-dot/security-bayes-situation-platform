@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class DatasetCreate(BaseModel):
-    """上传数据集（仅管理员；版本号由 Service 自动生成）。"""
+    """上传数据集；场景用户只能上传本人场景的 personal 数据。"""
 
     logical_id: str = Field(..., min_length=1, max_length=64, description="数据集逻辑 ID")
     scenario_id: int = Field(..., gt=0, description="所属场景 ID")

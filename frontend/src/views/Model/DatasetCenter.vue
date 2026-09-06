@@ -56,10 +56,11 @@ const fieldDialogTitle = ref('');
 const fieldDialogFields = ref<DatasetField[]>([]);
 const fieldDialogLoading = ref(false);
 
-/** current user (admin-only mutations) */
+/** current user (new uploads are available to all roles; version mutations remain admin-only) */
 const userStore = useUserStore();
 const isAdmin = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
+const canUpload = computed(() => Boolean(userStore.currentUser));
 
 const uploadDialogVisible = ref(false);
 /** 弹窗模式：upload=上传新数据集(v1)；newVersion=修改已用数据集→创建新版本（保留旧版本） */
@@ -89,7 +90,15 @@ const uploadFields = ref<Array<{ field_name: string; field_type: string; field_r
 const openUploadDialog = () => {
   uploadDialogMode.value = 'upload';
   newVersionTarget.value = null;
-  uploadForm.value = { dataset_id: '', name: '', scenario_id: '', data_format: 'arff', record_count: 0, file_path: '', label_field: '' };
+  uploadForm.value = {
+    dataset_id: '',
+    name: '',
+    scenario_id: isSuperAdmin.value ? '' : (userStore.boundScenarioId ?? ''),
+    data_format: 'arff',
+    record_count: 0,
+    file_path: '',
+    label_field: '',
+  };
   uploadFields.value = [{ field_name: '', field_type: 'float', field_role: '输入特征', description: '' }];
   selectedFile.value = null;
   uploadDialogVisible.value = true;
@@ -334,7 +343,7 @@ onMounted(async () => {
         <h2>数据集中心</h2>
         <p class="dataset-center__desc">全平台数据集统一管理，支持按业务场景筛选</p>
       </div>
-      <button v-if="isAdmin" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
+      <button v-if="canUpload" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
     </div>
 
     <!-- 筛选栏：系统管理员可切换场景；管理员/用户固定自己场景（场景名在顶栏头像上方显示） -->
@@ -513,7 +522,7 @@ onMounted(async () => {
         </div>
         <div class="upload-form__row">
           <label class="upload-form__label">所属场景<span class="required">*</span></label>
-          <select v-model="uploadForm.scenario_id" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion'">
+          <select v-model="uploadForm.scenario_id" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion' || !isSuperAdmin">
             <option value="" disabled>-- 请选择场景 --</option>
             <option value="network_security">网络安全</option>
             <option value="power_system">电力系统</option>

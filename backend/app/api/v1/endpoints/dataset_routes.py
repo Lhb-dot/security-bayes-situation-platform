@@ -2,7 +2,8 @@
 
 对应 Service：DatasetService（backend/app/services/dataset_service.py）。
 权限（需求 2.3/6.5.2）：查看列表与字段预览 → 登录用户（普通用户仅见已发布模型相关数据集）；
-上传/修改版本/停用/删除 → 仅 ADMIN。
+上传新数据集 → 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）；
+修改版本/停用/删除 → 仅 ADMIN。
 """
 from typing import Any, Dict, List, Optional
 
@@ -97,12 +98,12 @@ def get_dataset_preview(
 
 
 @router.post(
-    "", response_model=ResponseModel, summary="上传数据集（仅管理员，版本号自动生成）"
+    "", response_model=ResponseModel, summary="上传数据集（场景用户仅可上传个人数据，版本号自动生成）"
 )
 def create_dataset(
     payload: DatasetCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
+    current_user: AppUser = Depends(get_current_user),
 ):
     return unwrap(
         DatasetService(db).create(
@@ -129,7 +130,7 @@ async def upload_dataset(
     label_field: str = Form(..., description="标签字段名"),
     visibility: Optional[str] = Form(None, description="可见性 platform/company/personal"),
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
+    current_user: AppUser = Depends(get_current_user),
 ):
     file_bytes = await file.read()
     return unwrap(

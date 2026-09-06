@@ -8,7 +8,7 @@
 版本管理逻辑（自动递增版本号、引用保护、停用/删除规则）在本 Service 内实现。
 
 关键业务规则（需求 2.3）：
-1. 仅 ADMIN 可上传/修改/停用/删除；ADMIN 之间共享权限，不按上传人隔离。
+1. 管理级角色可修改/停用/删除；新建数据集还允许 SCENARIO_USER 上传本人场景的个人数据。
 2. 上传必须指定场景，并完成格式、固定字段、字段类型、标签字段校验。
 3. 已产生模型版本的数据集不得直接覆盖——"修改"必须创建新版本并保留旧版本。
 4. 已被模型版本引用的数据集版本不得物理删除，只能停用；未引用的可物理删除。
@@ -219,7 +219,7 @@ class DatasetService(ServiceBase):
         return ok(data=self._to_dict(dataset))
 
     # ------------------------------------------------------------------
-    # 上传 / 版本 / 停用 / 删除（需求 2.3：仅 ADMIN）
+    # 上传 / 版本 / 停用 / 删除（新建数据集允许场景用户上传 personal 数据）
     # ------------------------------------------------------------------
     @service_call
     def create(
@@ -244,8 +244,10 @@ class DatasetService(ServiceBase):
         elif role == ROLE_SCENARIO_USER:
             if scenario_id != getattr(current_user, "scenario_id", None):
                 raise ServiceError(403, "场景用户只能在自己场景上传个人数据")
-        else:
+        elif role == ROLE_SUPER_ADMIN:
             self.require_login(current_user)
+        else:
+            raise ServiceError(403, "无权限操作")
 
         # 可见性：默认按角色；SCENARIO_USER 强制 personal；显式传入则校验合法
         if role == ROLE_SCENARIO_USER:
