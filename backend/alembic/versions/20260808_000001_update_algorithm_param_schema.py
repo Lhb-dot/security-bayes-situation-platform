@@ -94,13 +94,14 @@ ALGORITHMS = [
         ],
     },
     {
-        "code": "DIWNB",
-        "display_name": "差分加权朴素贝叶斯",
-        "description": "Differential Weighted Naive Bayes，基于特征差分信号加权"
-                       "（占位训练，算法实现待算法组交付）",
+        "code": "CAVWNB",
+        "display_name": "CAVWNB 类别自适应加权朴素贝叶斯",
+        "description": "Category-Adaptive Variable Weighted Naive Bayes，使用外部 Java/Weka 真实实现",
         "param_schema": [
             DISCRETE_METHOD, DISCRETE_BINS, SMOOTHING,
-            _num("differential_order", "差分阶数", 1, "int", 1, 3, 1, "特征差分的阶数"),
+            _enum("objective", "目标函数", "CLL", ["CLL", "MSE"],
+                  [{"value": "CLL", "label": "条件对数似然"}, {"value": "MSE", "label": "均方误差"}],
+                  "CAVWNB 权重优化目标"),
         ],
     },
     {
@@ -132,7 +133,7 @@ def downgrade() -> None:
         "UPDATE algorithm SET display_name = :display_name, description = :desc, "
         "param_schema = CAST(:param_schema AS jsonb) WHERE code = :code"
     )
-    for code in ("A2WNB", "MAWNB", "EMAWNB", "DIWNB"):
+    for code in ("A2WNB", "MAWNB", "EMAWNB", "CAVWNB"):
         op.execute(sql.bindparams(
             code=code, display_name="（待算法组确认）", desc="矩阵加权贝叶斯系",
             param_schema=json.dumps([]),

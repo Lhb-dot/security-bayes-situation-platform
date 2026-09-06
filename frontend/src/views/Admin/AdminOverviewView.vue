@@ -5,13 +5,15 @@
  * 定位（需求 7.0）：管理员无个人首页，登录后进入平台级"驾驶舱"，
  * 一眼确认四个场景是否都在正常运行、哪里出问题。
  * 数据链路：页面 → store（situation / riskEvent / scenario / threshold）→ mockApi；
- * 30 秒轮询自动刷新 + 手动刷新 + 实时时钟；仅 SUPER_ADMIN 可见（路由守卫 + 页内双保险）。
+ * 
+ * 按设置轮询自动刷新 + 手动刷新 + 实时时钟；仅 SUPER_ADMIN 可见（路由守卫 + 页内双保险）。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSituationStore } from '@/stores/situationStore';
 import { useRiskEventStore } from '@/stores/riskEventStore';
 import { useScenarioStore } from '@/stores/scenarioStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useThresholdStore } from '@/stores/thresholdStore';
 import { useUserStore } from '@/stores/userStore';
 import { useModelStore } from '@/stores/modelStore';
@@ -41,6 +43,7 @@ const modelStore = useModelStore();
 const situationStore = useSituationStore();
 const riskEventStore = useRiskEventStore();
 const scenarioStore = useScenarioStore();
+const settingsStore = useSettingsStore();
 const thresholdStore = useThresholdStore();
 
 const loading = ref(true);
@@ -360,15 +363,29 @@ const refreshData = async (): Promise<void> => {
   }
 };
 
+
+const startAutoRefresh = (): void => {
+  if (refreshTimer !== null) window.clearInterval(refreshTimer);
+  refreshTimer = null;
+  if (!settingsStore.autoRefresh) return;
+  refreshTimer = window.setInterval(refreshData, settingsStore.refreshInterval * 1000);
+};
+
 const tickClock = (): void => {
   clock.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
 };
 
+watch(
+  [() => settingsStore.autoRefresh, () => settingsStore.refreshInterval],
+  startAutoRefresh,
+);
+
 onMounted(async () => {
+  settingsStore.loadForUser(userStore.currentUser?.user_id);
   tickClock();
   clockTimer = window.setInterval(tickClock, 1000);
   await refreshData();
-  refreshTimer = window.setInterval(refreshData, 30_000);
+  startAutoRefresh();
 });
 
 onBeforeUnmount(() => {

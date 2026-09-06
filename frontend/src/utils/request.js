@@ -1,41 +1,79 @@
 import axios from 'axios';
 
-// 创建Axios实例，统一后端基础地址、超时、请求头
+const CSRF_STORAGE_KEY = 'bayes_csrf_token';
+
 const service = axios.create({
-  baseURL: 'http://127.0.0.1:12312', // 后端本地服务地址
-  timeout: 0, // 不设超时上限
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  // Dev: empty baseURL + Vite /api proxy keeps cookies first-party.
+  // Prod: set VITE_API_BASE_URL to the backend origin when not same-origin.
+  baseURL: import.meta.env.VITE_API_BASE_URL || '',
+  timeout: 0,
+  withCredentials: true,
+  // 注意：不在此处写死 Content-Type。axios 会自动处理——
+  // JSON 对象请求自动带 application/json，FormData 上传自动带 multipart/form-data(boundary)。
 });
 
-// 请求拦截器：统一携带登录凭证（需求 1.1.1 未登录用户不得访问业务接口）
-// 会话 key 与 mockApi 保持一致（SESSION_KEY = 'bayes_session_user_id'）
+const readCookie = (name) => {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie
+    .split('; ')
+    .find((value) => value.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
+};
+
+export const setCsrfToken = (token) => {
+  if (token) {
+    window.sessionStorage.setItem(CSRF_STORAGE_KEY, token);
+  } else {
+    window.sessionStorage.removeItem(CSRF_STORAGE_KEY);
+  }
+};
+
+const currentCsrfToken = () =>
+  readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf') ||
+  window.sessionStorage.getItem(CSRF_STORAGE_KEY);
+
+const extractErrorMessage = (error) => {
+  const data = error?.response?.data;
+  if (!data) return error?.message || '请求失败';
+  if (typeof data.message === 'string' && data.message) return data.message;
+  if (typeof data.detail === 'string' && data.detail) return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .join('; ');
+  }
+  if (data.detail && typeof data.detail === 'object' && data.detail.message) {
+    return data.detail.message;
+  }
+  return error?.message || '请求失败';
+};
+
 service.interceptors.request.use((config) => {
-  const userId = window.localStorage.getItem('bayes_session_user_id');
-  if (userId) {
-    config.headers['X-User-Id'] = userId;
+  const method = (config.method || 'get').toUpperCase();
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const csrf = currentCsrfToken();
+    if (csrf) {
+      config.headers = config.headers || {};
+      config.headers['X-CSRF-Token'] = csrf;
+    }
   }
   return config;
 });
 
-// 响应拦截器：统一剥离外层axios包装，直接拿到后端真正data
 service.interceptors.response.use(
-  (response) => {
-    return response.data;
-  },
+  (response) => response.data,
   (error) => {
-    console.error('后端接口请求异常：', error);
-    return Promise.reject(error);
-  }
+    if (error.response?.status === 401) {
+      setCsrfToken(null);
+      window.localStorage.removeItem('bayes_session_user_id');
+      if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login';
+      }
+    }
+    return Promise.reject(new Error(extractErrorMessage(error)));
+  },
 );
 
-/**
- * 统一解包后端响应结构 {code, data, message}（与 /api/v1 约定一致）：
- * - code === 0 → 返回 data
- * - 非零 code → 抛出 message 错误
- * 说明：返回值为任意类型，具体类型由各 API 模块的函数签名显式声明。
- */
 export const unwrapData = (res) => {
   if (res && res.code === 0) return res.data;
   throw new Error(res?.message || '请求失败');

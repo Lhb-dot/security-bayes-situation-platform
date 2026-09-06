@@ -8,23 +8,26 @@
 import { computed, onMounted, ref } from 'vue';
 import type { Report, ScenarioId, UserAccount } from '@/types/security';
 import { useScenarioStore } from '@/stores/scenarioStore';
-import { getReportList, generateReport, getCurrentUser, getUserList, updateReportSchedule } from '@/services/mockApi';
-import { ElMessage } from 'element-plus';
+import { useUserStore } from '@/stores/userStore';
+import { getReportList, generateReport, updateReportSchedule, removeReport } from '@/api/reportApi';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 const reports = ref<Report[]>([]);
 const loading = ref(true);
 const error = ref('');
-const currentUser = ref<UserAccount | null>(null);
 const users = ref<UserAccount[]>([]);
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+const currentUser = computed(() => userStore.currentUser);
+const isAdmin = computed(() => userStore.isManagement);
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
 const loadReports = async () => {
   loading.value = true;
   error.value = '';
   try {
-    reports.value = await getReportList();
+    reports.value = await getReportList({ page: 1, page_size: 200 });
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告数据加载失败';
   } finally {
@@ -33,7 +36,8 @@ const loadReports = async () => {
 };
 
 const handleView = (report: Report) => {
-  ElMessage.info(`查看报告：${report.title}`);
+  viewTarget.value = report;
+  viewVisible.value = true;
 };
 
 /** 导出报告：生成 Markdown 文本下载（需求 6.2 P1 支持导出） */
@@ -47,7 +51,7 @@ const handleDownload = (report: Report) => {
     '',
     '## 摘要',
     '',
-    report.summary,
+    report.content ?? report.summary,
     '',
     '---',
     '由多场景贝叶斯分类态势感知系统自动生成',
@@ -68,12 +72,36 @@ const handleRegenerate = async (report: Report) => {
     await generateReport({
       scenario_id: report.scenario_id,
       title: report.title,
-      scope: isAdmin.value ? 'all' : 'self',
+      scope: report.target_user_id ? 'user' : isAdmin.value ? 'all' : 'self',
+      target_user_id: report.target_user_id,
+      format: report.format,
+      scheduled: report.scheduled,
+      interval_days: report.interval_days,
     });
     ElMessage.success(`已重新生成报告：${report.title}`);
     await loadReports();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
+  }
+};
+
+/** 删除报告（生成者本人或管理员） */
+const handleDelete = async (report: Report) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除报告「${report.title}」？删除后不可恢复。`,
+      '删除报告',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await removeReport(report.report_id);
+    ElMessage.success('报告已删除');
+    await loadReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '删除失败');
   }
 };
 
@@ -89,8 +117,11 @@ const genForm = ref({
   interval_days: 7,
 });
 
+const viewVisible = ref(false);
+const viewTarget = ref<Report | null>(null);
+
 const openGenerate = () => {
-  genForm.value = { title: '', scenario_id: '', scope: isAdmin.value ? 'all' : 'self', target_user_id: '', format: 'markdown', scheduled: false, interval_days: 7 };
+  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: isAdmin.value ? 'all' : 'self', target_user_id: '', format: 'markdown', scheduled: false, interval_days: 7 };
   genVisible.value = true;
 };
 
@@ -196,10 +227,11 @@ const formatLabel: Record<string, string> = {
 };
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  if (!userStore.initialized) await userStore.bootstrap();
   await scenarioStore.fetchScenarioList();
   if (isAdmin.value) {
-    users.value = await getUserList();
+    await userStore.fetchUsers({ page: 1, page_size: 200 });
+    users.value = userStore.users;
   }
   await loadReports();
 });
@@ -285,110 +317,132 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="300" align="center" fixed="right">
+        <el-table-column label="操作" width="360" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
               <el-button size="small" @click="handleDownload(row)">下载</el-button>
               <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="success" plain @click="openSchedule(row)">定时</el-button>
               <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
+              <el-button v-if="row.generated_by === currentUser?.user_id || isAdmin" size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <!-- 生成报告弹窗 -->
-    <div v-if="genVisible" class="modal-mask" @click.self="genVisible = false">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>生成态势报告</h3>
-          <button class="modal-close" @click="genVisible = false">✕</button>
+    <!-- 生成报告弹窗（与数据集中心字段预览同款 el-dialog；场景下拉仅系统管理员可见） -->
+    <el-dialog
+      v-model="genVisible"
+      class="report-dialog"
+      title="生成态势报告"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="gen-form">
+        <div class="gen-field">
+          <label class="gen-field__label">报告标题<span class="required">*</span></label>
+          <input v-model.trim="genForm.title" class="gen-field__input" placeholder="如：网络安全月度态势报告" />
         </div>
-        <div class="modal-card__body">
-          <div class="gen-field">
-            <label class="gen-field__label">报告标题<span class="required">*</span></label>
-            <input v-model.trim="genForm.title" class="gen-field__input" placeholder="如：网络安全月度态势报告" />
-          </div>
-          <div class="gen-field">
-            <label class="gen-field__label">报告场景<span class="required">*</span></label>
-            <select v-model="genForm.scenario_id" class="gen-field__input">
-              <option value="" disabled>-- 请选择场景 --</option>
-              <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
-            </select>
-          </div>
-          <div class="gen-field">
-            <label class="gen-field__label">数据范围</label>
-            <select v-model="genForm.scope" class="gen-field__input" :disabled="!isAdmin">
-              <option value="self">本人数据</option>
-              <option v-if="isAdmin" value="all">全平台数据</option>
-              <option v-if="isAdmin" value="user">指定用户数据</option>
-            </select>
-          </div>
-          <div v-if="isAdmin && genForm.scope === 'user'" class="gen-field">
-            <label class="gen-field__label">目标用户<span class="required">*</span></label>
-            <select v-model="genForm.target_user_id" class="gen-field__input">
-              <option value="" disabled>-- 请选择用户 --</option>
-              <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
-            </select>
-          </div>
-          <div class="gen-field">
-            <label class="gen-field__label">报告格式</label>
-            <select v-model="genForm.format" class="gen-field__input">
-              <option value="markdown">Markdown</option>
-              <option value="html">HTML</option>
-              <option value="pdf">PDF</option>
-            </select>
-          </div>
-          <div class="gen-field">
-            <label class="gen-field__label">定时生成</label>
-            <div class="gen-schedule">
-              <el-switch v-model="genForm.scheduled" />
-              <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
-            </div>
-          </div>
-          <div v-if="genForm.scheduled" class="gen-field">
-            <label class="gen-field__label">生成周期（天）</label>
-            <input v-model.number="genForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
+        <div v-if="isSuperAdmin" class="gen-field">
+          <label class="gen-field__label">报告场景<span class="required">*</span></label>
+          <select v-model="genForm.scenario_id" class="gen-field__input">
+            <option value="" disabled>-- 请选择场景 --</option>
+            <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
+          </select>
+        </div>
+        <div v-else class="gen-field">
+          <label class="gen-field__label">报告场景</label>
+          <div class="gen-field__static">{{ scenarioLabel[genForm.scenario_id] ?? genForm.scenario_id }}</div>
+        </div>
+        <div class="gen-field">
+          <label class="gen-field__label">数据范围</label>
+          <select v-model="genForm.scope" class="gen-field__input" :disabled="!isAdmin">
+            <option value="self">本人数据</option>
+            <option v-if="isAdmin" value="all">全平台数据</option>
+            <option v-if="isAdmin" value="user">指定用户数据</option>
+          </select>
+        </div>
+        <div v-if="isAdmin && genForm.scope === 'user'" class="gen-field">
+          <label class="gen-field__label">目标用户<span class="required">*</span></label>
+          <select v-model="genForm.target_user_id" class="gen-field__input">
+            <option value="" disabled>-- 请选择用户 --</option>
+            <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
+          </select>
+        </div>
+        <div class="gen-field">
+          <label class="gen-field__label">报告格式</label>
+          <select v-model="genForm.format" class="gen-field__input">
+            <option value="markdown">Markdown</option>
+            <option value="html">HTML</option>
+            <option value="pdf">PDF</option>
+          </select>
+        </div>
+        <div class="gen-field">
+          <label class="gen-field__label">定时生成</label>
+          <div class="gen-schedule">
+            <el-switch v-model="genForm.scheduled" />
+            <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
           </div>
         </div>
-        <div class="modal-card__foot">
-          <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
-          <button class="gen-btn" @click="submitGenerate">生成报告</button>
+        <div v-if="genForm.scheduled" class="gen-field">
+          <label class="gen-field__label">生成周期（天）</label>
+          <input v-model.number="genForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
         </div>
       </div>
-    </div>
+      <template #footer>
+        <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
+        <button class="gen-btn" @click="submitGenerate">生成报告</button>
+      </template>
+    </el-dialog>
 
-    <!-- 定时设置弹窗 -->
-    <div v-if="scheduleVisible" class="modal-mask" @click.self="scheduleVisible = false">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>定时设置</h3>
-          <button class="modal-close" @click="scheduleVisible = false">✕</button>
+    <!-- 报告详情弹窗 -->
+    <el-dialog
+      v-model="viewVisible"
+      class="report-dialog"
+      :title="viewTarget?.title ?? '报告详情'"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <pre class="report-content">{{ viewTarget?.content ?? viewTarget?.summary }}</pre>
+    </el-dialog>
+
+    <!-- 定时设置弹窗：只保存配置，不执行调度 -->
+    <el-dialog
+      v-model="scheduleVisible"
+      class="report-dialog"
+      title="定时设置"
+      width="460px"
+      top="12vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="gen-form">
+        <div class="gen-field">
+          <label class="gen-field__label">报告</label>
+          <div class="gen-field__static">{{ scheduleTarget?.title }}</div>
         </div>
-        <div class="modal-card__body">
-          <div class="gen-field">
-            <label class="gen-field__label">报告</label>
-            <div class="gen-field__static">{{ scheduleTarget?.title }}</div>
-          </div>
-          <div class="gen-field">
-            <label class="gen-field__label">定时生成</label>
-            <div class="gen-schedule">
-              <el-switch v-model="scheduleForm.scheduled" />
-              <span class="gen-schedule__hint">{{ scheduleForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
-            </div>
-          </div>
-          <div v-if="scheduleForm.scheduled" class="gen-field">
-            <label class="gen-field__label">生成周期（天）</label>
-            <input v-model.number="scheduleForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
+        <div class="gen-field">
+          <label class="gen-field__label">定时生成</label>
+          <div class="gen-schedule">
+            <el-switch v-model="scheduleForm.scheduled" />
+            <span class="gen-schedule__hint">{{ scheduleForm.scheduled ? '已开启定时配置' : '关闭（手动生成）' }}</span>
           </div>
         </div>
-        <div class="modal-card__foot">
-          <button class="gen-btn gen-btn--ghost" @click="scheduleVisible = false">取消</button>
-          <button class="gen-btn" @click="submitSchedule">保存</button>
+        <div v-if="scheduleForm.scheduled" class="gen-field">
+          <label class="gen-field__label">生成周期（天）</label>
+          <input v-model.number="scheduleForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
         </div>
       </div>
-    </div>
+      <template #footer>
+        <button class="gen-btn gen-btn--ghost" @click="scheduleVisible = false">取消</button>
+        <button class="gen-btn" @click="submitSchedule">保存</button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -548,59 +602,9 @@ onMounted(async () => {
   border: 1px solid rgba(125, 201, 255, 0.25);
 }
 
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(3, 8, 16, 0.7);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.modal-card {
-  width: 460px;
-  max-width: calc(100vw - 40px);
-  border-radius: 14px;
-  border: 1px solid rgba(125, 201, 255, 0.22);
-  background: linear-gradient(160deg, rgba(13, 26, 46, 0.96), rgba(8, 17, 31, 0.98));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-}
-
-.modal-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
-}
-
-.modal-card__head h3 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.modal-close {
-  border: none;
-  background: transparent;
-  color: rgba(220, 234, 255, 0.6);
-  font-size: 1rem;
-  cursor: pointer;
-}
-
-.modal-card__body {
-  padding: 20px;
+.gen-form {
   display: grid;
   gap: 14px;
-}
-
-.modal-card__foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 14px 20px;
-  border-top: 1px solid rgba(125, 201, 255, 0.1);
 }
 
 .gen-field {
@@ -663,9 +667,50 @@ onMounted(async () => {
   color: #cfe2ff;
   font-size: 0.88rem;
 }
+
+.report-content {
+  margin: 0;
+  min-height: 220px;
+  max-height: 62vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #d9e8ff;
+  font: inherit;
+  line-height: 1.7;
+}
 </style>
 
 <style>
+
+/* 与数据集中心字段预览弹窗一致的暗色 el-dialog 样式（append-to-body 后挂到 body，用 .report-dialog class 保证生效） */
+.report-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.report-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
+}
+
+.report-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(220, 234, 255, 0.5) !important;
+}
+
+.report-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: #e8f1ff !important;
+}
+
+.report-dialog .el-dialog__body {
+  padding: 20px 24px !important;
+}
+
+.report-dialog .el-dialog__footer {
+  padding: 12px 24px 18px !important;
+}
+
 .report-center .el-table,
 .report-center .el-table__inner-wrapper,
 .report-center .el-table__body-wrapper,

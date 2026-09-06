@@ -19,8 +19,12 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_VISIBILITY_COMPANY,
+    DATASET_VISIBILITY_PLATFORM,
     MODEL_STATUS_PUBLISHED,
     ROLE_ADMIN,
+    ROLE_SCENARIO_ADMIN,
+    ROLE_SUPER_ADMIN,
     SCENARIO_ACCESS_ACTUAL,
     SCENARIO_ACCESS_STATUSES,
     SCENARIO_CODE_MAX_LEN,
@@ -63,8 +67,11 @@ class ScenarioService(ServiceBase):
 
     @service_call
     def get(self, current_user: Optional[AppUser], scenario_id: int):
-        """场景详情。"""
-        self.require_login(current_user)
+        """场景详情。
+
+        SUPER_ADMIN 可查看全部场景；场景角色仅可查看绑定场景（需求 0.2 / 1.1.6）。
+        """
+        self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "场景不存在")
@@ -82,15 +89,12 @@ class ScenarioService(ServiceBase):
 
         读取指定场景数据集 ARFF 的前 sample_rows 行，按场景分发计算
         （网络端口聚合/电力设备健康度/地质因子合成/航母轨迹特征）。
-        权限：登录用户；普通用户仅能访问被绑定场景（§1.1.6）的洞察。
+        权限：登录用户仅能访问有权场景；SUPER_ADMIN 仅可读 platform 数据集内容。
         """
-        self.require_login(current_user)
+        self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "场景不存在")
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            if getattr(current_user, "scenario_id", None) != scenario_id:
-                raise ServiceError(403, "无权限操作")
 
         from app.services.constants import DATASET_RISK_TYPES
         from app.services.training_executor import resolve_dataset_path
@@ -99,12 +103,16 @@ class ScenarioService(ServiceBase):
         stmt = select(Dataset).where(Dataset.scenario_id == scenario_id)
         if dataset_id is not None:
             stmt = stmt.where(Dataset.id == dataset_id)
+        if getattr(current_user, "role", None) == ROLE_SUPER_ADMIN:
+            stmt = stmt.where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
+        elif getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
+            stmt = stmt.where(Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)))
         stmt = stmt.order_by(Dataset.id)
         dataset = self.db.scalars(stmt).first()
         if dataset is None:
             raise ServiceError(404, "该场景下没有可用数据集")
 
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
+        if getattr(current_user, "role", None) not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
             published = self.db.scalar(
                 select(func.count()).select_from(ModelVersion).where(
                     ModelVersion.dataset_id == dataset.id,

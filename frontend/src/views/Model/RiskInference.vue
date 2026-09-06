@@ -11,35 +11,34 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { useScenarioStore } from '@/stores/scenarioStore';
 import { useDatasetStore } from '@/stores/datasetStore';
-import { useModelStore } from '@/stores/modelStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
-import type {
-  AlgorithmDefinition,
-  Dataset,
-  DatasetField,
-  ModelVersionRecord,
-  ScenarioId,
-} from '@/types/security';
-// 过渡期：InferenceResult 类型定义于 mockApi.ts（仅 type import，页面不调用 mockApi 函数）
-import type { InferenceResult } from '@/services/mockApi';
+import { getScenarioList } from '@/api/scenarioApi';
+import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
+import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
+import type { PredictResult } from '@/api/inferenceRecordApi';
 
 const router = useRouter();
 const route = useRoute();
-const scenarioStore = useScenarioStore();
 const datasetStore = useDatasetStore();
-const modelStore = useModelStore();
 const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
+
+/** 真实场景列表（直接调 /api/v1/scenarios，绕过 mock 的 scenarioStore） */
+interface RealScenario { id: number; code: string; name: string; access_status: string; }
+const scenarios = ref<RealScenario[]>([]);
+/** 真实模型版本列表（直接调 /api/v1/model-versions） */
+const modelVersions = ref<BackendModelVersion[]>([]);
 
 /** 需求 6.5.2/6.2：系统管理员用 tabs 切场景；管理员/用户场景固定（账号绑定，自动确定） */
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 
 /** 场景选项：普通用户=感兴趣的场景（设置页自选），管理员=全部场景 */
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
-  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
+  scenarios.value
+    .filter((s) => s.access_status === 'ACTUAL')
+    .map((s) => ({ value: s.code as ScenarioId, label: s.name }))
 );
 
 const selectedScenario = ref<ScenarioId | ''>('');
@@ -53,23 +52,20 @@ const datasetOptions = computed<Dataset[]>(() =>
     : []
 );
 
-/** 当前范围的已发布模型（modelStore.fetchModelVersions 已过滤） */
-const publishedModels = computed<ModelVersionRecord[]>(() =>
-  modelStore.modelVersions.filter((m: ModelVersionRecord) => m.status === 'PUBLISHED')
+/** 当前范围的已发布模型（直接调 /api/v1/model-versions） */
+const publishedModels = computed<BackendModelVersion[]>(() =>
+  modelVersions.value.filter((m) => m.status === 'PUBLISHED')
 );
 const loadingModels = ref(false);
-const selectedModelId = ref('');
-
-const algoName = (id: string) =>
-  modelStore.algorithms.find((a: AlgorithmDefinition) => a.algorithm_id === id)?.display_name ?? id;
+const selectedModelId = ref<string | number>('');
 
 const inputFields = ref<DatasetField[]>([]);
 const inputData = ref<Record<string, string | number>>({});
-const inferResult = ref<InferenceResult | null>(null);
+const inferResult = ref<PredictResult | null>(null);
 const hasInferred = ref(false);
 const inferring = ref(false);
 
-const selectedModel = computed(() => publishedModels.value.find((m) => m.model_version_id === selectedModelId.value));
+const selectedModel = computed(() => publishedModels.value.find((m) => String(m.model_version_id) === String(selectedModelId.value)));
 
 // ===================== 场景切换 =====================
 watch(selectedScenario, async (scenario) => {
@@ -103,7 +99,13 @@ watch(selectedDatasetId, async (datasetId) => {
   if (!datasetId) return;
   loadingModels.value = true;
   try {
-    await modelStore.fetchModelVersions(selectedScenario.value || undefined, datasetId);
+    // 后端 model-versions 的 scenario_id 是数字 ID，需把场景编码转成数字
+    const scenarioNumeric = scenarios.value.find((s) => s.code === selectedScenario.value)?.id;
+    modelVersions.value = await getModelVersionList({
+      scenario_id: scenarioNumeric,
+      dataset_id: datasetId,
+      page_size: 200,
+    });
     // 自动选中默认推荐模型（需求 6.7.4.3）；无默认时提示手动选择（需求 6.7.4.6）
     const def = publishedModels.value.find((m) => m.is_default);
     if (def) {
@@ -123,10 +125,10 @@ watch(selectedModelId, async (modelId) => {
   inferResult.value = null;
   hasInferred.value = false;
   if (!modelId) return;
-  const model = publishedModels.value.find((m) => m.model_version_id === modelId);
+  const model = publishedModels.value.find((m) => String(m.model_version_id) === String(modelId));
   if (!model) return;
   try {
-    await datasetStore.fetchFields(model.dataset_id, model.dataset_version);
+    await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''));
     const allFields = datasetStore.fields;
     inputFields.value = allFields.filter((f: DatasetField) => f.field_role === '输入特征');
     inputData.value = buildInputData(inputFields.value);
@@ -241,8 +243,8 @@ const handleInfer = async () => {
     });
     inferResult.value = result;
     hasInferred.value = true;
-    if (result.is_risk) {
-      ElMessage.success(`检测到风险，已生成风险事件 ${result.generated_event_id ?? ''}，可在「推理记录 / 告警中心」查看`);
+    if (result.is_risk_event) {
+      ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}，可在「推理记录 / 告警中心」查看`);
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '推理请求失败');
@@ -252,15 +254,14 @@ const handleInfer = async () => {
 };
 
 /** 推理结果 → 风险事件详情（Task 012 /events/:id） */
-const goEventDetail = (eventId: string) => {
+const goEventDetail = (eventId?: string | number) => {
+  if (eventId == null) return;
   router.push({ path: `/events/${eventId}` });
 };
 
 onMounted(async () => {
-  await Promise.all([
-    scenarioStore.fetchScenarioList(),
-    modelStore.fetchAlgorithms(),
-  ]);
+  const list = await getScenarioList();
+  scenarios.value = list as unknown as RealScenario[];
   // 自动确定当前场景：普通用户取绑定/自选场景（首个）；管理员默认选中第一个便于直接操作（仍可通过 tabs 切换）。
   if (!selectedScenario.value && scenarioOptions.value.length) {
     selectedScenario.value = scenarioOptions.value[0].value;
@@ -343,12 +344,12 @@ onMounted(async () => {
                   <span class="model-option__id">{{ m.model_version_id }}</span>
                   <span v-if="m.is_default" class="model-option__default">默认推荐</span>
                 </div>
-                <div class="model-option__algo">{{ algoName(m.algorithm_id) }}</div>
+                <div class="model-option__algo">{{ m.algorithm_name ?? m.algorithm_id }}</div>
                 <div class="model-option__metrics">
-                  <span>Acc {{ (m.evaluation_metrics.accuracy * 100).toFixed(1) }}%</span>
-                  <span>Rec {{ (m.evaluation_metrics.recall * 100).toFixed(1) }}%</span>
-                  <span>F1 {{ (m.evaluation_metrics.f1 * 100).toFixed(1) }}%</span>
-                  <span>G-mean {{ (m.evaluation_metrics.g_mean * 100).toFixed(1) }}%</span>
+                  <span>Acc {{ (Number(m.evaluation_metrics.accuracy) * 100).toFixed(1) }}%</span>
+                  <span>Rec {{ (Number(m.evaluation_metrics.recall) * 100).toFixed(1) }}%</span>
+                  <span>F1 {{ (Number(m.evaluation_metrics.f1) * 100).toFixed(1) }}%</span>
+                  <span>G-mean {{ (Number(m.evaluation_metrics.g_mean) * 100).toFixed(1) }}%</span>
                 </div>
               </div>
             </label>
@@ -449,48 +450,48 @@ onMounted(async () => {
             <span class="result-item__label">分类结果</span>
             <span
               class="result-item__value result-level-badge"
-              :class="`level--${inferResult.risk_level}`"
+              :class="`level--${inferResult.risk_level ?? 'LOW'}`"
             >
-              {{ inferResult.is_risk ? '风险类' : '正常类' }}
+              {{ inferResult.is_risk_event ? '风险类' : '正常类' }}
             </span>
           </div>
           <div class="result-item">
+            <span class="result-item__label">预测标签</span>
+            <span class="result-item__value">{{ inferResult.prediction_label }}</span>
+          </div>
+          <div v-if="inferResult.is_risk_event" class="result-item">
             <span class="result-item__label">风险等级</span>
             <span class="result-item__value">
               {{ inferResult.risk_level === 'HIGH' ? '高' : inferResult.risk_level === 'MEDIUM' ? '中' : '低' }}
             </span>
           </div>
-          <div class="result-item">
+          <div v-if="inferResult.is_risk_event" class="result-item">
             <span class="result-item__label">风险概率</span>
             <span class="result-item__value result-item__value--num">
-              {{ (inferResult.risk_probability * 100).toFixed(1) }}%
+              {{ ((inferResult.risk_score ?? 0) * 100).toFixed(1) }}%
             </span>
           </div>
-          <div class="result-item">
-            <span class="result-item__label">原始预测标签</span>
-            <span class="result-item__value">{{ inferResult.original_label }}</span>
-          </div>
-          <div class="result-item">
+          <div v-if="inferResult.is_risk_event" class="result-item">
             <span class="result-item__label">风险类型</span>
-            <span class="result-item__value">{{ inferResult.risk_type || '—' }}</span>
+            <span class="result-item__value">{{ inferResult.risk_event?.risk_type || '—' }}</span>
           </div>
-          <div class="result-item">
-            <span class="result-item__label">推荐措施</span>
-            <span class="result-item__value">{{ inferResult.recommendation }}</span>
+          <div v-if="inferResult.is_risk_event" class="result-item">
+            <span class="result-item__label">风险说明</span>
+            <span class="result-item__value">{{ inferResult.risk_event?.description || '—' }}</span>
           </div>
           <div class="result-item">
             <span class="result-item__label">使用模型</span>
-            <span class="result-item__value">{{ inferResult.model_used }}</span>
+            <span class="result-item__value">{{ inferResult.model_version_id }}</span>
           </div>
-          <div v-if="inferResult.is_risk" class="event-tip">
-            已生成风险事件：{{ inferResult.generated_event_id }}（状态：待处置）
+          <div v-if="inferResult.is_risk_event" class="event-tip">
+            已生成风险事件：{{ inferResult.risk_event?.id }}（状态：待处置）
             <el-button
-              v-if="inferResult.generated_event_id"
+              v-if="inferResult.risk_event?.id"
               size="small"
               type="primary"
               plain
               class="event-tip__btn"
-              @click="goEventDetail(inferResult.generated_event_id)"
+              @click="goEventDetail(inferResult.risk_event?.id)"
             >
               查看风险事件详情
             </el-button>

@@ -16,53 +16,68 @@ _ATTR_RE = re.compile(r"@ATTRIBUTE\s+(.+)$", re.IGNORECASE)
 
 
 def _split_enum_values(content: str):
-    """切分 ARFF 枚举定义 `{a, b, 'c d', ...}` → 值列表（正确处理引号与逗号）。"""
+    """切分 ARFF 枚举定义 `{a, b, 'c d', ...}` → 值列表（正确处理转义引号与逗号）。"""
     values: list[str] = []
     buf = ""
     in_quote = False
     quote_char = ""
-    for ch in content:
+    i = 0
+    while i < len(content):
+        ch = content[i]
         if in_quote:
-            buf += ch
+            if ch == "\\" and i + 1 < len(content) and content[i + 1] == quote_char:
+                buf += quote_char
+                i += 2
+                continue
             if ch == quote_char:
                 in_quote = False
+            else:
+                buf += ch
         elif ch in ("'", '"'):
             in_quote = True
             quote_char = ch
-            buf += ch
         elif ch == ",":
             v = buf.strip()
             if v:
-                values.append(v.strip("'\""))
+                values.append(v)
             buf = ""
         else:
             buf += ch
+        i += 1
     v = buf.strip()
     if v:
-        values.append(v.strip("'\""))
+        values.append(v)
     return values
 
 
 def _split_data_row(line: str):
-    """切分一行 @DATA 记录，支持带引号字段（值内可能含逗号）。"""
+    """切分一行 @DATA 记录，支持带引号字段与转义字符（值内可能含逗号）。"""
     values: list[str] = []
     buf = ""
     in_quote = False
     quote_char = ""
-    for ch in line:
+    i = 0
+    while i < len(line):
+        ch = line[i]
         if in_quote:
-            buf += ch
+            if ch == "\\" and i + 1 < len(line) and line[i + 1] == quote_char:
+                buf += quote_char
+                i += 2
+                continue
             if ch == quote_char:
                 in_quote = False
+            else:
+                buf += ch
         elif ch in ("'", '"'):
             in_quote = True
             quote_char = ch
         elif ch == ",":
-            values.append(buf.strip().strip("'\""))
+            values.append(buf.strip())
             buf = ""
         else:
             buf += ch
-    values.append(buf.strip().strip("'\""))
+        i += 1
+    values.append(buf.strip())
     return values
 
 

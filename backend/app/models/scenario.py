@@ -29,5 +29,5 @@ class Scenario(Base):
     model_versions: Mapped[list["ModelVersion"]] = relationship(back_populates="scenario")
     risk_events: Mapped[list["RiskEvent"]] = relationship(back_populates="scenario")
     snapshots: Mapped[list["SituationSnapshot"]] = relationship(back_populates="scenario")
-    risk_threshold: Mapped["RiskThreshold"] = relationship(back_populates="scenario")
+    risk_thresholds: Mapped[list["RiskThreshold"]] = relationship(back_populates="scenario")
     audit_logs: Mapped[list["ThresholdAuditLog"]] = relationship(back_populates="scenario")

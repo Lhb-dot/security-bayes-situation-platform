@@ -18,6 +18,7 @@ const loading = ref(false);
 const errorMsg = ref('');
 
 const handleLogin = async () => {
+  if (loading.value) return;
   if (!username.value.trim() || !password.value) {
     errorMsg.value = '请输入用户名和密码';
     return;
@@ -39,8 +40,8 @@ const handleLogin = async () => {
     // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
     if (user.role === 'SUPER_ADMIN') {
       router.push('/overview');
-    } else if (user.scenario_ids?.[0]) {
-      router.push(`/scenarios/${user.scenario_ids[0]}/dashboard`);
+    } else if (user.scenario_code) {
+      router.push(`/scenarios/${user.scenario_code}/dashboard`);
     } else {
       router.push('/home');
     }
@@ -51,11 +52,6 @@ const handleLogin = async () => {
   }
 };
 
-const quickLogin = async (uname: string, pwd: string) => {
-  username.value = uname;
-  password.value = pwd;
-  await handleLogin();
-};
 </script>
 
 <template>
@@ -87,7 +83,6 @@ const quickLogin = async (uname: string, pwd: string) => {
             type="password"
             placeholder="请输入密码"
             autocomplete="current-password"
-            @keyup.enter="handleLogin"
           />
         </div>
         <p v-if="errorMsg" class="login-error">{{ errorMsg }}</p>

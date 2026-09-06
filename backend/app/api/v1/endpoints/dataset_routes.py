@@ -2,11 +2,12 @@
 
 对应 Service：DatasetService（backend/app/services/dataset_service.py）。
 权限（需求 2.3/6.5.2）：查看列表与字段预览 → 登录用户（普通用户仅见已发布模型相关数据集）；
-上传/修改版本/停用/删除 → 仅 ADMIN。
+上传新数据集 → 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）；
+修改版本/停用/删除 → 仅 ADMIN。
 """
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin, require_scenario_admin
@@ -97,12 +98,12 @@ def get_dataset_preview(
 
 
 @router.post(
-    "", response_model=ResponseModel, summary="上传数据集（仅管理员，版本号自动生成）"
+    "", response_model=ResponseModel, summary="上传数据集（场景用户仅可上传个人数据，版本号自动生成）"
 )
 def create_dataset(
     payload: DatasetCreate,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
+    current_user: AppUser = Depends(get_current_user),
 ):
     return unwrap(
         DatasetService(db).create(
@@ -113,6 +114,34 @@ def create_dataset(
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
             visibility=payload.visibility,
+        )
+    )
+
+
+@router.post(
+    "/upload",
+    response_model=ResponseModel,
+    summary="上传数据集文件（自动识别 ARFF/CSV 并解析字段结构）",
+)
+async def upload_dataset(
+    file: UploadFile = File(..., description="数据集文件（.arff / .csv）"),
+    logical_id: str = Form(..., description="数据集逻辑 ID"),
+    scenario_id: int = Form(..., description="所属场景 ID"),
+    label_field: str = Form(..., description="标签字段名"),
+    visibility: Optional[str] = Form(None, description="可见性 platform/company/personal"),
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    file_bytes = await file.read()
+    return unwrap(
+        DatasetService(db).upload_from_file(
+            current_user=current_user,
+            logical_id=logical_id,
+            scenario_id=scenario_id,
+            label_field=label_field,
+            filename=file.filename or "",
+            file_bytes=file_bytes,
+            visibility=visibility,
         )
     )
 

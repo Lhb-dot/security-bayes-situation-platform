@@ -221,7 +221,7 @@ export interface ModelVersion {
 }
 
 /** 模型生命周期状态（需求 6.7.2） */
-export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE';
+export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {
@@ -308,6 +308,7 @@ export interface Report {
   scenario_id: ScenarioId;
   scenario_name: string;
   summary: string;
+  content?: string;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';
@@ -318,6 +319,7 @@ export interface Report {
   interval_days?: number;
   /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
   generated_by?: string;
+  target_user_id?: string;
 }
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================
@@ -327,6 +329,7 @@ export type UserRole = 'SUPER_ADMIN' | 'SCENARIO_ADMIN' | 'SCENARIO_USER';
 
 /** 用户账号 */
 export interface UserAccount {
+  id: number;
   user_id: string;
   username: string;
   display_name: string;
@@ -335,7 +338,9 @@ export interface UserAccount {
   created_at: string;
   created_by: string;
   last_login_at?: string;
-  /** 绑定可见场景（需求 1.1.6 用户-场景绑定；缺省表示未绑定，由管理员分配） */
+  scenario_id: number | null;
+  scenario_code: ScenarioId | null;
+  /** @deprecated 仅为旧展示组件兼容；正式数据源只返回单个 scenario_code。 */
   scenario_ids?: ScenarioId[];
 }
 
@@ -370,7 +375,7 @@ export interface AlgorithmParamDef {
 
 /** 算法注册定义（需求 6.6.2 算法接入规则） */
 export interface AlgorithmDefinition {
-  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / DIWNB / PMWNB
+  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB
   display_name: string;
   available: boolean;                                     // 可用状态
   input_constraints: string;                              // 支持的输入类型或数据约束
@@ -402,23 +407,32 @@ export interface InferenceRecord {
 
 /** 按场景风险阈值配置 */
 export interface ThresholdConfig {
+  user_id?: number;
   scenario_id: ScenarioId;
   medium_threshold: number;
   high_threshold: number;
-  updated_by: string;                                     // 最后修改管理员
+  updated_by: number | string;                             // 最后修改账号
   updated_at: string;
 }
 
 /** 阈值变更记录（需求 5.4.1.5） */
 export interface ThresholdChangeLog {
-  log_id: string;
+  id?: number;
+  user_id?: number;
   scenario_id: ScenarioId;
-  operator_id: string;                                    // 管理员账号ID
-  changed_at: string;
-  old_medium_threshold: number;
-  old_high_threshold: number;
-  new_medium_threshold: number;
-  new_high_threshold: number;
+  operator_id: number | string;                            // 操作账号ID
+  operated_at?: string;
+  old_medium?: number;
+  old_high?: number;
+  new_medium?: number;
+  new_high?: number;
+  // 兼容旧 mock 数据结构
+  log_id?: string;
+  changed_at?: string;
+  old_medium_threshold?: number;
+  old_high_threshold?: number;
+  new_medium_threshold?: number;
+  new_high_threshold?: number;
 }
 
 // ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================
@@ -476,3 +490,4 @@ export interface ScenarioDashboardData {
   recent_events: RiskEvent[];             // 风险事件列表/时间线
   charts: ScenarioDashboardCharts;        // 场景特有图表数据
 }
+

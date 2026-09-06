@@ -8,14 +8,26 @@ $jar     = "$backend\lib\pmwnb-service.jar"
 $java25  = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe"
 $javaBin = if (Test-Path $java25) { $java25 } else { "java" }
 
-$javaPid = $null; $pyPid = $null; $vuePid = $null
+$javaPid = $null; $pyPid = $null; $vuePid = $null; $predictPid = $null; $algoPids = @()
 
 # ---- cleanup ----
 function Stop-All {
-    if ($javaPid) { Stop-Process -Id $javaPid -Force -EA SilentlyContinue }
-    if ($pyPid)   { Stop-Process -Id $pyPid   -Force -EA SilentlyContinue }
-    if ($vuePid)  { Stop-Process -Id $vuePid  -Force -EA SilentlyContinue }
-    Get-Process -Name java,node -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    # ① 按本次启动时记录的 PID 杀
+    if ($javaPid)    { Stop-Process -Id $javaPid    -Force -EA SilentlyContinue }
+    if ($predictPid) { Stop-Process -Id $predictPid -Force -EA SilentlyContinue }
+    foreach ($algoPid in $algoPids) { if ($algoPid) { Stop-Process -Id $algoPid -Force -EA SilentlyContinue } }
+    if ($pyPid)      { Stop-Process -Id $pyPid      -Force -EA SilentlyContinue }
+    if ($vuePid)     { Stop-Process -Id $vuePid     -Force -EA SilentlyContinue }
+
+    # ② 按名字兜底杀（java/node/python 一个不漏）
+    Get-Process -Name java,node,python -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+
+    # ③ 按端口兜底杀：谁占着 12312/12313/12314/5173 就杀谁（最彻底）
+    foreach ($port in 12312,12313,12314,12315,12316,12317,12318,5173) {
+        Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique |
+            ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
+    }
 }
 
 Clear-Host
@@ -29,6 +41,10 @@ if (-not (Get-Command python -EA SilentlyContinue)) { Write-Host "  [X] Python n
 if (-not (Get-Command node   -EA SilentlyContinue)) { Write-Host "  [X] Node.js not installed" -ForegroundColor Red;  $err=$true }
 if (-not (Test-Path $jar))  { Write-Host "  [X] lib/pmwnb-service.jar missing" -ForegroundColor Red; $err=$true }
 if ($err) { Write-Host ""; Read-Host "Press Enter to exit"; exit 1 }
+
+# ---- 先清掉上次可能残留的进程（不依赖上次是否正常退出）----
+Stop-All
+Start-Sleep 1
 
 # ---- PostgreSQL (数据库依赖, /api/v1 新世界必需) ----
 Write-Host "  PostgreSQL    " -NoNewline
@@ -54,6 +70,27 @@ if (-not $pgOk) {
 if ($pgOk) { Write-Host ":5432  OK" -ForegroundColor Green }
 else { Write-Host ":5432  FAIL (数据库不可用, /api/v1 接口将报错; 旧 /api/model 演示不受影响)" -ForegroundColor Red }
 
+# ---- 数据库迁移 (alembic: 对齐数据库结构与最新代码) ----
+if ($pgOk) {
+    Write-Host "  DB Migrate    " -NoNewline
+    Push-Location $backend
+    $migExit = 0
+    $migMsg = ""
+    try {
+        $migMsg = (& python -m alembic upgrade head 2>&1 | Out-String).Trim()
+        $migExit = $LASTEXITCODE
+    } catch {
+        $migExit = 1
+        $migMsg = $_.Exception.Message
+    }
+    Pop-Location
+    if ($migExit -eq 0) { Write-Host "OK" -ForegroundColor Green }
+    else {
+        Write-Host "WARN (迁移失败)" -ForegroundColor Yellow
+        Write-Host "      $migMsg" -ForegroundColor DarkYellow
+    }
+}
+
 # ---- Java PMWNB ----
 Write-Host "  Java PMWNB    " -NoNewline
 $p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
@@ -68,15 +105,56 @@ while ((Get-Date) -lt $t) {
 if ($ok) { Write-Host ":12313  OK" -ForegroundColor Green }
 else     { Write-Host ":12313  FAIL" -ForegroundColor Red }
 
+# ---- Java Predict (通用预测服务, 12314) ----
+Write-Host "  Predict       " -NoNewline
+$p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\predict-service.jar","12314" `
+    -WorkingDirectory $backend -WindowStyle Hidden -PassThru
+if ($p) { $predictPid = $p.Id }
+$ok = $false
+$t = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $t) {
+    try { if ((Invoke-RestMethod "http://127.0.0.1:12314/health" -TimeoutSec 2).status -eq "ok") { $ok=$true; break } } catch {}
+    Start-Sleep 1
+}
+if ($ok) { Write-Host ":12314  OK" -ForegroundColor Green }
+else     { Write-Host ":12314  FAIL" -ForegroundColor Red }
+
+# ---- Java algorithm services ----
+$algorithmServices = @(
+    @{ Name = "A2WNB"; Jar = "a2wnb-service.jar"; Port = 12315; Code = "A2WNB" },
+    @{ Name = "CAVWNB"; Jar = "cavwnb-service.jar"; Port = 12316; Code = "CAVWNB" },
+    @{ Name = "EMAWNB"; Jar = "emawnb-service.jar"; Port = 12317; Code = "EMAWNB" },
+    @{ Name = "MAWNB"; Jar = "mawnb-service.jar"; Port = 12318; Code = "MAWNB" }
+)
+$algoLogDir = Join-Path $backend "storage\logs"
+New-Item -ItemType Directory -Path $algoLogDir -Force | Out-Null
+foreach ($svc in $algorithmServices) {
+    Write-Host ("  Java {0}    " -f $svc.Name) -NoNewline
+    $svcArgs = @("-jar", (Join-Path $backend ("lib\{0}" -f $svc.Jar)), [string]$svc.Port, $svc.Code)
+    $svcProc = Start-Process -FilePath $javaBin -ArgumentList $svcArgs `
+        -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $algoLogDir ("{0}.out.log" -f $svc.Name)) `
+        -RedirectStandardError (Join-Path $algoLogDir ("{0}.err.log" -f $svc.Name))
+    if ($svcProc) { $algoPids += $svcProc.Id }
+    $svcOk = $false
+    $t = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $t) {
+        try { if ((Invoke-RestMethod ("http://127.0.0.1:{0}/health" -f $svc.Port) -TimeoutSec 2).status -eq "ok") { $svcOk = $true; break } } catch {}
+        Start-Sleep 1
+    }
+    if ($svcOk) { Write-Host (":{0}  OK" -f $svc.Port) -ForegroundColor Green }
+    else { Write-Host (":{0}  FAIL" -f $svc.Port) -ForegroundColor Red }
+}
+
 # ---- Python FastAPI ----
 Write-Host "  FastAPI       " -NoNewline
 $p = Start-Process -FilePath "python" -ArgumentList "-m","app.main" `
     -WorkingDirectory $backend -WindowStyle Hidden -PassThru
 if ($p) { $pyPid = $p.Id }
 $ok = $false
-$t = (Get-Date).AddSeconds(20)
+$t = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $t) {
-    try { if (Invoke-RestMethod "http://127.0.0.1:12312/api/model/dataset-list" -TimeoutSec 2) { $ok=$true; break } } catch {}
+    try { if (Invoke-RestMethod "http://127.0.0.1:12312/openapi.json" -TimeoutSec 2) { $ok=$true; break } } catch {}
     Start-Sleep 1
 }
 if ($ok) { Write-Host ":12312  OK" -ForegroundColor Green }

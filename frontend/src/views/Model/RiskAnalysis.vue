@@ -3,24 +3,24 @@
  * RiskAnalysis - 模型训练（数据库化版）
  *
  * 需求 6.3.1（管理员闭环）：选择场景 → 数据集版本 → 算法 → 配置训练参数 → 启动训练
- * 需求 6.6：算法代码注册（A2WNB/MAWNB/EMAWNB/DIWNB/PMWNB）+ 动态参数配置表单
+ * 需求 6.6：算法代码注册（A2WNB/MAWNB/EMAWNB/CAVWNB/PMWNB）+ 动态参数配置表单
  *   - 场景 / 数据集 / 算法 全部从 /api/v1 数据库渲染，不再使用 mock
  *   - 训练参数表单由算法注册的 param_schema 动态生成（需求 6.6.3）
  * 需求 6.7.2：训练成功生成 DRAFT 模型版本（待管理员在模型中心审核发布）
  * 需求 6.5.2：仅管理员可训练；普通用户只能使用已发布模型执行推理
  *
- * 训练执行策略（后端 /api/v1/model-versions/train）：
- *   - PMWNB：真实调用 Java 服务（weka 算法）训练，返回真实指标（source=java_pmwnb）
- *   - 其余算法：算法实现待交付，mock 占位指标（source=mock）
+ * 训练执行策略（后端 /api/v1/model-versions/train）：所有已注册算法均调用真实 Java/Weka 服务；
+ * 页面参数来自 algorithm.param_schema，并随训练请求传入服务。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AlgorithmParamDef, UserAccount } from '@/types/security';
-import { getCurrentUser } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 import { getScenarios, getDatasets, getAlgorithms, trainModel } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
+const userStore = useUserStore();
 
 // ===================== 权限 =====================
 const currentUser = ref<UserAccount | null>(null);
@@ -144,8 +144,8 @@ const stopTrainingTimer = () => {
 };
 
 const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
-const isRealTrain = computed(() => trainMetrics.value.source === 'java_pmwnb');
-const isMockTrain = computed(() => trainMetrics.value.source === 'mock');
+const isRealTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('java_'));
+const isMockTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('mock'));
 
 /** 百分比指标展示：缺字段（如 PMWNB 无 specificity/g_mean）显示 — */
 const metricText = (key: string) => {
@@ -252,7 +252,7 @@ interface ApiAlgorithmRow {
 }
 
 onMounted(async () => {
-  currentUser.value = getCurrentUser();
+  currentUser.value = userStore.currentUser;
   try {
     scenarios.value = await getScenarios();
     algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
@@ -409,7 +409,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <p v-else class="form-hint">
-            PMWNB 算法基于 Java（weka）真实实现，使用服务内置默认参数训练，无需配置训练参数。
+            当前算法没有注册可公开调整的训练参数，使用 Java/Weka 实现的内置默认配置训练。
           </p>
         </div>
 
@@ -439,7 +439,7 @@ onBeforeUnmount(() => {
           <p>
             {{
               training
-                ? '正在执行算法训练，请稍候。PMWNB 为真实 Java 训练，大样本数据集可能需要数十秒。'
+              ? '正在执行真实 Java/Weka 算法训练，大样本数据集可能需要数十秒。'
                 : '完成左侧配置后启动训练。训练成功的模型将进入 DRAFT 状态，可在模型中心审核发布。'
             }}
           </p>
@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
             <span class="result-model-id__label">模型版本</span>
             <span class="result-model-id__value">{{ trainResult.model_version_id }}</span>
             <span class="result-model-id__status">
-              <template v-if="isRealTrain">真实训练（Java PMWNB）</template>
+            <template v-if="isRealTrain">真实训练（Java/Weka）</template>
               <template v-else-if="isMockTrain">占位训练（模拟数据）</template>
               <template v-else>DRAFT（待发布）</template>
             </span>

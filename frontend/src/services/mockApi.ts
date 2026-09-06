@@ -697,10 +697,22 @@ const SCENARIO_META: Array<{
 // ===================== v2.0 会话与用户（需求 6.2 / 6.5） =====================
 
 /** 内部用户记录：密码仅 mock 内部使用，对外接口不返回 */
-interface UserRecord extends UserAccount {
+interface UserRecord {
+  id: number;
+  user_id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  status: 'active' | 'disabled';
+  created_at: string;
+  created_by: string;
+  last_login_at?: string;
+  scenario_ids?: ScenarioId[];
   password: string;
-  /** 对应 PostgreSQL app_user 表的主键 ID：前端登录后以该整数 ID 作为 X-User-Id 调 /api/v1 */
+  /** 兼容旧 mock 数据的后端主键，不参与真实认证。 */
   backend_id: number;
+  scenario_id: number | null;
+  scenario_code: ScenarioId | null;
 }
 
 const SESSION_KEY = 'bayes_session_user_id';
@@ -708,11 +720,11 @@ const SESSION_KEY = 'bayes_session_user_id';
 /** 预置账号（三级角色）：SUPER_ADMIN（最外层）/ SCENARIO_ADMIN（场景管理员）/ SCENARIO_USER（场景用户）。
  * backend_id 与数据库 seed_test_data.py 注册的 AppUser 主键对齐。 */
 let userRecords: UserRecord[] = [
-  { user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system' },
-  { user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'] },
-  { user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'] },
-  { user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'] },
-  { user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk', 'flightdeck_operation'] },
+  { id: 1, user_id: 'user_000001', backend_id: 1, username: 'admin', display_name: '系统管理员', role: 'SUPER_ADMIN', status: 'active', password: '123456', created_at: '2026-06-01 09:00:00', created_by: 'system', scenario_id: null, scenario_code: null },
+  { id: 6, user_id: 'user_000050', backend_id: 6, username: 'net_admin', display_name: '网络安全公司管理员', role: 'SCENARIO_ADMIN', status: 'active', password: '123456', created_at: '2026-06-05 09:00:00', created_by: 'admin', scenario_ids: ['network_security'], scenario_id: 1, scenario_code: 'network_security' },
+  { id: 2, user_id: 'user_000018', backend_id: 2, username: 'alice', display_name: '演示用户A', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-10 10:00:00', created_by: 'net_admin', scenario_ids: ['network_security'], scenario_id: 1, scenario_code: 'network_security' },
+  { id: 3, user_id: 'user_000031', backend_id: 3, username: 'bob', display_name: '演示用户B', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-06-18 14:00:00', created_by: 'net_admin', scenario_ids: ['power_system'], scenario_id: 2, scenario_code: 'power_system' },
+  { id: 7, user_id: 'user_000042', backend_id: 7, username: 'carol', display_name: '演示用户C', role: 'SCENARIO_USER', status: 'active', password: '123456', created_at: '2026-07-02 11:00:00', created_by: 'admin', scenario_ids: ['geological_risk'], scenario_id: 3, scenario_code: 'geological_risk' },
 ];
 
 let sessionUser: UserAccount | null = null;
@@ -740,6 +752,17 @@ const ensureSession = () => {
 
 /** 获取当前登录用户（未登录时返回 null） */
 export const getCurrentUser = (): UserAccount | null => ensureSession();
+
+/** Bridge real cookie-auth session into transitional mockApi callers. */
+export const syncSession = (user: UserAccount | null): void => {
+  sessionUser = user ? { ...user } : null;
+  if (user) {
+    window.localStorage.setItem(SESSION_KEY, user.user_id || String(user.id));
+  } else {
+    window.localStorage.removeItem(SESSION_KEY);
+  }
+};
+
 
 /** 获取当前登录用户，未登录抛错（业务接口统一调用） */
 const requireLogin = (): UserAccount => {
@@ -877,6 +900,7 @@ export const createUser = async (params: {
   if (userRecords.some((u) => u.username === params.username)) throw new Error('该用户名已存在');
   const newId = `user_${String(userRecords.length + 1).padStart(6, '0')}`;
   const record: UserRecord = {
+    id: 0,
     user_id: newId,
     // mock 新注册用户在后端数据库中不存在，backend_id=0 访问 /api/v1 时会被后端 401 拒绝
     backend_id: 0,
@@ -888,6 +912,8 @@ export const createUser = async (params: {
     created_at: nowStr(),
     created_by: operator.user_id,
     scenario_ids: params.scenario_ids ?? [],
+    scenario_id: null,
+    scenario_code: params.scenario_ids?.[0] ?? null,
   };
   userRecords.push(record);
   return { ...record };
@@ -1309,7 +1335,7 @@ let algorithmRegistry: AlgorithmDefinition[] = [
     ],
   },
   {
-    algorithm_id: 'DIWNB',
+    algorithm_id: 'CAVWNB',
     display_name: '差分加权朴素贝叶斯',
     available: true,
     input_constraints: '适用于离散化数值特征与枚举特征的二分类数据集',
@@ -1347,38 +1373,73 @@ let thresholds: Record<ScenarioId, ThresholdConfig> = {
   flightdeck_operation: { scenario_id: 'flightdeck_operation', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
   geological_risk: { scenario_id: 'geological_risk', medium_threshold: 0.5, high_threshold: 0.8, updated_by: 'admin', updated_at: '2026-06-05 09:30:00' },
 };
+const userThresholds = new Map<string, Record<ScenarioId, ThresholdConfig>>();
 
 let thresholdChangeLogs: ThresholdChangeLog[] = [];
 let thresholdLogSeq = 1;
 
-/** 获取全部场景阈值配置 */
-export const getThresholds = async (): Promise<ThresholdConfig[]> =>
-  simulateLatency(Object.values(thresholds));
+const thresholdConfigFor = (user: UserAccount, scenarioId: ScenarioId): ThresholdConfig => {
+  let own = userThresholds.get(user.user_id);
+  if (!own) {
+    own = Object.fromEntries(
+      Object.entries(thresholds).map(([key, value]) => [key, { ...value, user_id: user.id }]),
+    ) as Record<ScenarioId, ThresholdConfig>;
+    userThresholds.set(user.user_id, own);
+  }
+  return own[scenarioId];
+};
+
+/** 获取当前账号的全部场景阈值配置 */
+export const getThresholds = async (): Promise<ThresholdConfig[]> => {
+  const user = requireLogin();
+  const ids = user.role === 'SUPER_ADMIN' ? Object.keys(thresholds) as ScenarioId[] : (user.scenario_ids ?? []);
+  return simulateLatency(ids.map((id) => thresholdConfigFor(user, id)));
+};
 
 /** 获取阈值变更记录（需求 5.4.1.5） */
-export const getThresholdChangeLogs = async (): Promise<ThresholdChangeLog[]> =>
-  simulateLatency([...thresholdChangeLogs].sort((a, b) => b.changed_at.localeCompare(a.changed_at)));
+export const getThresholdChangeLogs = async (): Promise<ThresholdChangeLog[]> => {
+  const user = requireLogin();
+  return simulateLatency(
+    thresholdChangeLogs
+      .filter((log) => log.user_id === user.id || log.operator_id === user.user_id)
+      .sort((a, b) => (b.operated_at ?? b.changed_at ?? '').localeCompare(a.operated_at ?? a.changed_at ?? '')),
+  );
+};
 
-/** 管理员按场景保存阈值：范围 [0,1]、high>medium、实时生效、记录变更日志 */
+/** 当前账号按场景保存阈值：范围 [0,1]、high>medium、实时生效、记录变更日志 */
 export const saveThreshold = async (scenarioId: ScenarioId, medium_threshold: number, high_threshold: number): Promise<ThresholdConfig> => {
-  const operator = requireAdmin();
+  const operator = requireLogin();
+  assertScenarioAccess(operator, scenarioId);
   if (medium_threshold < 0 || medium_threshold > 1 || high_threshold < 0 || high_threshold > 1) {
     throw new Error('阈值必须位于 [0,1] 范围内');
   }
+  if (Math.round(medium_threshold * 100) / 100 !== medium_threshold || Math.round(high_threshold * 100) / 100 !== high_threshold) {
+    throw new Error('阈值最多只能有两位小数');
+  }
   if (high_threshold <= medium_threshold) throw new Error('高风险阈值必须大于中风险阈值');
-  const old = thresholds[scenarioId];
+  const old = thresholdConfigFor(operator, scenarioId);
   thresholdChangeLogs.push({
-    log_id: `thr_log_${String(thresholdLogSeq++).padStart(4, '0')}`,
+    id: thresholdLogSeq++,
+    user_id: operator.id,
     scenario_id: scenarioId,
     operator_id: operator.user_id,
-    changed_at: nowStr(),
-    old_medium_threshold: old.medium_threshold,
-    old_high_threshold: old.high_threshold,
-    new_medium_threshold: medium_threshold,
-    new_high_threshold: high_threshold,
+    operated_at: nowStr(),
+    old_medium: old.medium_threshold,
+    old_high: old.high_threshold,
+    new_medium: medium_threshold,
+    new_high: high_threshold,
   });
-  thresholds[scenarioId] = { scenario_id: scenarioId, medium_threshold, high_threshold, updated_by: operator.user_id, updated_at: nowStr() };
-  return thresholds[scenarioId];
+  const next = { ...old, user_id: operator.id, scenario_id: scenarioId, medium_threshold, high_threshold, updated_by: operator.id, updated_at: nowStr() };
+  userThresholds.get(operator.user_id)![scenarioId] = next;
+  return next;
+};
+
+/** 将真实后端保存结果同步到模拟推理链路。 */
+export const syncThreshold = (config: ThresholdConfig): void => {
+  const user = requireLogin();
+  const own = userThresholds.get(user.user_id) ?? {} as Record<ScenarioId, ThresholdConfig>;
+  own[config.scenario_id] = { ...config, user_id: user.id };
+  userThresholds.set(user.user_id, own);
 };
 
 // ===================== v2.0 模型版本与生命周期（需求 6.7） =====================
@@ -1434,7 +1495,7 @@ const initModelVersions = (): ModelVersionRecord[] => {
     makeModelVersion('network_security', 'kdd_train_20_percent', 'EMAWNB', 'OFFLINE', false),
     // NF-UNSW：2 个已发布（无默认，演示"需手动选择"）+ 1 个失败
     makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'A2WNB', 'PUBLISHED', false),
-    makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'DIWNB', 'PUBLISHED', false),
+    makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'CAVWNB', 'PUBLISHED', false),
     makeModelVersion('network_security', 'nf_unsw_nb15_v2', 'PMWNB', 'FAILED', false),
     // PowerGrid：1 个默认已发布 + 1 个草稿
     makeModelVersion('power_system', 'powergrid_knowledgebase', 'MAWNB', 'PUBLISHED', true),
@@ -1443,7 +1504,7 @@ const initModelVersions = (): ModelVersionRecord[] => {
     makeModelVersion('geological_risk', 'dis_raw_data', 'PMWNB', 'PUBLISHED', true),
     makeModelVersion('geological_risk', 'dis_raw_data', 'A2WNB', 'DRAFT', false),
     makeModelVersion('geological_risk', 'dis_landslides', 'MAWNB', 'PUBLISHED', false),
-    makeModelVersion('geological_risk', 'dis_landslides', 'DIWNB', 'DRAFT', false),
+    makeModelVersion('geological_risk', 'dis_landslides', 'CAVWNB', 'DRAFT', false),
     makeModelVersion('geological_risk', 'dis_causative_factors', 'EMAWNB', 'PUBLISHED', false),
     makeModelVersion('geological_risk', 'dis_guaruja_random', 'A2WNB', 'PUBLISHED', false),
     // 航母甲板：3 个数据集各至少 1 个已发布
@@ -1781,12 +1842,12 @@ const initInferenceAndEvents = (): void => {
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'PMWNB', day: 25, hour: 10, is_risk: true, risk_prob: 0.93, features: buildSeedFeatures('nf_unsw_nb15_v2') },
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'A2WNB', day: 26, hour: 14, is_risk: false, risk_prob: 0.21, features: buildSeedFeatures('kdd_train_20_percent') },
     { user_id: 'user_000018', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'MAWNB', day: 28, hour: 9, is_risk: true, risk_prob: 0.78, features: buildSeedFeatures('powergrid_knowledgebase') },
-    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'DIWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: buildSeedFeatures('nf_unsw_nb15_v2') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'CAVWNB', day: 27, hour: 16, is_risk: true, risk_prob: 0.66, features: buildSeedFeatures('nf_unsw_nb15_v2') },
     { user_id: 'user_000031', scenario_id: 'power_system', dataset_id: 'powergrid_knowledgebase', algorithm_id: 'A2WNB', day: 29, hour: 11, is_risk: false, risk_prob: 0.3, features: buildSeedFeatures('powergrid_knowledgebase') },
     { user_id: 'user_000042', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'EMAWNB', day: 30, hour: 20, is_risk: true, risk_prob: 0.85, features: buildSeedFeatures('kdd_train_20_percent') },
     // 今日告警（需求 7.1 指标卡"今日告警数"非零演示）
     { user_id: 'user_000018', scenario_id: 'network_security', dataset_id: 'nf_unsw_nb15_v2', algorithm_id: 'A2WNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.88, today: true, features: buildSeedFeatures('nf_unsw_nb15_v2') },
-    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'DIWNB', day: 1, hour: 10, is_risk: true, risk_prob: 0.72, today: true, features: buildSeedFeatures('kdd_train_20_percent') },
+    { user_id: 'user_000031', scenario_id: 'network_security', dataset_id: 'kdd_train_20_percent', algorithm_id: 'CAVWNB', day: 1, hour: 10, is_risk: true, risk_prob: 0.72, today: true, features: buildSeedFeatures('kdd_train_20_percent') },
     // 地质风险（carol）：4 个可训练数据集，features 保存完整字段
     { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'PMWNB', day: 1, hour: 9, is_risk: true, risk_prob: 0.86, features: buildSeedFeatures('dis_raw_data') },
     { user_id: 'user_000042', scenario_id: 'geological_risk', dataset_id: 'dis_raw_data', algorithm_id: 'A2WNB', day: 2, hour: 8, is_risk: false, risk_prob: 0.18, features: buildSeedFeatures('dis_raw_data') },
@@ -1934,7 +1995,7 @@ export const executeInference = async (params: {
   if (model.status !== 'PUBLISHED') throw new Error('仅已发布模型可执行推理');
   assertScenarioAccess(user, model.scenario_id);
   validateInputFeatures(model.dataset_id, params.input_features);
-  const cfg = thresholds[model.scenario_id];
+  const cfg = thresholdConfigFor(user, model.scenario_id);
   // 模拟模型输出：约 35% 判为风险类（risk_score 为模型对风险类的输出概率，需求 5.4）
   const isRisk = Math.random() < 0.35;
   const risk_probability = isRisk

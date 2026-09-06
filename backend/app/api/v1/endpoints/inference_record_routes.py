@@ -36,18 +36,14 @@ def predict(
     InferenceRecordService.create_inference 的语义（创建新记录，入参为
     model_version_id）不符，故采用无 id 的 POST /predict 形式。
 
-    ⚠️ 联调占位：当前 `prediction_label`/`risk_score` 由客户端传入（Service 负责
-    落库与风险判定）。正式版应接入服务端统一预测入口（需求 6.6.2：算法注册提供
-    统一预测格式），由服务端根据 model_version_id + input_features 计算预测结果，
-    客户端请求体不再携带这两个字段，避免伪造风险事件。
+    预测结果由服务端统一预测入口（独立 Java 预测服务）根据
+    model_version_id + input_features 计算，客户端不再提交 prediction_label/risk_score。
     """
     return unwrap(
         InferenceRecordService(db).create_inference(
             current_user=current_user,
             model_version_id=payload.model_version_id,
             input_features=payload.input_features,
-            prediction_label=payload.prediction_label,
-            risk_score=payload.risk_score,
         )
     )
 

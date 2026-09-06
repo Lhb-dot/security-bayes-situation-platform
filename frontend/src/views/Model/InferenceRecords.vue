@@ -8,90 +8,92 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { useScenarioStore } from '@/stores/scenarioStore';
+import { getInferenceRecordList } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
-import {
-  getInferenceRecords,
-  getUserList,
-  getCurrentUser,
-  getAlgorithms,
-  getRiskEventByInferenceRecordId,
-} from '@/services/mockApi';
-import type { InferenceRecord, ScenarioId, UserAccount, AlgorithmDefinition } from '@/types/security';
 
-const records = ref<InferenceRecord[]>([]);
-const users = ref<UserAccount[]>([]);
-const algorithms = ref<AlgorithmDefinition[]>([]);
-const currentUser = ref<UserAccount | null>(null);
+/** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
+interface InferenceRecordItem {
+  id: number;
+  user_id: number;
+  model_version_id: number;
+  scenario_id: number;
+  scenario_code: string | null;
+  algorithm_id: number;
+  algorithm_name: string | null;
+  dataset_id: number;
+  dataset_logical_id: string | null;
+  dataset_version: number;
+  risk_type: string | null;
+  original_label: string;
+  prediction_label: string;
+  risk_level: string | null;
+  risk_score: number | null;
+  is_risk_event: boolean;
+  executed_at: string;
+  risk_event_id: number | null;
+  input_features: Record<string, unknown>;
+}
+
+const records = ref<InferenceRecordItem[]>([]);
 const loading = ref(false);
 const router = useRouter();
-const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
 
-/** 是否系统管理员（管理员/用户场景固定，隐藏场景筛选） */
-const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
+/** 是否管理员（决定描述文案） */
+const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
 
-const scenarioFilter = ref<'' | ScenarioId>('');
-const userFilter = ref<string>('');
-
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
-
-const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
-const userName = (id: string) => users.value.find((u) => u.user_id === id)?.username ?? id;
-/** 四场景展示名映射（Task 016 补全 geological_risk） */
-const SCENARIO_LABEL: Record<string, string> = {
-  network_security: '网络安全',
-  power_system: '电力系统',
-  geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板作业',
+/** 场景数字 ID → 名称 */
+const SCENARIO_META: Record<number, { code: string; name: string }> = {
+  1: { code: 'network_security', name: '网络安全' },
+  2: { code: 'power_system', name: '电力系统' },
+  3: { code: 'flightdeck_operation', name: '航母甲板作业' },
+  4: { code: 'geological_risk', name: '地质风险' },
 };
-const scenarioName = (id: string) => SCENARIO_LABEL[id] ?? id;
-
-/** 场景筛选选项：从 scenarioStore.activeScenarios 注入（Task 016） */
-const scenarioOptions = computed(() =>
-  scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
-);
+const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
 
 const loadRecords = async () => {
   loading.value = true;
   try {
-    records.value = await getInferenceRecords(scenarioFilter.value || undefined, userFilter.value || undefined);
+    const items = await getInferenceRecordList({ page_size: 200 });
+    records.value = items as unknown as InferenceRecordItem[];
   } finally {
     loading.value = false;
   }
 };
 
 // 查看输入特征
-const featureTarget = ref<InferenceRecord | null>(null);
-const openFeatures = (r: InferenceRecord) => {
+const featureTarget = ref<InferenceRecordItem | null>(null);
+const featureDialogVisible = ref(false);
+const openFeatures = (r: InferenceRecordItem) => {
   featureTarget.value = r;
+  featureDialogVisible.value = true;
 };
 
-/** 风险记录 → 跳转风险事件详情（Task 012） */
-const goEventDetail = async (r: InferenceRecord) => {
-  try {
-    const ev = await getRiskEventByInferenceRecordId(r.inference_record_id);
-    if (!ev) {
-      ElMessage.info('该记录未生成风险事件');
-      return;
-    }
-    router.push({ path: `/events/${ev.event_id}` });
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '查询风险事件失败');
-  }
+const featureRows = computed(() =>
+  featureTarget.value
+    ? Object.entries(featureTarget.value.input_features ?? {}).map(([name, value]) => ({
+        name,
+        value: value == null ? '—' : String(value),
+      }))
+    : [],
+);
+
+const closeFeatures = () => {
+  featureDialogVisible.value = false;
+  featureTarget.value = null;
 };
 
-onMounted(async () => {
-  currentUser.value = getCurrentUser();
-  const algos = await getAlgorithms();
-  algorithms.value = algos;
-  await scenarioStore.fetchScenarioList();
-  if (isAdmin.value) users.value = await getUserList();
-  // 管理员/用户：场景固定为自己场景（隐藏场景筛选）
-  if (userStore.currentUser?.role !== 'SUPER_ADMIN') {
-    scenarioFilter.value = userStore.currentUser?.scenario_ids?.[0] ?? '';
+/** 风险记录 → 跳转风险事件详情 */
+const goEventDetail = (r: InferenceRecordItem) => {
+  if (r.risk_event_id == null) {
+    ElMessage.info('该记录未生成风险事件');
+    return;
   }
-  await loadRecords();
+  router.push({ path: `/events/${r.risk_event_id}` });
+};
+
+onMounted(() => {
+  loadRecords();
 });
 </script>
 
@@ -105,23 +107,6 @@ onMounted(async () => {
           {{ isAdmin ? '平台全部推理记录（可筛选用户）' : '仅显示本人发起的推理记录' }}
         </p>
       </div>
-    </div>
-
-    <div class="records-filters">
-      <label v-if="isSuperAdmin" class="filter-item">
-        <span class="filter-item__label">场景</span>
-        <select v-model="scenarioFilter" class="filter-select" @change="loadRecords">
-          <option value="">所有场景</option>
-          <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
-        </select>
-      </label>
-      <label v-if="isAdmin" class="filter-item">
-        <span class="filter-item__label">用户</span>
-        <select v-model="userFilter" class="filter-select" @change="loadRecords">
-          <option value="">全部用户</option>
-          <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
-        </select>
-      </label>
     </div>
 
     <section class="card records-section">
@@ -145,29 +130,29 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in records" :key="r.inference_record_id">
-              <td>{{ r.inference_record_id }}</td>
-              <td>{{ userName(r.user_id) }}</td>
+            <tr v-for="r in records" :key="r.id">
+              <td>{{ r.id }}</td>
+              <td>{{ r.user_id }}</td>
               <td>{{ scenarioName(r.scenario_id) }}</td>
-              <td>{{ r.dataset_id }}</td>
+              <td>{{ r.dataset_logical_id }}</td>
               <td>{{ r.dataset_version }}</td>
-              <td>{{ algoName(r.algorithm_id) }}</td>
+              <td>{{ r.algorithm_name }}</td>
               <td>{{ r.model_version_id }}</td>
               <td>{{ r.original_label }}</td>
               <td>
-                <span v-if="r.is_risk" class="risk-badge">{{ r.risk_type }}</span>
+                <span v-if="r.is_risk_event" class="risk-badge">{{ r.risk_type }}</span>
                 <span v-else class="normal-badge">正常</span>
               </td>
               <td>
-                <span v-if="r.is_risk" class="level-badge" :class="`level-badge--${r.risk_level}`">{{ r.risk_level }}</span>
+                <span v-if="r.is_risk_event" class="level-badge" :class="`level-badge--${r.risk_level}`">{{ r.risk_level }}</span>
                 <span v-else>—</span>
               </td>
-              <td>{{ (r.risk_score * 100).toFixed(1) }}%</td>
-              <td>{{ r.occurred_at }}</td>
+              <td>{{ r.is_risk_event ? ((r.risk_score ?? 0) * 100).toFixed(1) + '%' : '—' }}</td>
+              <td>{{ r.executed_at }}</td>
               <td>
                 <div class="op-group">
                   <button class="op-btn" @click="openFeatures(r)">输入特征</button>
-                  <button v-if="r.is_risk" class="op-btn" @click="goEventDetail(r)">查看事件</button>
+                  <button v-if="r.is_risk_event" class="op-btn" @click="goEventDetail(r)">查看事件</button>
                 </div>
               </td>
             </tr>
@@ -178,18 +163,28 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- 输入特征弹窗 -->
-    <div v-if="featureTarget" class="modal-mask" @click.self="featureTarget = null">
-      <div class="modal-card">
-        <div class="modal-card__head">
-          <h3>推理输入特征 — {{ featureTarget.inference_record_id }}</h3>
-          <button class="modal-close" @click="featureTarget = null">✕</button>
-        </div>
-        <div class="modal-card__body">
-          <pre class="feature-json">{{ JSON.stringify(featureTarget.input_features, null, 2) }}</pre>
-        </div>
-      </div>
-    </div>
+    <!-- 输入特征弹窗：与数据集中心的字段预览使用同一套 Element Plus 弹窗/表格样式 -->
+    <el-dialog
+      v-model="featureDialogVisible"
+      class="inference-feature-dialog"
+      :title="`输入特征 - 推理记录 ${featureTarget?.id ?? ''}`"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+      @close="closeFeatures"
+    >
+      <el-table
+        :data="featureRows"
+        stripe
+        max-height="62vh"
+        style="width: 100%"
+        empty-text="该推理记录暂无输入特征"
+      >
+        <el-table-column prop="name" label="特征名" min-width="220" />
+        <el-table-column prop="value" label="特征值" min-width="260" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -340,61 +335,63 @@ onMounted(async () => {
   color: #9ad6ff;
 }
 
-.modal-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(3, 8, 16, 0.7);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+</style>
+
+<style>
+/* 该弹窗与 DatasetCenter 的字段预览弹窗保持一致；append-to-body 后需使用独立全局选择器。 */
+.inference-feature-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
 }
 
-.modal-card {
-  width: 520px;
-  max-width: calc(100vw - 40px);
-  border-radius: 14px;
-  border: 1px solid rgba(125, 201, 255, 0.22);
-  background: linear-gradient(160deg, rgba(13, 26, 46, 0.96), rgba(8, 17, 31, 0.98));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+.inference-feature-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
 }
 
-.modal-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
+.inference-feature-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(220, 234, 255, 0.5) !important;
 }
 
-.modal-card__head h3 {
-  margin: 0;
-  font-size: 1.02rem;
+.inference-feature-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: #e8f1ff !important;
 }
 
-.modal-close {
-  border: none;
-  background: transparent;
-  color: rgba(220, 234, 255, 0.6);
-  font-size: 1rem;
-  cursor: pointer;
+.inference-feature-dialog .el-dialog__body {
+  padding: 20px 24px !important;
 }
 
-.modal-card__body {
-  padding: 18px 20px;
-  max-height: 60vh;
-  overflow: auto;
+.inference-feature-dialog .el-table,
+.inference-feature-dialog .el-table__inner-wrapper,
+.inference-feature-dialog .el-table__body-wrapper,
+.inference-feature-dialog .el-table__header-wrapper {
+  background-color: transparent !important;
 }
 
-.feature-json {
-  margin: 0;
-  padding: 14px;
-  border-radius: 8px;
-  background: rgba(6, 15, 28, 0.85);
-  color: #9ad6ff;
-  font-size: 0.82rem;
-  line-height: 1.6;
-  overflow: auto;
+.inference-feature-dialog .el-table th.el-table__cell {
+  background-color: rgba(16, 34, 60, 0.9) !important;
+  color: rgba(155, 195, 240, 0.85) !important;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
+}
+
+.inference-feature-dialog .el-table td.el-table__cell {
+  background-color: rgba(6, 15, 28, 0.85) !important;
+  color: rgba(175, 198, 230, 0.85) !important;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
+}
+
+.inference-feature-dialog .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: rgba(10, 24, 44, 0.85) !important;
+}
+
+.inference-feature-dialog .el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(20, 44, 72, 0.9) !important;
+}
+
+.inference-feature-dialog .el-table__empty-text {
+  color: rgba(180, 200, 235, 0.3) !important;
 }
 </style>

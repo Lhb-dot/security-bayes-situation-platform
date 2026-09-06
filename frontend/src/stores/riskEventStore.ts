@@ -1,12 +1,19 @@
 /**
- * riskEventStore.ts — 风险事件列表/处置（Task 004）
+ * riskEventStore.ts — 风险事件详情/处置
  *
- * 职责边界：仅 state / action / getter，不含业务过滤与页面逻辑。
- * 过渡期数据源：mockApi；后端就绪后切换至 src/api/riskEventApi.*。
+ * 数据源：src/api/riskEventApi（真实后端），字段映射复用 situationApi.mapRiskEvent。
+ * 处置状态前端用中文（待处置/处理中/已处置），后端用枚举（PENDING/PROCESSING/RESOLVED），此处转换。
  */
 import { defineStore } from 'pinia';
-import * as mockApi from '@/services/mockApi';
+import { getRiskEventDetail, getRiskEventList, updateRiskEventStatus } from '@/api/riskEventApi';
+import { mapRiskEvent } from '@/api/situationApi';
 import type { RiskEvent, ScenarioId } from '@/types/security';
+
+const STATUS_VALUE: Record<string, string> = {
+  '待处置': 'PENDING',
+  '处理中': 'PROCESSING',
+  '已处置': 'RESOLVED',
+};
 
 export const useRiskEventStore = defineStore('riskEvent', {
   state: () => ({
@@ -20,10 +27,11 @@ export const useRiskEventStore = defineStore('riskEvent', {
     highRiskCount: (state): number => state.events.filter((e) => e.risk_level === 'HIGH').length,
   },
   actions: {
-    async fetchEvents(scenarioId?: ScenarioId): Promise<void> {
+    async fetchEvents(): Promise<void> {
       this.loading = true;
       try {
-        this.events = await mockApi.getRiskEvents(scenarioId);
+        const items = await getRiskEventList({ page_size: 200 });
+        this.events = (items as unknown as Array<Record<string, unknown>>).map(mapRiskEvent);
       } finally {
         this.loading = false;
       }
@@ -31,7 +39,8 @@ export const useRiskEventStore = defineStore('riskEvent', {
     async fetchDetail(eventId: string): Promise<void> {
       this.loading = true;
       try {
-        this.detail = await mockApi.getRiskEventById(eventId);
+        const raw = await getRiskEventDetail(eventId);
+        this.detail = mapRiskEvent(raw as unknown as Record<string, unknown>);
       } finally {
         this.loading = false;
       }
@@ -40,10 +49,11 @@ export const useRiskEventStore = defineStore('riskEvent', {
       this.detail = null;
     },
     async updateStatus(eventId: string, status: RiskEvent['status']): Promise<void> {
-      await mockApi.updateRiskEventStatus(eventId, status);
+      const newStatus = (STATUS_VALUE[status] ?? status) as RiskEvent['status'];
+      const raw = await updateRiskEventStatus(eventId, { new_status: newStatus });
+      this.detail = mapRiskEvent(raw as unknown as Record<string, unknown>);
       const target = this.events.find((e) => e.event_id === eventId);
       if (target) target.status = status;
-      if (this.detail?.event_id === eventId) this.detail.status = status;
     },
   },
 });

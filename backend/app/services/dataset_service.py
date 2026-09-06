@@ -8,7 +8,7 @@
 版本管理逻辑（自动递增版本号、引用保护、停用/删除规则）在本 Service 内实现。
 
 关键业务规则（需求 2.3）：
-1. 仅 ADMIN 可上传/修改/停用/删除；ADMIN 之间共享权限，不按上传人隔离。
+1. 管理级角色可修改/停用/删除；新建数据集还允许 SCENARIO_USER 上传本人场景的个人数据。
 2. 上传必须指定场景，并完成格式、固定字段、字段类型、标签字段校验。
 3. 已产生模型版本的数据集不得直接覆盖——"修改"必须创建新版本并保留旧版本。
 4. 已被模型版本引用的数据集版本不得物理删除，只能停用；未引用的可物理删除。
@@ -16,6 +16,7 @@
 6. 普通用户只能查看与已发布模型有关的数据集（需求 2.3.1）。
 """
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -37,7 +38,6 @@ from app.services.constants import (
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
     DATASET_VISIBILITIES,
-    MODEL_STATUS_PUBLISHED,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
@@ -56,6 +56,16 @@ logger = get_logger("dataset")
 
 
 class DatasetService(ServiceBase):
+    @staticmethod
+    def _validate_file_path(file_path: str) -> Optional[str]:
+        """Keep registered dataset paths inside the repository data directory."""
+        if not file_path or Path(file_path).is_absolute():
+            return "file_path 必须是 data/ 目录下的相对路径"
+        candidate = Path(file_path)
+        if ".." in candidate.parts or candidate.parts[:1] != ("data",):
+            return "file_path 必须位于 data/ 目录内"
+        return None
+
     """数据集管理（上传/版本/停用/删除）+ 字段结构校验。"""
 
     def _get(self, dataset_id: int) -> Dataset:
@@ -78,9 +88,43 @@ class DatasetService(ServiceBase):
         )
         return bool(count)
 
-    @staticmethod
-    def _to_dict(dataset: Dataset) -> dict:
-        return row_to_dict(dataset)
+    _record_count_cache: dict = {}
+
+    def _count_records(self, file_path: str) -> int:
+        """统计 ARFF 样本数（按 path+mtime 缓存，避免列表接口重复扫盘）。"""
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.arff_reader import count_arff_rows
+
+        try:
+            path = resolve_dataset_path(file_path)
+            if not os.path.exists(path):
+                return 0
+            mtime = os.path.getmtime(path)
+            cached = DatasetService._record_count_cache.get(path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            total = count_arff_rows(path)
+            DatasetService._record_count_cache[path] = (mtime, total)
+            return total
+        except Exception:
+            logger.exception("统计数据集样本数失败: %s", file_path)
+            return 0
+
+    def _to_dict(self, dataset: Dataset) -> dict:
+        """序列化数据集，并补充前端列表/详情常用展示字段。"""
+        data = row_to_dict(dataset)
+        data["name"] = dataset.logical_id
+        data["field_count"] = len(dataset.fields_schema or [])
+        normalized = dataset.file_path.replace("\\", "/")
+        suffix = Path(normalized).suffix.lstrip(".").lower()
+        data["data_format"] = suffix if suffix in ("csv", "arff", "json") else "arff"
+        data["record_count"] = self._count_records(dataset.file_path)
+        data["referenced"] = self._is_referenced(dataset.id)
+        data["enabled"] = dataset.status == DATASET_STATUS_ACTIVE
+        if getattr(dataset, "scenario", None) is not None:
+            data["scenario_code"] = dataset.scenario.code
+            data["scenario_name"] = dataset.scenario.name
+        return data
 
     @staticmethod
     def _default_visibility(role: Optional[str]) -> str:
@@ -163,27 +207,19 @@ class DatasetService(ServiceBase):
     def get(self, current_user, dataset_id: int):
         """数据集详情（含字段结构 fields_schema）。
 
-        场景管理员可看自己场景任意数据集；场景用户仅看有已发布模型的数据集。
+        与列表一致，按数据可见性分级校验（需求 0.2 / 2.4）：
+        - SUPER_ADMIN：仅 platform
+        - SCENARIO_ADMIN：本场景 platform + company
+        - SCENARIO_USER：本场景 platform + company + 本人 personal
         """
         self.require_login(current_user)
-        role = getattr(current_user, "role", None)
         dataset = self._get(dataset_id)
-        if role == ROLE_SCENARIO_ADMIN:
-            if dataset.scenario_id != getattr(current_user, "scenario_id", None):
-                raise ServiceError(403, "无权限操作")
-        elif role != ROLE_SUPER_ADMIN:
-            published = self.db.scalar(
-                select(func.count()).select_from(ModelVersion).where(
-                    ModelVersion.dataset_id == dataset_id,
-                    ModelVersion.status == MODEL_STATUS_PUBLISHED,
-                )
-            )
-            if not published:
-                raise ServiceError(403, "无权限操作")
+        if not self._can_view_dataset(current_user, dataset):
+            raise ServiceError(403, "无权限操作")
         return ok(data=self._to_dict(dataset))
 
     # ------------------------------------------------------------------
-    # 上传 / 版本 / 停用 / 删除（需求 2.3：仅 ADMIN）
+    # 上传 / 版本 / 停用 / 删除（新建数据集允许场景用户上传 personal 数据）
     # ------------------------------------------------------------------
     @service_call
     def create(
@@ -208,8 +244,10 @@ class DatasetService(ServiceBase):
         elif role == ROLE_SCENARIO_USER:
             if scenario_id != getattr(current_user, "scenario_id", None):
                 raise ServiceError(403, "场景用户只能在自己场景上传个人数据")
-        else:
+        elif role == ROLE_SUPER_ADMIN:
             self.require_login(current_user)
+        else:
+            raise ServiceError(403, "无权限操作")
 
         # 可见性：默认按角色；SCENARIO_USER 强制 personal；显式传入则校验合法
         if role == ROLE_SCENARIO_USER:
@@ -231,6 +269,9 @@ class DatasetService(ServiceBase):
         err = validate_length(file_path, "file_path", DATASET_FILE_PATH_MAX_LEN)
         if err:
             raise ServiceError(400, err)
+        path_err = self._validate_file_path(file_path)
+        if path_err:
+            raise ServiceError(400, path_err)
         err = validate_length(label_field, "label_field", DATASET_LABEL_FIELD_MAX_LEN)
         if err:
             raise ServiceError(400, err)
@@ -261,6 +302,73 @@ class DatasetService(ServiceBase):
         return ok(data=self._to_dict(dataset), message="数据集上传成功")
 
     @service_call
+    def upload_from_file(
+        self,
+        current_user,
+        logical_id: str,
+        scenario_id: int,
+        label_field: str,
+        filename: str,
+        file_bytes: bytes,
+        visibility: Optional[str] = None,
+    ):
+        """上传数据集文件（multipart）：保存到 data/<场景编码>/<文件名>，自动识别
+        ARFF/CSV 格式并解析字段结构，最后复用 create() 登记落库。
+
+        - 自动推断字段类型与枚举值域、样本数；
+        - label_field 必须存在于文件字段中（否则报错，前端可据此提示修正）。
+        """
+        from app.services.model_sim import PROJECT_ROOT
+        from app.utils.dataset_file_reader import (
+            build_fields_schema,
+            detect_format,
+            read_dataset_file,
+        )
+
+        scenario = self.db.get(Scenario, scenario_id)
+        if scenario is None:
+            raise ServiceError(404, "场景不存在")
+
+        fmt = detect_format(filename)
+        if fmt == "unknown":
+            raise ServiceError(400, "仅支持 .arff / .csv 格式文件")
+
+        # 保存到 data/<场景编码>/<安全文件名>（basename 防路径穿越）
+        safe_name = os.path.basename(filename)
+        target_dir = os.path.join(PROJECT_ROOT, "data", scenario.code, safe_name)
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        with open(target_dir, "wb") as f:
+            f.write(file_bytes)
+        relative_path = f"data/{scenario.code}/{safe_name}"
+
+        # 自动解析
+        try:
+            _, fields, _ = read_dataset_file(target_dir)
+        except Exception as exc:  # noqa: BLE001
+            raise ServiceError(400, f"文件解析失败: {exc}")
+
+        if not fields:
+            raise ServiceError(400, "文件没有解析出任何字段")
+
+        names = [f["name"] for f in fields]
+        if label_field not in names:
+            raise ServiceError(
+                400,
+                f"标签字段 {label_field} 不存在于文件字段中（可用字段: {', '.join(names[:10])}...）",
+            )
+
+        fields_schema = build_fields_schema(fields, label_field)
+        return self.create(
+            current_user,
+            logical_id=logical_id,
+            scenario_id=scenario_id,
+            file_path=relative_path,
+            fields_schema=fields_schema,
+            label_field=label_field,
+            visibility=visibility,
+        )
+
+    @service_call
     def update(
         self,
         current_user,
@@ -276,6 +384,11 @@ class DatasetService(ServiceBase):
         """
         dataset = self._get(dataset_id)
         self.require_scenario_admin_of(current_user, dataset.scenario_id)
+        if (
+            getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
+            and dataset.visibility == DATASET_VISIBILITY_PERSONAL
+        ):
+            raise ServiceError(403, "场景管理员不能操作个人数据集")
 
         if self._is_referenced(dataset_id):
             # 创建新版本：继承 logical_id / scenario，version+1
@@ -287,7 +400,9 @@ class DatasetService(ServiceBase):
                 file_path=file_path if file_path is not None else dataset.file_path,
                 fields_schema=fields_schema if fields_schema is not None else dataset.fields_schema,
                 label_field=label_field if label_field is not None else dataset.label_field,
-                uploaded_by=current_user.id,
+                visibility=dataset.visibility,
+                uploader_role=dataset.uploader_role,
+                uploaded_by=dataset.uploaded_by,
                 uploaded_at=now,
                 status=DATASET_STATUS_ACTIVE,
             )
@@ -308,6 +423,9 @@ class DatasetService(ServiceBase):
             err = validate_length(file_path, "file_path", DATASET_FILE_PATH_MAX_LEN)
             if err:
                 raise ServiceError(400, err)
+            path_err = self._validate_file_path(file_path)
+            if path_err:
+                raise ServiceError(400, path_err)
             dataset.file_path = file_path
         if label_field is not None or fields_schema is not None:
             new_label = label_field if label_field is not None else dataset.label_field
@@ -329,6 +447,11 @@ class DatasetService(ServiceBase):
         """
         dataset = self._get(dataset_id)
         self.require_scenario_admin_of(current_user, dataset.scenario_id)
+        if (
+            getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
+            and dataset.visibility == DATASET_VISIBILITY_PERSONAL
+        ):
+            raise ServiceError(403, "场景管理员不能操作个人数据集")
         dataset.status = DATASET_STATUS_INACTIVE
         self.commit()
         return ok(data=self._to_dict(dataset), message="数据集已停用")
@@ -342,6 +465,11 @@ class DatasetService(ServiceBase):
         """
         dataset = self._get(dataset_id)
         self.require_scenario_admin_of(current_user, dataset.scenario_id)
+        if (
+            getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
+            and dataset.visibility == DATASET_VISIBILITY_PERSONAL
+        ):
+            raise ServiceError(403, "场景管理员不能操作个人数据集")
         if self._is_referenced(dataset_id):
             raise ServiceError(400, "数据集已被模型版本引用，禁止物理删除，只能停用")
         self.db.delete(dataset)
@@ -386,15 +514,28 @@ class DatasetService(ServiceBase):
             raise ServiceError(403, "无权限操作")
 
         from app.services.training_executor import resolve_dataset_path
-        from app.utils.arff_reader import count_arff_rows, read_arff
+        from app.utils.arff_reader import read_arff
 
         path = resolve_dataset_path(dataset.file_path)
         if not os.path.exists(path):
             raise ServiceError(404, f"数据集文件不存在: {path}")
 
         offset = (page - 1) * page_size
-        _, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
-        page_rows = rows[offset: offset + page_size]
+        raw_fields, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
+        # 优先使用登记的 fields_schema 字段名，保证与字段预览/标签列一致
+        if dataset.fields_schema:
+            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(dataset.fields_schema)]
+        else:
+            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(raw_fields)]
+        page_rows = []
+        for row in rows[offset: offset + page_size]:
+            page_rows.append(
+                {
+                    names[i]: (row[i] if i < len(row) else None)
+                    for i in range(len(names))
+                }
+            )
+        total = self._count_records(dataset.file_path)
         return ok(
             data={
                 "dataset_id": dataset.id,
@@ -405,6 +546,6 @@ class DatasetService(ServiceBase):
                 "rows": page_rows,
                 "page": page,
                 "page_size": len(page_rows),
-                "total": count_arff_rows(path),
+                "total": total,
             }
         )

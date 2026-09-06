@@ -28,6 +28,7 @@ from app.models.situation_snapshot import SituationSnapshot
 from app.models.report import Report
 from app.models.risk_threshold import RiskThreshold
 from app.models.threshold_audit_log import ThresholdAuditLog
+from app.models.auth_session import AuthSession
 
 __all__ = [
     "AppUser",
@@ -42,4 +43,5 @@ __all__ = [
     "Report",
     "RiskThreshold",
     "ThresholdAuditLog",
+    "AuthSession",
 ]

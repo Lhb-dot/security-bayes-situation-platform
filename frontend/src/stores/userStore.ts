@@ -1,67 +1,92 @@
-/**
- * userStore.ts — 全局会话与用户管理（Task 004）
- *
- * 职责边界：仅 state / action（调用数据源）/ getter（派生数据），
- * 不含权限拦截、页面业务逻辑与 UI 逻辑。
- *
- * 过渡期数据源：mockApi；后端就绪后切换至 src/api/userApi.*
- * （login/logout 后端无路由，持续走 mock）。
- */
 import { defineStore } from 'pinia';
+import * as userApi from '@/api/userApi';
 import * as mockApi from '@/services/mockApi';
 import type { PlatformUserStats, ScenarioId, UserAccount, UserRole } from '@/types/security';
 
-/** 四场景全集（管理员可见范围；普通用户以 currentUser.scenario_ids 为准） */
-const ALL_SCENARIO_IDS = [
+const ALL_SCENARIO_IDS: ScenarioId[] = [
   'network_security',
   'power_system',
   'geological_risk',
   'flightdeck_operation',
-] as const;
+];
 
 export const useUserStore = defineStore('user', {
   state: () => ({
-    currentUser: mockApi.getCurrentUser() as UserAccount | null,
+    currentUser: null as UserAccount | null,
     users: [] as UserAccount[],
+    usersTotal: 0,
     platformStats: null as PlatformUserStats | null,
     loading: false,
+    initialized: false,
   }),
   getters: {
     isAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
-    /** 最外层管理员（平台方） */
     isSuperAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
-    /** 场景管理员 */
     isScenarioAdmin: (state): boolean => state.currentUser?.role === 'SCENARIO_ADMIN',
-    /** 管理级角色（最外层 或 场景管理员） */
     isManagement: (state): boolean =>
       state.currentUser?.role === 'SUPER_ADMIN' || state.currentUser?.role === 'SCENARIO_ADMIN',
-    /** 可见场景范围：最外层管理员全部；场景管理员/场景用户仅绑定场景 */
     visibleScenarioIds: (state): ScenarioId[] =>
       state.currentUser?.role === 'SUPER_ADMIN'
         ? [...ALL_SCENARIO_IDS]
-        : (state.currentUser?.scenario_ids ?? []),
+        : state.currentUser?.scenario_code
+          ? [state.currentUser.scenario_code]
+          : [],
+    boundScenarioId: (state): ScenarioId | null => state.currentUser?.scenario_code ?? null,
   },
   actions: {
+    async bootstrap(): Promise<void> {
+      if (this.initialized) return;
+      this.loading = true;
+      try {
+        this.currentUser = await userApi.getMe();
+      } catch {
+        this.currentUser = null;
+      } finally {
+        mockApi.syncSession(this.currentUser);
+        this.initialized = true;
+        this.loading = false;
+      }
+    },
     async login(username: string, password: string): Promise<void> {
       this.loading = true;
       try {
-        this.currentUser = await mockApi.login(username, password);
+        this.currentUser = await userApi.login(username, password);
+        mockApi.syncSession(this.currentUser);
+        this.initialized = true;
       } finally {
         this.loading = false;
       }
     },
     async logout(): Promise<void> {
-      await mockApi.logout();
-      this.currentUser = null;
-      this.users = [];
+      try {
+        await userApi.logout();
+      } finally {
+        this.currentUser = null;
+        this.users = [];
+        this.usersTotal = 0;
+        this.platformStats = null;
+        mockApi.syncSession(null);
+        this.initialized = true;
+      }
     },
     async changePassword(oldPassword: string, newPassword: string): Promise<void> {
-      await mockApi.changeOwnPassword(oldPassword, newPassword);
+      if (!this.currentUser) throw new Error('未登录，请先登录系统');
+      await userApi.changePassword(this.currentUser.user_id, {
+        old_password: oldPassword,
+        new_password: newPassword,
+      });
     },
-    async fetchUsers(): Promise<void> {
+    async fetchUsers(params?: {
+      page?: number;
+      page_size?: number;
+      keyword?: string;
+      role?: UserRole;
+    }): Promise<void> {
       this.loading = true;
       try {
-        this.users = await mockApi.getUserList();
+        const result = await userApi.getUserList(params);
+        this.users = result.items;
+        this.usersTotal = result.total;
       } finally {
         this.loading = false;
       }
@@ -71,23 +96,24 @@ export const useUserStore = defineStore('user', {
     },
     async createUser(params: {
       username: string;
-      display_name: string;
       password: string;
       role: UserRole;
-    }): Promise<void> {
-      await mockApi.createUser(params);
+      scenario_id?: number | null;
+    }): Promise<UserAccount> {
+      const created = await userApi.createUser(params);
+      await this.fetchUsers();
+      return created;
+    },
+    async updateUserScenario(userId: string, scenarioId: number): Promise<void> {
+      await userApi.updateUserScenario(userId, scenarioId);
       await this.fetchUsers();
     },
     async resetUserPassword(userId: string, newPassword: string): Promise<void> {
-      await mockApi.resetUserPassword(userId, newPassword);
+      await userApi.resetPassword(userId, newPassword);
     },
     async setUserStatus(userId: string, status: 'active' | 'disabled'): Promise<void> {
-      await mockApi.setUserStatus(userId, status);
+      await userApi.setUserStatus(userId, status);
       await this.fetchUsers();
-    },
-    /** 当前用户更新自己关注的场景（V3.0：用户自选，非管理员分配） */
-    async updateMyScenarios(scenarioIds: ScenarioId[]): Promise<void> {
-      this.currentUser = await mockApi.updateMyScenarios(scenarioIds);
     },
   },
 });

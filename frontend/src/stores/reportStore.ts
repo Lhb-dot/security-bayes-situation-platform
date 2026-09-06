@@ -5,7 +5,7 @@
  * 过渡期数据源：mockApi；后端就绪后切换至 src/api/reportApi.*。
  */
 import { defineStore } from 'pinia';
-import * as mockApi from '@/services/mockApi';
+import { getReportList, generateReport } from '@/api/reportApi';
 import type { Report, ScenarioId } from '@/types/security';
 
 export const useReportStore = defineStore('report', {
@@ -17,7 +17,7 @@ export const useReportStore = defineStore('report', {
     async fetchReports(): Promise<void> {
       this.loading = true;
       try {
-        this.reports = await mockApi.getReportList();
+        this.reports = await getReportList({ page: 1, page_size: 200 });
       } finally {
         this.loading = false;
       }
@@ -27,8 +27,11 @@ export const useReportStore = defineStore('report', {
       title: string;
       scope: 'self' | 'all' | 'user';
       target_user_id?: string;
+      format?: Report['format'];
+      scheduled?: boolean;
+      interval_days?: number;
     }): Promise<Report> {
-      const report = await mockApi.generateReport(params);
+      const report = await generateReport(params);
       await this.fetchReports();
       return report;
     },

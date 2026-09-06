@@ -1,10 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
-import { getCurrentUser } from '@/services/mockApi';
+import { useUserStore } from '@/stores/userStore';
 import { setupRouterGuards } from './guards';
 
-// 告警态势页面
-import AlertsView from '@/views/Alert/AlertsView.vue';
-import AlertDetailView from '@/views/Alert/AlertDetailView.vue';
 // AI模型训练与风险预测
 import RiskAnalysis from '@/views/Model/RiskAnalysis.vue';
 
@@ -25,9 +22,10 @@ const routes = [
     path: '/',
     // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；其余 → /home
     redirect: () => {
-      const role = getCurrentUser()?.role;
+      const user = useUserStore().currentUser;
+      const role = user?.role;
       if (role === 'SUPER_ADMIN') return '/overview';
-      const bound = getCurrentUser()?.scenario_ids?.[0];
+      const bound = user?.scenario_code;
       if (bound) return `/scenarios/${bound}/dashboard`;
       return '/home';
     },
@@ -35,16 +33,9 @@ const routes = [
   },
   {
     path: '/alerts',
-    name: '告警详情页',
-    component: AlertsView,
-    // 告警中心对所有登录用户开放；普通用户仅能看到本人风险事件（数据层已按用户过滤）
-    meta: { title: '告警详情页' },
-  },
-  {
-    path: '/alerts/:id',
-    name: '告警详情',
-    component: AlertDetailView,
-    meta: { title: '告警详情' },
+    name: '风险事件列表',
+    component: () => import('@/views/Alert/AlertsView.vue'),
+    meta: { title: '风险事件列表' },
   },
   {
     path: '/risk',

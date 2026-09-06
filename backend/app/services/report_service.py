@@ -20,6 +20,7 @@ from sqlalchemy import false, or_, select
 
 from app.models.app_user import AppUser
 from app.models.report import Report
+from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
@@ -48,6 +49,24 @@ class ReportService(ServiceBase):
             raise ServiceError(404, "报告不存在")
         return report
 
+    def _serialize(self, report: Report) -> dict:
+        """Expose stable display fields while retaining the database field names."""
+        data = row_to_dict(report)
+        data.update(
+            {
+                "report_id": str(report.id),
+                "created_at": data.get("generated_at"),
+                "status": "completed",
+                "summary": report.content,
+            }
+        )
+        if report.scenario_id is not None:
+            scenario = self.db.get(Scenario, report.scenario_id)
+            if scenario is not None:
+                data["scenario_code"] = scenario.code
+                data["scenario_name"] = scenario.name
+        return data
+
     @staticmethod
     def _can_view(user, report: Report) -> bool:
         return (
@@ -62,6 +81,7 @@ class ReportService(ServiceBase):
     def create(
         self,
         current_user,
+        title: str,
         report_type: str,
         content: str,
         target_user_id: Optional[int] = None,
@@ -85,7 +105,7 @@ class ReportService(ServiceBase):
         err = validate_enum(format, REPORT_FORMATS, "format")
         if err:
             raise ServiceError(400, err)
-        err = validate_required({"content": content}, ("content",))
+        err = validate_required({"title": title, "content": content}, ("title", "content"))
         if err:
             raise ServiceError(400, err)
         if scheduled and (interval_days is None or interval_days < 1):
@@ -93,12 +113,18 @@ class ReportService(ServiceBase):
 
         role = getattr(current_user, "role", None)
         if role != ROLE_SUPER_ADMIN:
-            # 场景管理员/用户：只能生成自己绑定场景的报告
+            # 场景角色只能生成本人绑定场景的报告。
             if scenario_id is not None and scenario_id != current_user.scenario_id:
                 raise ServiceError(403, "只能生成本人绑定场景的报告")
             scenario_id = current_user.scenario_id
-            if target_user_id is not None and target_user_id != current_user.id:
+            if role == ROLE_SCENARIO_USER and target_user_id is not None and target_user_id != current_user.id:
                 raise ServiceError(403, "普通用户只能基于本人数据生成报告")
+            if role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
+                target = self.db.get(AppUser, target_user_id)
+                if target is None:
+                    raise ServiceError(404, "目标用户不存在")
+                if target.scenario_id != scenario_id:
+                    raise ServiceError(403, "只能指定本人绑定场景内的用户")
         elif target_user_id is not None:
             target = self.db.get(AppUser, target_user_id)
             if target is None:
@@ -106,6 +132,7 @@ class ReportService(ServiceBase):
 
         report = Report(
             generated_by=current_user.id,
+            title=title.strip(),
             report_type=report_type,
             target_user_id=target_user_id,
             content=content,
@@ -118,7 +145,7 @@ class ReportService(ServiceBase):
         )
         self.db.add(report)
         self.commit()
-        return ok(data=row_to_dict(report), message="报告已生成")
+        return ok(data=self._serialize(report), message="报告已生成")
 
     # ------------------------------------------------------------------
     # 查询
@@ -158,7 +185,7 @@ class ReportService(ServiceBase):
             )
         stmt = stmt.order_by(Report.generated_at.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [row_to_dict(r) for r in result["items"]]
+        result["items"] = [self._serialize(r) for r in result["items"]]
         return ok(data=result)
 
     @service_call
@@ -166,12 +193,35 @@ class ReportService(ServiceBase):
         """报告详情（普通用户仅本人生成或定向给自己的报告）。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and not self._can_view(current_user, report)
-        ):
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "无权限操作")
-        return ok(data=row_to_dict(report))
+        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and not self._can_view(current_user, report):
+            raise ServiceError(403, "无权限操作")
+        return ok(data=self._serialize(report))
+
+    @service_call
+    def update_schedule(
+        self,
+        current_user,
+        report_id: int,
+        scheduled: bool,
+        interval_days: Optional[int] = None,
+    ):
+        """保存账号设置的定时记录，暂不启动实际调度任务。"""
+        self.require_login(current_user)
+        report = self._get(report_id)
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "无权限操作")
+        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and report.generated_by != current_user.id:
+            raise ServiceError(403, "只有报告创建者可以修改定时配置")
+        if scheduled and (interval_days is None or interval_days < 1):
+            raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
+        report.scheduled = scheduled
+        report.interval_days = interval_days if scheduled else None
+        self.commit()
+        return ok(data=self._serialize(report), message="定时配置已保存")
 
     # ------------------------------------------------------------------
     # 删除（生成者本人或 ADMIN）
@@ -181,10 +231,10 @@ class ReportService(ServiceBase):
         """删除报告：生成者本人或管理员。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        if (
-            getattr(current_user, "role", None) != ROLE_ADMIN
-            and report.generated_by != current_user.id
-        ):
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
+            raise ServiceError(403, "无权限操作")
+        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and report.generated_by != current_user.id:
             raise ServiceError(403, "无权限操作")
         self.db.delete(report)
         self.commit()
