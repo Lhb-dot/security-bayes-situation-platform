@@ -19,8 +19,8 @@ const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 const roleLabel = computed(() => {
   const role = userStore.currentUser?.role;
   if (role === 'SUPER_ADMIN') return '系统管理员';
-  if (role === 'SCENARIO_ADMIN') return '管理员';
-  return '用户';
+  if (role === 'SCENARIO_ADMIN') return '场景管理员';
+  return '场景用户';
 });
 
 /** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
@@ -128,7 +128,8 @@ const pageTitle = computed(() => {
   if (route.path === '/login') return '用户登录';
   if (route.path === '/home') return '首页';
   if (route.path === '/risk') return 'AI模型训练与风险研判配置';
-  if (route.path === '/alerts') return '风险事件列表';
+  if (route.path === '/alerts') return '告警详情总览';
+  if (route.path.startsWith('/alerts/')) return '告警处置分析';
   if (route.path === '/overview') return '平台运行总览';
   if (route.path === '/scenarios') return '场景中心';
   if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';

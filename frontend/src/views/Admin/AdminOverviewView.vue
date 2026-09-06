@@ -5,6 +5,7 @@
  * 定位（需求 7.0）：管理员无个人首页，登录后进入平台级"驾驶舱"，
  * 一眼确认四个场景是否都在正常运行、哪里出问题。
  * 数据链路：页面 → store（situation / riskEvent / scenario / threshold）→ mockApi；
+ * 
  * 按设置轮询自动刷新 + 手动刷新 + 实时时钟；仅 SUPER_ADMIN 可见（路由守卫 + 页内双保险）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -31,6 +32,10 @@ import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
 import LineChart from '@/components/charts/LineChart.vue';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
+import platformDataBackground from '@/assets/quick-links/platform-data.png';
+import modelTopologyBackground from '@/assets/quick-links/model-topology.png';
+import accessControlBackground from '@/assets/quick-links/access-control.png';
+import intelligenceFlowBackground from '@/assets/quick-links/intelligence-flow.png';
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -263,18 +268,53 @@ interface QuickLink {
   label: string;
   desc: string;
   path: string;
+  accent: 'cyan' | 'violet' | 'blue' | 'green';
+  iconPath: string;
+  backgroundImage: string;
 }
 
 const quickLinks: QuickLink[] = [
-  { key: 'scenarios', label: '场景中心', desc: '管理各业务场景与接入状态', path: '/scenarios' },
-  { key: 'train', label: '模型训练', desc: '算法选择与训练任务', path: '/risk' },
-  { key: 'models', label: '模型中心', desc: '模型发布、下线与版本管理', path: '/models' },
-  { key: 'datasets', label: '数据集中心', desc: '平台数据与版本管理', path: '/datasets' },
-  { key: 'users', label: '用户管理', desc: '账号、角色与场景绑定', path: '/users' },
-  { key: 'inference', label: '推理记录', desc: '全平台风险推理记录', path: '/inference-records' },
-  { key: 'reports', label: '报告中心', desc: '态势报告生成与管理', path: '/reports' },
-  { key: 'settings', label: '系统设置', desc: '阈值与系统参数配置', path: '/settings' },
+  { key: 'scenarios', label: '场景中心', desc: '管理各业务场景与接入状态', path: '/scenarios', accent: 'cyan', iconPath: 'M3 4h18v4H3zM3 10h18v4H3zM3 16h18v4H3z', backgroundImage: platformDataBackground },
+  { key: 'train', label: '模型训练', desc: '算法选择与训练任务', path: '/risk', accent: 'violet', iconPath: 'M4 19V9m6 10V5m6 14v-7m4 7H2M4 7l6-3 6 5 4-3', backgroundImage: modelTopologyBackground },
+  { key: 'models', label: '模型中心', desc: '模型发布、下线与版本管理', path: '/models', accent: 'violet', iconPath: 'm12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 9 8-4.5M12 12 4 7.5M12 12v9', backgroundImage: modelTopologyBackground },
+  { key: 'datasets', label: '数据集中心', desc: '平台数据与版本管理', path: '/datasets', accent: 'cyan', iconPath: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6m-16 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6', backgroundImage: platformDataBackground },
+  { key: 'users', label: '用户管理', desc: '账号、角色与场景绑定', path: '/users', accent: 'blue', iconPath: 'M16 20v-1.5c0-2.5-2.7-4.5-6-4.5s-6 2-6 4.5V20m6-9a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 2c2 0 3.5 1.4 3.5 3.2V20m-2-9a2.8 2.8 0 1 0 0-5.6', backgroundImage: accessControlBackground },
+  { key: 'inference', label: '推理记录', desc: '全平台风险推理记录', path: '/inference-records', accent: 'green', iconPath: 'M5 4h10l4 4v12H5V4Zm10 0v4h4M8 13h8M8 17h5M8 9h3', backgroundImage: intelligenceFlowBackground },
+  { key: 'reports', label: '报告中心', desc: '态势报告生成与管理', path: '/reports', accent: 'green', iconPath: 'M5 3h10l4 4v14H5V3Zm10 0v4h4M8 12h8M8 16h8M8 8h2', backgroundImage: intelligenceFlowBackground },
+  { key: 'settings', label: '系统设置', desc: '阈值与系统参数配置', path: '/settings', accent: 'blue', iconPath: 'M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Zm0-12.2v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17.4l-1.4 1.4m0-13.2L7 7m10 10 1.4 1.4', backgroundImage: accessControlBackground },
 ];
+
+interface QuickLinkState {
+  text: string;
+  tone: 'ok' | 'info' | 'warn' | 'danger';
+}
+
+const quickLinkState = (key: QuickLink['key']): QuickLinkState => {
+  const drafts = modelStore.modelVersions.filter((m) => m.status === 'DRAFT').length;
+  const training = modelStore.modelVersions.filter((m) => m.status === 'TRAINING').length;
+  const disabled = Number(platformStats.value?.disabled ?? 0);
+
+  switch (key) {
+    case 'scenarios':
+      return { text: `${activeScenarioCount.value}/${scenarioCount.value} 场景运行`, tone: 'ok' };
+    case 'train':
+      return training > 0 ? { text: `训练中 ${training} 项`, tone: 'info' } : { text: '暂无训练任务', tone: 'ok' };
+    case 'models':
+      return drafts > 0 ? { text: `待发布 ${drafts} 个`, tone: 'danger' } : { text: `${activeModelCount.value} 个已发布`, tone: 'ok' };
+    case 'datasets':
+      return { text: `${totalDatasetCount.value} 个数据集`, tone: 'info' };
+    case 'users':
+      return disabled > 0 ? { text: `禁用账号 ${disabled} 个`, tone: 'warn' } : { text: `${platformStats.value?.total ?? 0} 个账号正常`, tone: 'ok' };
+    case 'inference':
+      return { text: `近 24h ${recent24hCount.value} 次`, tone: 'info' };
+    case 'reports':
+      return { text: '可生成全平台报告', tone: 'ok' };
+    case 'settings':
+      return { text: `${scenarioCount.value} 个场景已配置`, tone: 'ok' };
+    default:
+      return { text: '状态正常', tone: 'ok' };
+  }
+};
 
 // ===================== 事件流 =====================
 const latestEvents = computed<RiskEvent[]>(() =>
@@ -322,6 +362,7 @@ const refreshData = async (): Promise<void> => {
     loading.value = false;
   }
 };
+
 
 const startAutoRefresh = (): void => {
   if (refreshTimer !== null) window.clearInterval(refreshTimer);
@@ -582,8 +623,11 @@ onBeforeUnmount(() => {
       <!-- 快捷入口 / 工作台导航 -->
       <section class="admin-quick">
         <div class="admin-section-title">
-          <h3>快捷入口</h3>
-          <span>平台管理工作台</span>
+          <div>
+            <h3>快捷入口</h3>
+            <span>平台管理工作台</span>
+          </div>
+          <p class="admin-quick__hint">8 项平台管理能力 · 关键状态实时同步</p>
         </div>
         <div class="admin-quick__grid">
           <button
@@ -591,11 +635,24 @@ onBeforeUnmount(() => {
             :key="link.key"
             type="button"
             class="admin-quick-tile"
+            :class="`admin-quick-tile--${link.accent}`"
+            :style="{ '--quick-background': `url(${link.backgroundImage})` }"
+            :aria-label="`前往${link.label}，${quickLinkState(link.key).text}`"
             @click="router.push({ path: link.path })"
           >
+            <span class="admin-quick-tile__top">
+              <span class="admin-quick-tile__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path :d="link.iconPath" />
+                </svg>
+              </span>
+              <span class="admin-quick-tile__arrow" aria-hidden="true">→</span>
+            </span>
             <span class="admin-quick-tile__label">{{ link.label }}</span>
             <span class="admin-quick-tile__desc">{{ link.desc }}</span>
-            <span class="admin-quick-tile__arrow">→</span>
+            <span class="admin-quick-tile__state" :class="`admin-quick-tile__state--${quickLinkState(link.key).tone}`">
+              <i aria-hidden="true"></i>{{ quickLinkState(link.key).text }}
+            </span>
           </button>
         </div>
       </section>
@@ -1288,11 +1345,21 @@ onBeforeUnmount(() => {
 
 /* ===================== 快捷入口 ===================== */
 .admin-quick {
+  position: relative;
+  overflow: hidden;
   padding: 16px 18px;
   border-radius: 16px;
   border: 1px solid rgba(125, 201, 255, 0.14);
-  background: linear-gradient(160deg, rgba(14, 30, 56, 0.9), rgba(8, 17, 31, 0.92));
+  background:
+    radial-gradient(480px 180px at 100% 0%, rgba(91, 166, 255, 0.1), transparent 72%),
+    linear-gradient(160deg, rgba(14, 30, 56, 0.9), rgba(8, 17, 31, 0.92));
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
+}
+
+.admin-quick__hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: rgba(184, 211, 246, 0.5);
 }
 
 .admin-quick__grid {
@@ -1302,26 +1369,136 @@ onBeforeUnmount(() => {
 }
 
 .admin-quick-tile {
+  --quick-accent: #75c7ff;
+  --quick-tint: rgba(91, 166, 255, 0.12);
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
-  padding: 14px 16px;
+  min-height: 154px;
+  padding: 14px 15px 13px;
   text-align: left;
   border-radius: 12px;
   border: 1px solid rgba(125, 201, 255, 0.1);
-  background: rgba(255, 255, 255, 0.025);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018));
   color: #dbe9ff;
   cursor: pointer;
-  transition: background 0.16s, border-color 0.16s, transform 0.16s;
+  overflow: hidden;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.admin-quick-tile::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--quick-background);
+  background-size: cover;
+  background-position: center;
+  opacity: 0.12;
+  mix-blend-mode: screen;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.admin-quick-tile::after {
+  content: '';
+  position: absolute;
+  right: -28px;
+  bottom: -42px;
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: var(--quick-tint);
+  filter: blur(8px);
+  opacity: 0.55;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.admin-quick-tile--cyan {
+  --quick-accent: #72d5ff;
+  --quick-tint: rgba(73, 205, 255, 0.16);
+}
+
+.admin-quick-tile--violet {
+  --quick-accent: #b7a0ff;
+  --quick-tint: rgba(157, 124, 255, 0.16);
+}
+
+.admin-quick-tile--blue {
+  --quick-accent: #8eb4ff;
+  --quick-tint: rgba(92, 138, 255, 0.16);
+}
+
+.admin-quick-tile--green {
+  --quick-accent: #72dfbd;
+  --quick-tint: rgba(77, 218, 172, 0.15);
 }
 
 .admin-quick-tile:hover {
-  background: rgba(91, 166, 255, 0.09);
-  border-color: rgba(125, 201, 255, 0.3);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--quick-accent) 52%, transparent);
+  background: linear-gradient(145deg, var(--quick-tint), rgba(255, 255, 255, 0.035));
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transform: translateY(-3px);
+}
+
+.admin-quick-tile:hover::after {
+  opacity: 0.95;
+  transform: scale(1.12);
+}
+
+.admin-quick-tile:hover::before {
+  opacity: 0.17;
+  transform: scale(1.025);
+}
+
+.admin-quick-tile > span {
+  position: relative;
+  z-index: 1;
+}
+
+.admin-quick-tile:focus-visible {
+  outline: 2px solid var(--quick-accent);
+  outline-offset: 3px;
+}
+
+.admin-quick-tile:active {
+  transform: translateY(-1px) scale(0.985);
+}
+
+.admin-quick-tile__top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.admin-quick-tile__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--quick-accent) 30%, transparent);
+  border-radius: 9px;
+  background: var(--quick-tint);
+  color: var(--quick-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-quick-tile__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.admin-quick-tile:hover .admin-quick-tile__icon {
+  transform: scale(1.08);
+  box-shadow: 0 0 18px var(--quick-tint), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .admin-quick-tile__label {
@@ -1340,18 +1517,54 @@ onBeforeUnmount(() => {
 }
 
 .admin-quick-tile__arrow {
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: rgba(154, 214, 255, 0.45);
-  font-size: 1rem;
-  transition: transform 0.16s, color 0.16s;
+  color: rgba(220, 234, 255, 0.42);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: transform 0.2s ease, color 0.2s ease;
 }
 
 .admin-quick-tile:hover .admin-quick-tile__arrow {
-  transform: translate(3px, -50%);
-  color: #9ad6ff;
+  transform: translateX(4px);
+  color: var(--quick-accent);
+}
+
+.admin-quick-tile__state {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  font-size: 0.67rem;
+  line-height: 1;
+  color: rgba(220, 234, 255, 0.66);
+  background: rgba(255, 255, 255, 0.045);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-quick-tile__state i {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: #8eb4ff;
+}
+
+.admin-quick-tile__state--ok i { background: #53e5c8; box-shadow: 0 0 7px rgba(83, 229, 200, 0.72); }
+.admin-quick-tile__state--info i { background: #7dc9ff; }
+.admin-quick-tile__state--warn i { background: #ffd166; box-shadow: 0 0 7px rgba(255, 209, 102, 0.58); }
+.admin-quick-tile__state--danger i { background: #ff7b72; box-shadow: 0 0 7px rgba(255, 123, 114, 0.6); }
+
+@supports not (color: color-mix(in srgb, white, black)) {
+  .admin-quick-tile:hover,
+  .admin-quick-tile__icon {
+    border-color: rgba(125, 201, 255, 0.32);
+  }
 }
 
 @media (max-width: 1280px) {

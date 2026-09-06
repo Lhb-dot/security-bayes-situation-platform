@@ -31,7 +31,11 @@ const handleLogin = async () => {
     const user = userStore.currentUser;
     if (!user) throw new Error('登录失败');
     const roleText =
-      user.role === 'SUPER_ADMIN' ? '系统管理员' : user.role === 'SCENARIO_ADMIN' ? '管理员' : '用户';
+      user.role === 'SUPER_ADMIN'
+        ? '系统管理员'
+        : user.role === 'SCENARIO_ADMIN'
+          ? '场景管理员'
+          : '场景用户';
     ElMessage.success(`欢迎回来，${user.display_name}（${roleText}）`);
     // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
     if (user.role === 'SUPER_ADMIN') {
@@ -89,7 +93,18 @@ const handleLogin = async () => {
       </form>
 
       <div class="login-demo">
-        <p class="login-demo__title">请使用已配置的系统账号登录</p>
+        <p class="login-demo__title">演示账号（密码均为 123456）</p>
+        <div class="login-demo__btns">
+          <button class="login-demo__btn" @click="quickLogin('admin', '123456')">
+            系统管理员 admin
+          </button>
+          <button class="login-demo__btn" @click="quickLogin('net_admin', '123456')">
+            场景管理员 net_admin
+          </button>
+          <button class="login-demo__btn" @click="quickLogin('alice', '123456')">
+            场景用户 alice
+          </button>
+        </div>
       </div>
     </div>
   </div>
