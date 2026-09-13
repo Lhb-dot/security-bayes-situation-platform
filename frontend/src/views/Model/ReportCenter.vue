@@ -316,11 +316,6 @@ const trendRows = computed(() => viewReportData.value?.trend ?? []);
 /** 重点风险事件 */
 const keyEvents = computed(() => viewReportData.value?.key_events ?? []);
 
-const riskLevelLabel = (level: string | null | undefined): string => {
-  if (!level) return '';
-  return ({ HIGH: '高危', MEDIUM: '中危', LOW: '低危' } as Record<string, string>)[level] ?? level;
-};
-
 onMounted(async () => {
   if (!userStore.initialized) await userStore.bootstrap();
   await scenarioStore.fetchScenarioList();
@@ -566,6 +561,7 @@ onMounted(async () => {
             </p>
             <div v-if="viewChartFor(m)" class="chart-box">
               <BarChart
+                :data="(viewChartFor(m)?.categories ?? []).map((name) => ({ name, score: 0 }))"
                 :categories="viewChartFor(m)?.categories ?? []"
                 :series="viewChartFor(m)?.series ?? []"
                 height="220px"

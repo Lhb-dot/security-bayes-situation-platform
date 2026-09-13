@@ -42,3 +42,5 @@ joblib>=1.1.0
 
 fastapi
 uvicorn
+openai>=1.0.0
+cryptography>=42.0.0

@@ -38,6 +38,9 @@ class AppUser(Base):
         back_populates="publisher", foreign_keys="ModelVersion.published_by"
     )
     inference_records: Mapped[list["InferenceRecord"]] = relationship(back_populates="user")
+    ai_setting: Mapped["UserAISetting | None"] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
     risk_events: Mapped[list["RiskEvent"]] = relationship(back_populates="creator")
     handling_records: Mapped[list["HandlingRecord"]] = relationship(back_populates="handler")
     reports_generated: Mapped[list["Report"]] = relationship(

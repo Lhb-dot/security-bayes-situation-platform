@@ -1,0 +1,79 @@
+{
+  "network_security": {
+    "scenario_name": "网络安全",
+    "analysis_goal": "识别网络异常和入侵风险",
+    "risk_types": ["异常流量", "入侵行为", "数据外传"],
+    "manual_review_advice": "结合原始流量、连接日志和主机侧证据进行人工复核。",
+    "recommended_actions": [
+      "检查源主机、目标地址和相关连接日志",
+      "核对异常端口、协议和流量方向",
+      "必要时对相关主机进行进一步核查"
+    ],
+    "feature_dictionary": {
+      "src_bytes": {
+        "display_name": "源端字节数",
+        "meaning": "连接过程中源端发送的数据量",
+        "high_value_meaning": "数值异常升高可能表示异常流量或数据外传",
+        "low_value_meaning": "数值较低本身不能排除短连接或小流量攻击",
+        "abnormal_value_meaning": "与历史基线或同类连接明显偏离时需要核查",
+        "recommended_action": "检查源主机、目标地址和相关连接日志"
+      },
+      "dst_bytes": {
+        "display_name": "目标端字节数",
+        "meaning": "连接过程中目标端接收或发送的数据量",
+        "high_value_meaning": "异常升高可能表示大流量传输或响应异常",
+        "low_value_meaning": "数值较低可能对应探测、握手或短连接行为",
+        "abnormal_value_meaning": "与同类服务连接相比明显偏离时需要核查",
+        "recommended_action": "核对目标地址、会话方向和近期流量记录"
+      },
+      "duration": {
+        "display_name": "连接持续时间",
+        "meaning": "一次网络连接从建立到结束的持续时长",
+        "high_value_meaning": "持续时间异常偏长可能表示长连接、控制通道或资源占用",
+        "low_value_meaning": "极短连接可能对应探测、扫描或快速失败",
+        "abnormal_value_meaning": "明显偏离同类连接基线时需要核查",
+        "recommended_action": "结合连接状态、端口和主机进程日志复核"
+      },
+      "L4_DST_PORT": {
+        "display_name": "目标端口",
+        "meaning": "网络连接访问的传输层目标端口",
+        "high_value_meaning": "访问非常用或高风险服务端口时需要重点关注",
+        "low_value_meaning": "低端口通常对应系统或基础服务，仍需结合协议判断",
+        "abnormal_value_meaning": "端口与业务用途不匹配时可能存在异常访问",
+        "recommended_action": "核对端口对应服务、访问来源和主机白名单"
+      },
+      "L4_PROTO": {
+        "display_name": "传输层协议",
+        "meaning": "连接使用的传输层通信协议",
+        "high_value_meaning": "协议与业务场景不匹配时可能存在异常通信",
+        "low_value_meaning": "常见协议不代表连接一定安全",
+        "abnormal_value_meaning": "协议分布明显偏离业务基线时需要核查",
+        "recommended_action": "核对协议、端口和通信双方的业务关系"
+      }
+    }
+  },
+  "power_system": {
+    "scenario_name": "电力系统",
+    "analysis_goal": "识别电力系统运行异常和设备风险",
+    "risk_types": ["设备异常", "运行波动", "保护告警"],
+    "manual_review_advice": "结合 PMU、SCADA 和现场巡检结果进行人工复核。",
+    "recommended_actions": ["核对设备告警和测量数据", "安排现场巡检"],
+    "feature_dictionary": {}
+  },
+  "geological_risk": {
+    "scenario_name": "地质风险",
+    "analysis_goal": "识别滑坡及相关地质灾害风险",
+    "risk_types": ["滑坡风险", "地表位移", "降雨诱发风险"],
+    "manual_review_advice": "结合现场调查、降雨和位移监测结果进行人工复核。",
+    "recommended_actions": ["核对降雨和位移监测", "开展重点区域现场核查"],
+    "feature_dictionary": {}
+  },
+  "flightdeck_operation": {
+    "scenario_name": "航母甲板作业",
+    "analysis_goal": "识别舰载机甲板作业中的碰撞和调度风险",
+    "risk_types": ["碰撞风险", "间距异常", "调度冲突"],
+    "manual_review_advice": "结合甲板态势、航迹和现场调度记录进行人工复核。",
+    "recommended_actions": ["复核间距和接近率", "核对调度顺序与避让航线"],
+    "feature_dictionary": {}
+  }
+}

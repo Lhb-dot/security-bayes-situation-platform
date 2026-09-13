@@ -332,12 +332,41 @@ export interface FeatureEvidence {
 
 /** 算法可解释性信息（Java /predict 返回，落库 explain_data） */
 export interface InferenceExplain {
-  prediction_label: string;
-  probability: number | null;
-  class_distribution: ClassProb[];
-  views: ViewDistribution[];
-  view_weights: number[];
-  feature_evidence: FeatureEvidence[];
+  prediction?: string;
+  prediction_is_risk?: boolean;
+  risk_probability?: number | null;
+  risk_threshold?: number | null;
+  confidence?: string;
+  top_features?: Array<{
+    feature_name: string;
+    display_name?: string;
+    raw_value: unknown;
+    processed_value?: unknown;
+    contribution?: number;
+    direction: string;
+    rank: number;
+    meaning?: string;
+    risk_description?: string;
+    recommended_action?: string;
+  }>;
+  conflict?: { has_conflict: boolean; description: string };
+  scenario?: Record<string, unknown>;
+  recommended_actions?: string[];
+  algorithm_details?: Record<string, unknown>;
+  input_snapshot?: Record<string, unknown>;
+  model_quality?: {
+    risk_recall?: number | null;
+    risk_f1?: number | null;
+    cv_mean?: number | null;
+    cv_std?: number | null;
+  };
+  /** Legacy fields retained for report compatibility. */
+  prediction_label?: string;
+  probability?: number | null;
+  class_distribution?: ClassProb[];
+  views?: ViewDistribution[];
+  view_weights?: number[];
+  feature_evidence?: FeatureEvidence[];
 }
 
 /** 报告单个特征的加权条件概率信息 */

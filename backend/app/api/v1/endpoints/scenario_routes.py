@@ -12,9 +12,11 @@ from app.api.deps import get_current_user, require_admin, require_bound_scenario
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
-from app.schemas.common import ResponseModel
+from app.models.scenario import Scenario
+from app.schemas.common import ResponseModel, ok
 from app.schemas.scenario import ScenarioCreate, ScenarioUpdate
 from app.services.scenario_service import ScenarioService
+from app.services.explanation_service import get_scenario_config
 
 router = APIRouter(prefix="/scenarios", tags=["场景管理"])
 
@@ -40,6 +42,24 @@ def get_scenario(
     return unwrap(
         ScenarioService(db).get(current_user=current_user, scenario_id=scenario_id)
     )
+
+
+@router.get(
+    "/{scenario_id}/explanation-config",
+    response_model=ResponseModel,
+    summary="读取场景化模型解释配置",
+)
+def get_explanation_config(
+    scenario_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_bound_scenario),
+):
+    scenario = db.get(Scenario, scenario_id)
+    if scenario is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="场景不存在")
+    return ok(data=get_scenario_config(scenario.code))
 
 
 @router.get(

@@ -29,6 +29,8 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -159,6 +161,11 @@ public final class NbAlgorithmService {
             }
             JSONObject data = new JSONObject().put("prediction_label", header.classAttribute().value(argmax))
                     .put("probability", round(dist[argmax])).put("class_distribution", classes);
+            try {
+                data.put("feature_attribution", buildFeatureAttribution(classifier, instance, header, features));
+            } catch (Exception ignored) {
+                data.put("feature_attribution", new JSONArray());
+            }
             // 追加多视图预测 / 视图权重 / 特征加权条件概率（未接入算法返回空数组）
             JSONObject explain = buildExplain(classifier, instance, header);
             data.put("views", explain.getJSONArray("views"));
@@ -268,6 +275,38 @@ public final class NbAlgorithmService {
         }
         obj.put("predicted_label", header.classAttribute().value(argmax));
         return obj.put("distribution", arr);
+    }
+
+    /** Read-only local sensitivity diagnostic; it does not change model inference. */
+    private static JSONArray buildFeatureAttribution(
+            Classifier classifier, Instance instance, Instances header, JSONObject features) throws Exception {
+        double[] original = classifier.distributionForInstance(instance);
+        int predicted = 0;
+        for (int i = 1; i < original.length; i++) if (original[i] > original[predicted]) predicted = i;
+        ArrayList<JSONObject> items = new ArrayList<>();
+        for (int i = 0; i < header.numAttributes(); i++) {
+            if (i == header.classIndex() || instance.isMissing(i)) continue;
+            Instance masked = new DenseInstance(instance);
+            masked.setDataset(header);
+            masked.setMissing(i);
+            double[] changed = classifier.distributionForInstance(masked);
+            double delta = original[predicted] - changed[predicted];
+            Attribute attr = header.attribute(i);
+            Object raw = features.has(attr.name()) ? features.get(attr.name()) : JSONObject.NULL;
+            String processed = attr.isNominal() ? instance.stringValue(i) : String.valueOf(instance.value(i));
+            items.add(new JSONObject()
+                    .put("feature_name", attr.name())
+                    .put("raw_value", raw)
+                    .put("processed_value", processed)
+                    .put("contribution", round(Math.abs(delta)))
+                    .put("signed_contribution", round(delta))
+                    .put("supports_predicted", delta >= 0));
+        }
+        items.sort(Comparator.comparingDouble(x -> -x.optDouble("contribution", 0.0)));
+        JSONArray result = new JSONArray();
+        int limit = Math.min(10, items.size());
+        for (int i = 0; i < limit; i++) result.put(items.get(i).put("rank", i + 1));
+        return result;
     }
 
     /** 提取 CAVWNB 每个特征值对各风险类的加权条件概率贡献。 */

@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.ArrayList;
+import java.util.Comparator;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -104,6 +106,11 @@ public class PredictServer {
             if (explain.has("calculation_method")) {
                 data.put("calculation_method", explain.getString("calculation_method"));
             }
+            try {
+                data.put("feature_attribution", buildFeatureAttribution(clf, inst, header, features));
+            } catch (Exception ignored) {
+                data.put("feature_attribution", new JSONArray());
+            }
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
         } catch (Exception e) {
             JSONObject err = new JSONObject().put("success", false)
@@ -150,6 +157,38 @@ public class PredictServer {
         }
         obj.put("predicted_label", header.classAttribute().value(argmax));
         return obj.put("distribution", arr);
+    }
+
+    /** Read-only local sensitivity diagnostic; it does not change model inference. */
+    private static JSONArray buildFeatureAttribution(
+            Classifier classifier, Instance instance, Instances header, JSONObject features) throws Exception {
+        double[] original = classifier.distributionForInstance(instance);
+        int predicted = 0;
+        for (int i = 1; i < original.length; i++) if (original[i] > original[predicted]) predicted = i;
+        ArrayList<JSONObject> items = new ArrayList<>();
+        for (int i = 0; i < header.numAttributes(); i++) {
+            if (i == header.classIndex() || instance.isMissing(i)) continue;
+            Instance masked = new DenseInstance(instance);
+            masked.setDataset(header);
+            masked.setMissing(i);
+            double[] changed = classifier.distributionForInstance(masked);
+            double delta = original[predicted] - changed[predicted];
+            Attribute attr = header.attribute(i);
+            Object raw = features.has(attr.name()) ? features.get(attr.name()) : JSONObject.NULL;
+            String processed = attr.isNominal() ? instance.stringValue(i) : String.valueOf(instance.value(i));
+            items.add(new JSONObject()
+                    .put("feature_name", attr.name())
+                    .put("raw_value", raw)
+                    .put("processed_value", processed)
+                    .put("contribution", round(Math.abs(delta)))
+                    .put("signed_contribution", round(delta))
+                    .put("supports_predicted", delta >= 0));
+        }
+        items.sort(Comparator.comparingDouble(x -> -x.optDouble("contribution", 0.0)));
+        JSONArray result = new JSONArray();
+        int limit = Math.min(10, items.size());
+        for (int i = 0; i < limit; i++) result.put(items.get(i).put("rank", i + 1));
+        return result;
     }
 
     private static JSONArray buildCavwnbEvidence(CAVWNB cav, Instance disc, Instances header) throws Exception {

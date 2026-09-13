@@ -52,7 +52,7 @@ class InferenceRecordService(ServiceBase):
             raise ServiceError(404, "推理记录不存在")
         return record
 
-    def _to_dict(self, record: InferenceRecord) -> dict:
+    def _to_dict(self, record: InferenceRecord, current_user=None) -> dict:
         """序列化推理记录，并补全展示字段（场景/数据集/算法/风险类型/关联风险事件）。"""
         data = row_to_dict(record)
         model = self.db.get(ModelVersion, record.model_version_id)
@@ -72,6 +72,13 @@ class InferenceRecordService(ServiceBase):
             select(RiskEvent).where(RiskEvent.inference_record_id == record.id)
         )
         data["risk_event_id"] = event.id if event is not None else None
+        if current_user is not None and getattr(current_user, "role", None) not in (
+            ROLE_SUPER_ADMIN,
+            ROLE_SCENARIO_ADMIN,
+        ):
+            from app.services.explanation_service import public_explanation
+
+            data["explain_data"] = public_explanation(record.explain_data)
         return data
 
     def _can_infer_from_model(self, current_user, model: ModelVersion, dataset: Dataset) -> bool:
@@ -124,6 +131,33 @@ class InferenceRecordService(ServiceBase):
         if probability is not None and not (0 <= probability <= 1):
             raise ServiceError(500, "预测服务返回的概率超出 [0,1]")
 
+        # Keep the probability of the explicitly mapped risk class even when
+        # argmax predicts the normal class; this is the public risk metric.
+        class_distribution = result.get("class_distribution") or []
+        risk_probability = next(
+            (
+                float(item.get("probability"))
+                for item in class_distribution
+                if isinstance(item, dict)
+                and is_risk_label(dataset.logical_id, item.get("class"))
+                and item.get("probability") is not None
+            ),
+            None,
+        )
+        if risk_probability is not None:
+            result["risk_probability"] = risk_probability
+
+        from app.services.explanation_service import build_unified_explanation
+
+        is_prediction_risk = is_risk_label(dataset.logical_id, label)
+        unified = build_unified_explanation(
+            scenario_code=model.scenario.code if model.scenario else None,
+            sample=input_features,
+            model_result=result,
+            algorithm_code=algorithm_code,
+            is_prediction_risk=is_prediction_risk,
+            model_metrics=model.evaluation_metrics,
+        )
         explain_data = {
             "prediction_label": label,
             "probability": probability,
@@ -131,6 +165,7 @@ class InferenceRecordService(ServiceBase):
             "views": result.get("views") or [],
             "view_weights": result.get("view_weights") or [],
             "feature_evidence": result.get("feature_evidence") or [],
+            **unified,
         }
         return label, probability, explain_data
 
@@ -208,7 +243,7 @@ class InferenceRecordService(ServiceBase):
 
         self.commit()
 
-        data = row_to_dict(record)
+        data = self._to_dict(record, current_user)
         data["risk_event"] = row_to_dict(generated_event) if generated_event else None
         return ok(
             data=data,
@@ -283,7 +318,7 @@ class InferenceRecordService(ServiceBase):
             stmt = stmt.where(InferenceRecord.model_version_id == model_version_id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._to_dict(r) for r in result["items"]]
+        result["items"] = [self._to_dict(r, current_user) for r in result["items"]]
         return ok(data=result)
 
     @service_call
@@ -291,7 +326,58 @@ class InferenceRecordService(ServiceBase):
         """推理记录详情。"""
         record = self._get(record_id)
         self._require_record_access(current_user, record)
-        return ok(data=self._to_dict(record))
+        return ok(data=self._to_dict(record, current_user))
+
+    @service_call
+    def get_explanation_source(self, current_user, record_id: int):
+        """Return the authorized, server-side facts used by the explanation stream."""
+        record = self._get(record_id)
+        self._require_record_access(current_user, record)
+        from app.services.explanation_service import get_scenario_config
+
+        model = self.db.get(ModelVersion, record.model_version_id)
+        scenario_code = model.scenario.code if model and model.scenario else None
+        scenario = get_scenario_config(scenario_code)
+        model_result = dict(record.explain_data or {})
+        # A previous wording result is an output artifact, never an input fact.
+        model_result.pop("ai_explanation", None)
+        model_result.setdefault("prediction_label", record.prediction_label)
+        model_result.setdefault("prediction_is_risk", bool(record.is_risk_event))
+        if record.risk_score is not None:
+            model_result.setdefault("risk_probability", float(record.risk_score))
+        return ok(data={
+            "scenario": scenario,
+            "sample": dict(record.input_features or {}),
+            "model_result": model_result,
+            "algorithm_details": model_result.get("algorithm_details") or {},
+            "recommended_actions": scenario.get("recommended_actions") or [],
+        })
+
+    @service_call
+    def save_generated_explanation(
+        self,
+        current_user,
+        record_id: int,
+        markdown: str,
+        source: str,
+        data_snapshot: dict[str, Any],
+    ):
+        """Persist generated Markdown together with the exact facts sent to the model."""
+        record = self._get(record_id)
+        self._require_record_access(current_user, record)
+        if not markdown or len(markdown) > 100_000:
+            raise ServiceError(400, "解释文本为空或超过保存上限")
+        source = source if source in {"ai", "fallback"} else "fallback"
+        explain_data = dict(record.explain_data or {})
+        explain_data["ai_explanation"] = {
+            "markdown": markdown,
+            "source": source,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "data_snapshot": data_snapshot,
+        }
+        record.explain_data = explain_data
+        self.commit()
+        return ok(data={"saved": True, "source": source})
 
     @service_call
     def get_explain(self, current_user, record_id: int):
@@ -301,13 +387,16 @@ class InferenceRecordService(ServiceBase):
         """
         record = self._get(record_id)
         self._require_record_access(current_user, record)
-        return ok(
-            data={
-                "inference_record_id": record.id,
-                "prediction_label": record.prediction_label,
-                "explain_data": record.explain_data or {},
-            }
-        )
+        explanation = record.explain_data or {}
+        if getattr(current_user, "role", None) not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+            from app.services.explanation_service import public_explanation
+
+            explanation = public_explanation(explanation)
+        return ok(data={
+            "inference_record_id": record.id,
+            "prediction_label": record.prediction_label,
+            "explain_data": explanation,
+        })
 
     # ------------------------------------------------------------------
     # 删除（仅 ADMIN；已生成风险事件的记录禁止删除，保持可追溯）

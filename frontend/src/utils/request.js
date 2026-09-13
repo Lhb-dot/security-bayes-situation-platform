@@ -32,6 +32,8 @@ const currentCsrfToken = () =>
   readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf') ||
   window.sessionStorage.getItem(CSRF_STORAGE_KEY);
 
+export const getCsrfToken = () => currentCsrfToken();
+
 const extractErrorMessage = (error) => {
   const data = error?.response?.data;
   if (!data) return error?.message || '请求失败';

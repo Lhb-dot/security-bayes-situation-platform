@@ -1,6 +1,6 @@
 """ORM 模型注册入口。
 
-导入本包即可把全部 12 张表注册到 Base.metadata 上（Alembic autogenerate /
+导入本包即可把全部业务表注册到 Base.metadata 上（Alembic autogenerate /
 metadata.create_all 依赖这一点）。模型与《数据库设计文档v2》2.1 ~ 2.12 一一对应：
 
     app_user            用户表
@@ -29,6 +29,7 @@ from app.models.report import Report
 from app.models.risk_threshold import RiskThreshold
 from app.models.threshold_audit_log import ThresholdAuditLog
 from app.models.auth_session import AuthSession
+from app.models.user_ai_setting import UserAISetting
 
 __all__ = [
     "AppUser",
@@ -44,4 +45,5 @@ __all__ = [
     "RiskThreshold",
     "ThresholdAuditLog",
     "AuthSession",
+    "UserAISetting",
 ]

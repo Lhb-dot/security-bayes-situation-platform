@@ -20,6 +20,7 @@ import {
 } from '@/api/riskThresholdApi';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
+import { getAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
 const userStore = useUserStore();
@@ -34,6 +35,45 @@ const canConfigureThresholds = computed(() =>
 // ===================== 普通用户：个人设置（场景由管理员分配，用户不可自选） =====================
 const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
 const changingPwd = ref(false);
+const aiSetting = ref<AISetting | null>(null);
+const savingAI = ref(false);
+const aiForm = ref({
+  provider: 'openai-compatible',
+  base_url: 'https://api.openai.com/v1',
+  model: 'gpt-4o-mini',
+  api_key: '',
+  enabled: true,
+});
+
+const loadAISetting = async () => {
+  try {
+    aiSetting.value = await getAISetting();
+    if (aiSetting.value.base_url) aiForm.value.base_url = aiSetting.value.base_url;
+    if (aiSetting.value.model) aiForm.value.model = aiSetting.value.model;
+    if (typeof aiSetting.value.enabled === 'boolean') aiForm.value.enabled = aiSetting.value.enabled;
+  } catch {
+    aiSetting.value = null;
+  }
+};
+
+const saveAI = async () => {
+  if (!aiForm.value.base_url.trim() || !aiForm.value.model.trim()) {
+    ElMessage.warning('请填写 AI 服务地址和模型名称');
+    return;
+  }
+  savingAI.value = true;
+  try {
+    const payload = { ...aiForm.value };
+    if (!payload.api_key.trim()) delete (payload as Partial<typeof payload>).api_key;
+    aiSetting.value = await updateAISetting(payload as typeof aiForm.value);
+    aiForm.value.api_key = '';
+    ElMessage.success('AI 设置已保存，API key 仅在服务端保存');
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'AI 设置保存失败');
+  } finally {
+    savingAI.value = false;
+  }
+};
 const changePwd = async () => {
   if (!pwdForm.value.oldPassword || !pwdForm.value.newPassword) {
     ElMessage.warning('请填写原密码与新密码');
@@ -173,6 +213,7 @@ const saveAdminSettings = () => {
 onMounted(async () => {
   currentUser.value = userStore.currentUser;
   settingsStore.loadForUser(currentUser.value?.user_id);
+  await loadAISetting();
   if (canConfigureThresholds.value) await loadThresholds();
 });
 </script>
@@ -245,6 +286,38 @@ onMounted(async () => {
         <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
       </section>
     </template>
+
+    <section class="card settings-section settings-section--span">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">AI Provider</p>
+          <h3>模型解释服务</h3>
+          <p class="settings-section__hint">使用 OpenAI 兼容的 Chat Completions 接口。API key 按当前账号绑定并仅在服务端保存，页面不会回显原文。</p>
+        </div>
+        <span v-if="aiSetting?.configured" class="ai-configured">已配置：{{ aiSetting.api_key_masked }}</span>
+      </div>
+      <div class="settings-form settings-form--ai">
+        <div class="settings-form__item">
+          <label class="settings-form__label">接口地址</label>
+          <input v-model="aiForm.base_url" class="settings-form__input" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="settings-form__item">
+          <label class="settings-form__label">模型名称</label>
+          <input v-model="aiForm.model" class="settings-form__input" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="settings-form__item">
+          <label class="settings-form__label">API key</label>
+          <input v-model="aiForm.api_key" type="password" class="settings-form__input" autocomplete="new-password" placeholder="留空则保留已保存的 key" />
+        </div>
+        <div class="settings-form__item settings-form__item--row">
+          <label class="settings-form__label">启用 AI 解释</label>
+          <button class="settings-switches__toggle" :class="{ 'is-on': aiForm.enabled }" type="button" @click="aiForm.enabled = !aiForm.enabled">
+            <span class="settings-switches__knob"></span>
+          </button>
+        </div>
+      </div>
+      <button class="settings-btn settings-btn--primary" :disabled="savingAI" @click="saveAI">{{ savingAI ? '保存中...' : '保存 AI 设置' }}</button>
+    </section>
 
     <!-- ==================== 当前账号阈值 ==================== -->
     <section v-if="canConfigureThresholds" class="card settings-section settings-section--span">
@@ -497,6 +570,16 @@ onMounted(async () => {
 .settings-form--row3 {
   grid-template-columns: repeat(3, 1fr);
   margin-bottom: 16px;
+}
+
+.settings-form--ai {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.ai-configured {
+  color: #53e5c8;
+  font-size: 0.82rem;
 }
 
 /* 阈值 */
@@ -804,6 +887,9 @@ select.settings-form__input option {
     grid-template-columns: repeat(2, 1fr);
   }
   .settings-form--row3 {
+    grid-template-columns: 1fr;
+  }
+  .settings-form--ai {
     grid-template-columns: 1fr;
   }
 }
