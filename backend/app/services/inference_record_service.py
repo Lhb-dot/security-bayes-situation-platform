@@ -31,6 +31,8 @@ from app.services.constants import (
     ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
+    MODEL_STATUS_PUBLISHED,
+    DATASET_POSITIVE_LABELS,
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
@@ -72,14 +74,60 @@ class InferenceRecordService(ServiceBase):
             select(RiskEvent).where(RiskEvent.inference_record_id == record.id)
         )
         data["risk_event_id"] = event.id if event is not None else None
-        if current_user is not None and getattr(current_user, "role", None) not in (
-            ROLE_SUPER_ADMIN,
-            ROLE_SCENARIO_ADMIN,
-        ):
-            from app.services.explanation_service import public_explanation
+        data["generated_explanation"] = self._saved_explanation_for_role(
+            record, getattr(current_user, "role", None)
+        )
+        if current_user is not None:
+            from app.schemas.explanation_contract import explanation_for_role
 
-            data["explain_data"] = public_explanation(record.explain_data)
+            data["explain_data"] = explanation_for_role(
+                record.explain_data, getattr(current_user, "role", None)
+            )
+        # Model evaluation is a saved model artifact, independent of this
+        # sample's explanation. Reuse it here without calling the AI service.
+        role = getattr(current_user, "role", None)
+        if model is not None and (
+            role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
+            or model.status == MODEL_STATUS_PUBLISHED
+        ):
+            role_key = "management" if role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) else "user"
+            artifact = (model.ai_evaluation or {}).get(role_key) or {}
+            data["model_evaluation"] = {
+                "available": bool(artifact.get("markdown")),
+                "source": artifact.get("source"),
+                "markdown": str(artifact["markdown"]) if artifact.get("markdown") else None,
+                "generated_at": artifact.get("generated_at"),
+            }
+        else:
+            data["model_evaluation"] = {
+                "available": False,
+                "source": None,
+                "markdown": None,
+                "generated_at": None,
+            }
         return data
+
+    @staticmethod
+    def _saved_explanation_for_role(record: InferenceRecord, role: str | None) -> dict:
+        """Expose the persisted wording artifact without leaking its private snapshot.
+
+        The Markdown is an output artifact and is safe to return to the same users
+        who may read the inference record.  The exact facts sent to the AI remain
+        manager-only because they may contain raw input features and algorithm
+        internals; the prediction itself is always read from the server record.
+        """
+        artifact = (record.explain_data or {}).get("ai_explanation")
+        if not isinstance(artifact, dict) or not artifact.get("markdown"):
+            return {"available": False, "source": None, "generated_at": None}
+        result = {
+            "available": True,
+            "markdown": str(artifact["markdown"]),
+            "source": str(artifact.get("source") or "fallback"),
+            "generated_at": artifact.get("generated_at"),
+        }
+        if role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+            result["data_snapshot"] = artifact.get("data_snapshot") or {}
+        return result
 
     def _can_infer_from_model(self, current_user, model: ModelVersion, dataset: Dataset) -> bool:
         """Enforce model scenario and dataset-visibility boundaries before inference."""
@@ -117,7 +165,13 @@ class InferenceRecordService(ServiceBase):
         model_path = build_model_save_path(model.id, algorithm_code)
         arff_path = resolve_dataset_path(dataset.file_path)
         try:
-            result = execute_algorithm_predict(algorithm_code, model_path, arff_path, input_features)
+            result = execute_algorithm_predict(
+                algorithm_code,
+                model_path,
+                arff_path,
+                input_features,
+                risk_labels=sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
+            )
         except FileNotFoundError as exc:
             raise ServiceError(400, str(exc))
         except RuntimeError as exc:
@@ -387,15 +441,18 @@ class InferenceRecordService(ServiceBase):
         """
         record = self._get(record_id)
         self._require_record_access(current_user, record)
-        explanation = record.explain_data or {}
-        if getattr(current_user, "role", None) not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
-            from app.services.explanation_service import public_explanation
+        from app.schemas.explanation_contract import explanation_for_role
 
-            explanation = public_explanation(explanation)
+        explanation = explanation_for_role(
+            record.explain_data, getattr(current_user, "role", None)
+        )
         return ok(data={
             "inference_record_id": record.id,
             "prediction_label": record.prediction_label,
             "explain_data": explanation,
+            "generated_explanation": self._saved_explanation_for_role(
+                record, getattr(current_user, "role", None)
+            ),
         })
 
     # ------------------------------------------------------------------

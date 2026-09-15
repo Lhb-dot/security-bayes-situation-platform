@@ -225,12 +225,17 @@ export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLI
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {
-  accuracy: number;
-  recall: number;
-  precision: number;
-  specificity: number;
-  f1: number;
-  g_mean: number;
+  accuracy?: number | null;
+  recall?: number | null;
+  precision?: number | null;
+  specificity?: number | null;
+  f1?: number | null;
+  g_mean?: number | null;
+  risk_recall?: number | null;
+  risk_f1?: number | null;
+  cv_mean?: number | null;
+  cv_std?: number | null;
+  quality_availability?: Record<string, { available: boolean; reason: string | null }>;
 }
 
 /** 模型版本（v2.0 生命周期模型，需求 6.7.1） */
@@ -332,6 +337,7 @@ export interface FeatureEvidence {
 
 /** 算法可解释性信息（Java /predict 返回，落库 explain_data） */
 export interface InferenceExplain {
+  contract_version?: string;
   prediction?: string;
   prediction_is_risk?: boolean;
   risk_probability?: number | null;
@@ -359,6 +365,7 @@ export interface InferenceExplain {
     risk_f1?: number | null;
     cv_mean?: number | null;
     cv_std?: number | null;
+    availability?: Record<string, { available: boolean; reason: string | null }>;
   };
   /** Legacy fields retained for report compatibility. */
   prediction_label?: string;
@@ -432,6 +439,15 @@ export interface ReportData {
     view_weights: number[];
     calculation_method: string | null;
     has_views: boolean;
+  }>;
+  model_evaluations?: Array<{
+    model_version_id: number;
+    algorithm_code: string | null;
+    algorithm_name: string | null;
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
   }>;
   feature_analysis: {
     calculation_method: string | null;
@@ -560,6 +576,12 @@ export interface InferenceRecord {
   risk_score: number;                                     // 模型对风险类的输出概率
   is_risk: boolean;                                       // 是否为风险类
   occurred_at: string;
+  model_evaluation?: {
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
+  };
 }
 
 // ===================== v2.0 风险阈值配置（需求 5.4.1） =====================

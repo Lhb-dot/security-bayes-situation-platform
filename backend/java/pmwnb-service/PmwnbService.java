@@ -4,8 +4,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import weka.classifiers.AbstractClassifier;
 import weka.classifiers.Classifier;
-import weka.classifiers.Evaluation;
 import weka.classifiers.bayes.PMWNB.PMWNB.PMWNB;
 import weka.core.Attribute;
 import weka.core.DenseInstance;
@@ -60,16 +60,9 @@ public final class PmwnbService {
             SerializationHelper.write(modelSavePath, classifier);
             MODEL_CACHE.put(modelSavePath, classifier);
 
-            // 评估指标改用分层 10 折交叉验证（避免训练集重代入偏乐观）；
-            // 保存的模型仍用上面的全量数据训练。
-            Evaluation evaluation = new Evaluation(data);
-            evaluation.crossValidateModel(classifier, data, 10, new Random(1));
-            double accuracy = evaluation.pctCorrect() / 100.0;
-            double recall = evaluation.weightedRecall();
-            double precision = evaluation.weightedPrecision();
-            double f1 = evaluation.weightedFMeasure();
-            double specificity = evaluation.weightedTrueNegativeRate();
-            double gMean = Math.sqrt(Math.max(0.0, recall * specificity));
+            // 评估指标使用固定随机种子的分层交叉验证；保存的模型仍用上面的全量数据训练。
+            JSONArray riskLabels = req.optJSONArray("risk_labels");
+            JSONObject quality = calculateQualityMetrics(classifier, data, riskLabels);
 
             JSONArray distribution = new JSONArray();
             for (int i = 0; i < data.numClasses(); i++) {
@@ -78,12 +71,17 @@ public final class PmwnbService {
             }
             JSONObject metrics = new JSONObject()
                     .put("algorithm", "PMWNB")
-                    .put("accuracy", round(accuracy))
-                    .put("precision", round(precision))
-                    .put("recall", round(recall))
-                    .put("f1", round(f1))
-                    .put("specificity", round(specificity))
-                    .put("g_mean", round(gMean))
+                    .put("accuracy", quality.get("accuracy"))
+                    .put("precision", quality.get("precision"))
+                    .put("recall", quality.get("recall"))
+                    .put("f1", quality.get("f1"))
+                    .put("specificity", quality.get("specificity"))
+                    .put("g_mean", quality.get("g_mean"))
+                    .put("risk_recall", quality.get("risk_recall"))
+                    .put("risk_f1", quality.get("risk_f1"))
+                    .put("cv_mean", quality.get("cv_mean"))
+                    .put("cv_std", quality.get("cv_std"))
+                    .put("quality_availability", quality.get("quality_availability"))
                     .put("train_time_s", round((System.nanoTime() - started) / 1_000_000_000.0))
                     .put("num_instances", data.numInstances())
                     .put("num_attributes", data.numAttributes() - 1)
@@ -172,6 +170,169 @@ public final class PmwnbService {
             if ((int) data.instance(i).classValue() == classIndex) count++;
         }
         return count;
+    }
+
+    /**
+     * Calculate aggregate metrics and fold accuracy statistics without changing
+     * the classifier used for the saved full-data model.
+     */
+    private static JSONObject calculateQualityMetrics(
+            Classifier template, Instances data, JSONArray riskLabels) throws Exception {
+        int folds = Math.min(10, data.numInstances());
+        if (folds < 2) throw new IllegalArgumentException("交叉验证至少需要 2 条样本");
+
+        Instances cvData = new Instances(data);
+        Random random = new Random(1);
+        cvData.randomize(random);
+        if (cvData.classAttribute().isNominal()) cvData.stratify(folds);
+
+        double[][] confusion = new double[data.numClasses()][data.numClasses()];
+        double[] foldAccuracy = new double[folds];
+        for (int fold = 0; fold < folds; fold++) {
+            Classifier copy = AbstractClassifier.makeCopy(template);
+            Instances train = cvData.trainCV(folds, fold, random);
+            Instances test = cvData.testCV(folds, fold);
+            copy.buildClassifier(train);
+            double correct = 0.0;
+            double total = 0.0;
+            for (int i = 0; i < test.numInstances(); i++) {
+                Instance row = test.instance(i);
+                if (row.classIsMissing()) continue;
+                double[] distribution = copy.distributionForInstance(row);
+                int predicted = 0;
+                for (int c = 1; c < distribution.length; c++) {
+                    if (distribution[c] > distribution[predicted]) predicted = c;
+                }
+                int actual = (int) row.classValue();
+                double weight = row.weight();
+                confusion[actual][predicted] += weight;
+                total += weight;
+                if (actual == predicted) correct += weight;
+            }
+            foldAccuracy[fold] = total == 0.0 ? Double.NaN : correct / total;
+        }
+
+        double diagonal = 0.0;
+        for (int actual = 0; actual < confusion.length; actual++) {
+            for (int predicted = 0; predicted < confusion[actual].length; predicted++) {
+                if (actual == predicted) diagonal += confusion[actual][predicted];
+            }
+        }
+        double weightedRecall = 0.0;
+        double weightedPrecision = 0.0;
+        double weightedF1 = 0.0;
+        double weightedSpecificity = 0.0;
+        for (int c = 0; c < confusion.length; c++) {
+            double actualCount = 0.0;
+            double predictedCount = 0.0;
+            for (int i = 0; i < confusion.length; i++) {
+                actualCount += confusion[c][i];
+                predictedCount += confusion[i][c];
+            }
+            double tp = confusion[c][c];
+            double fn = actualCount - tp;
+            double fp = predictedCount - tp;
+            double tn = totalWeight(confusion) - tp - fn - fp;
+            double weight = totalWeight(confusion) == 0.0 ? 0.0 : actualCount / totalWeight(confusion);
+            weightedRecall += weight * ratio(tp, tp + fn);
+            weightedPrecision += weight * ratio(tp, tp + fp);
+            weightedF1 += weight * f1(tp, fp, fn);
+            weightedSpecificity += weight * ratio(tn, tn + fp);
+        }
+
+        boolean riskAvailable = false;
+        double riskTp = 0.0;
+        double riskActual = 0.0;
+        double riskPredicted = 0.0;
+        for (int actual = 0; actual < confusion.length; actual++) {
+            boolean actualRisk = isRiskClass(data.classAttribute().value(actual), riskLabels);
+            for (int predicted = 0; predicted < confusion[actual].length; predicted++) {
+                boolean predictedRisk = isRiskClass(data.classAttribute().value(predicted), riskLabels);
+                if (actualRisk) {
+                    riskAvailable = true;
+                    riskActual += confusion[actual][predicted];
+                }
+                if (predictedRisk) riskPredicted += confusion[actual][predicted];
+                if (actualRisk && predictedRisk) riskTp += confusion[actual][predicted];
+            }
+        }
+
+        double cvMean = mean(foldAccuracy);
+        double cvStd = standardDeviation(foldAccuracy, cvMean);
+        return new JSONObject()
+                .put("accuracy", round(ratio(diagonal, totalWeight(confusion))))
+                .put("precision", round(weightedPrecision))
+                .put("recall", round(weightedRecall))
+                .put("f1", round(weightedF1))
+                .put("specificity", round(weightedSpecificity))
+                .put("g_mean", round(Math.sqrt(Math.max(0.0, weightedRecall * weightedSpecificity))))
+                .put("risk_recall", riskAvailable ? round(ratio(riskTp, riskActual)) : JSONObject.NULL)
+                .put("risk_f1", riskAvailable
+                        ? round(f1(riskTp, riskPredicted - riskTp, riskActual - riskTp))
+                        : JSONObject.NULL)
+                .put("cv_mean", Double.isNaN(cvMean) ? JSONObject.NULL : round(cvMean))
+                .put("cv_std", Double.isNaN(cvStd) ? JSONObject.NULL : round(cvStd))
+                .put("quality_availability", new JSONObject()
+                        .put("risk_recall", availability(riskAvailable, "训练请求未提供有效风险类别映射"))
+                        .put("risk_f1", availability(riskAvailable, "训练请求未提供有效风险类别映射"))
+                        .put("cv_mean", availability(!Double.isNaN(cvMean), "交叉验证均值不可用"))
+                        .put("cv_std", availability(!Double.isNaN(cvStd), "交叉验证标准差不可用")));
+    }
+
+    private static boolean isRiskClass(String label, JSONArray riskLabels) {
+        if (riskLabels == null) return false;
+        for (int i = 0; i < riskLabels.length(); i++) {
+            if (label.equals(String.valueOf(riskLabels.opt(i)))) return true;
+        }
+        return false;
+    }
+
+    private static double totalWeight(double[][] confusion) {
+        double total = 0.0;
+        for (double[] row : confusion) {
+            for (double value : row) total += value;
+        }
+        return total;
+    }
+
+    private static double ratio(double numerator, double denominator) {
+        return denominator == 0.0 ? 0.0 : numerator / denominator;
+    }
+
+    private static double f1(double tp, double fp, double fn) {
+        double precision = ratio(tp, tp + fp);
+        double recall = ratio(tp, tp + fn);
+        return ratio(2.0 * precision * recall, precision + recall);
+    }
+
+    private static double mean(double[] values) {
+        double sum = 0.0;
+        int count = 0;
+        for (double value : values) {
+            if (!Double.isNaN(value)) {
+                sum += value;
+                count++;
+            }
+        }
+        return count == 0 ? Double.NaN : sum / count;
+    }
+
+    private static double standardDeviation(double[] values, double mean) {
+        if (Double.isNaN(mean)) return Double.NaN;
+        double sum = 0.0;
+        int count = 0;
+        for (double value : values) {
+            if (!Double.isNaN(value)) {
+                double delta = value - mean;
+                sum += delta * delta;
+                count++;
+            }
+        }
+        return count == 0 ? Double.NaN : Math.sqrt(sum / count);
+    }
+
+    private static JSONObject availability(boolean available, String reason) {
+        return new JSONObject().put("available", available).put("reason", available ? JSONObject.NULL : reason);
     }
 
     private static double round(double value) { return Math.round(value * 10000.0) / 10000.0; }

@@ -18,6 +18,9 @@ import weka.filters.supervised.attribute.Discretize;
 /** The ensemble models built upon in a line of matrix-view */
 public class PMWNB_L extends AbstractClassifier {
 
+	/** Keep existing serialized PMWNB models readable across service rebuilds. */
+	private static final long serialVersionUID = -2510699702908556869L;
+
 	/** ---------------------- BASE CLASSIFIERS --------------------------- */
 	/** The ensemble SPODEs */
 	public SPODE baseClassifier_S = new SPODE();
@@ -459,6 +462,19 @@ public class PMWNB_L extends AbstractClassifier {
 		}
 		// Utils.normalize(result[0]);
 		return result[0];
+	}
+
+	/** Read-only probabilities of the five models in this matrix row. */
+	public double[][] distributionForSubmodels(Instance instance) throws Exception {
+		double[][] result = new double[5][];
+		result[0] = classifier_view1.distributionForInstance(instance);
+		double[][] temp = distributionForInstance_SPODE(instance, isSupervised);
+		result[1] = temp[0];
+		result[2] = temp[1];
+		temp = distributionForInstance_RT(instance, isSupervised);
+		result[3] = temp[0];
+		result[4] = temp[1];
+		return result;
 	}
 
 	public static void main(String[] args) {

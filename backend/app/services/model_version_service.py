@@ -36,6 +36,7 @@ from app.services.constants import (
     ALGORITHM_STATUS_AVAILABLE,
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_PLATFORM,
+    DATASET_POSITIVE_LABELS,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
@@ -88,9 +89,22 @@ class ModelVersionService(ServiceBase):
         if getattr(current_user, "id", None) != model.trained_by:
             raise ServiceError(403, "只有训练该模型的管理员可以发布")
 
-    def _to_dict(self, model: ModelVersion) -> dict:
-        """Serialize a model with the display fields needed by the real model center."""
-        data = row_to_dict(model)
+    def _to_dict(self, model: ModelVersion, current_user=None, include_model_attributes: bool = False) -> dict:
+        """Serialize a model and hide internal quality metrics from scenario users."""
+        data = row_to_dict(
+            model,
+            exclude=("model_attributes", "ai_evaluation", "training_parameters"),
+        )
+        from app.services.model_evaluation_service import (
+            build_model_attributes,
+            public_model_attributes,
+        )
+
+        attributes = model.model_attributes or build_model_attributes(model)
+        is_management = getattr(current_user, "role", None) in (
+            ROLE_SUPER_ADMIN,
+            ROLE_SCENARIO_ADMIN,
+        )
         data.update(
             {
                 "model_version_id": model.id,
@@ -102,9 +116,43 @@ class ModelVersionService(ServiceBase):
                 "algorithm_name": model.algorithm.display_name if model.algorithm else None,
                 "trained_by_name": model.trainer.username if model.trainer else None,
                 "published_by_name": model.publisher.username if model.publisher else None,
+                "evaluation_metrics": self._visible_metrics(model, current_user),
+                # Training parameters are model-internal tuning details. Keep
+                # the response shape stable while returning them only to management.
+                "training_parameters": model.training_parameters if is_management else {},
+                "model_attributes": (
+                    attributes if is_management else public_model_attributes(attributes)
+                ) if include_model_attributes else {
+                    "contract_version": attributes.get("contract_version"),
+                    "model_version_id": attributes.get("model_version_id"),
+                    "scenario": attributes.get("scenario"),
+                    "dataset": attributes.get("dataset"),
+                    "algorithm": (attributes.get("algorithm") or {}) | {"parameter_schema": None},
+                    "quality_metrics": {
+                        key: (attributes.get("quality_metrics") or {}).get(key)
+                        for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+                        if key in (attributes.get("quality_metrics") or {})
+                    },
+                    "feature_profile": [],
+                    "evaluation_scope": attributes.get("evaluation_scope"),
+                },
+                "model_evaluation_available": bool(
+                    ((model.ai_evaluation or {}).get("management" if is_management else "user") or {}).get("markdown")
+                ),
             }
         )
         return data
+
+    def _visible_metrics(self, model: ModelVersion, current_user=None) -> dict:
+        """Return full quality data only to management roles."""
+        metrics = dict(model.evaluation_metrics or {})
+        if getattr(current_user, "role", None) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+            return metrics
+        return {
+            key: metrics[key]
+            for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+            if key in metrics
+        }
 
     def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
         """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
@@ -278,6 +326,8 @@ class ModelVersionService(ServiceBase):
             )
             self._transition(model, MODEL_STATUS_DRAFT)
             model.evaluation_metrics = metrics
+            from app.services.model_evaluation_service import build_model_attributes
+            model.model_attributes = build_model_attributes(model)
             self.commit()
         except Exception as exc:
             self._transition(model, MODEL_STATUS_FAILED)
@@ -302,7 +352,11 @@ class ModelVersionService(ServiceBase):
         dataset_path = resolve_dataset_path(dataset.file_path)
         model_save_path = build_model_save_path(model.id, algorithm_code)
         return execute_algorithm_training(
-            algorithm_code, dataset_path, model_save_path, training_parameters
+            algorithm_code,
+            dataset_path,
+            model_save_path,
+            training_parameters,
+            sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
         )
 
     @service_call
@@ -317,6 +371,8 @@ class ModelVersionService(ServiceBase):
         self._require_manageable_model(current_user, model)
         self._transition(model, MODEL_STATUS_DRAFT)
         model.evaluation_metrics = evaluation_metrics
+        from app.services.model_evaluation_service import build_model_attributes
+        model.model_attributes = build_model_attributes(model)
         self.commit()
         return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
 
@@ -493,7 +549,7 @@ class ModelVersionService(ServiceBase):
             stmt = stmt.where(ModelVersion.dataset_id == dataset_id)
         stmt = stmt.order_by(ModelVersion.id.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._to_dict(m) for m in result["items"]]
+        result["items"] = [self._to_dict(m, current_user) for m in result["items"]]
         return ok(data=result)
 
     def _can_view_model(self, current_user, model: ModelVersion) -> bool:
@@ -540,7 +596,7 @@ class ModelVersionService(ServiceBase):
         model = self._get(model_id)
         if not self._can_view_model(current_user, model):
             raise ServiceError(403, "无权限操作")
-        return ok(data=self._to_dict(model))
+        return ok(data=self._to_dict(model, current_user, include_model_attributes=True))
 
     @service_call
     def get_default(
@@ -559,7 +615,7 @@ class ModelVersionService(ServiceBase):
             return ok(data=None, message="当前范围暂无默认推荐模型")
         if not self._can_view_model(current_user, model):
             return ok(data=None, message="当前范围暂无可用默认推荐模型")
-        return ok(data=self._to_dict(model))
+        return ok(data=self._to_dict(model, current_user))
 
     @service_call
     def compare(self, current_user, model_ids: List[int]):
@@ -581,7 +637,7 @@ class ModelVersionService(ServiceBase):
                     "scenario_id": model.scenario_id,
                     "dataset_id": model.dataset_id,
                     "algorithm_id": model.algorithm_id,
-                    "evaluation_metrics": model.evaluation_metrics,
+                    "evaluation_metrics": self._visible_metrics(model, current_user),
                     "status": model.status,
                     "is_default": model.is_default,
                 }

@@ -36,6 +36,7 @@ def _request_train(
     dataset_path: str,
     model_save_path: str,
     training_parameters: dict | None = None,
+    risk_labels: list[str] | None = None,
 ) -> dict:
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"数据集文件不存在: {dataset_path}")
@@ -46,6 +47,7 @@ def _request_train(
                 "dataset_path": dataset_path,
                 "model_save_path": model_save_path,
                 "training_parameters": training_parameters or {},
+                "risk_labels": risk_labels or [],
             },
             timeout=TRAIN_TIMEOUT,
         )
@@ -66,8 +68,13 @@ def _request_train(
         "f1": metrics["f1"],
         "recall": metrics["recall"],
         "precision": metrics["precision"],
-        "specificity": metrics.get("specificity", 0.0),
-        "g_mean": metrics.get("g_mean", 0.0),
+        "specificity": metrics.get("specificity"),
+        "g_mean": metrics.get("g_mean"),
+        "risk_recall": metrics.get("risk_recall"),
+        "risk_f1": metrics.get("risk_f1"),
+        "cv_mean": metrics.get("cv_mean"),
+        "cv_std": metrics.get("cv_std"),
+        "quality_availability": metrics.get("quality_availability", {}),
         "train_time_s": metrics.get("train_time_s", 0.0),
         "num_instances": metrics.get("num_instances", 0),
         "num_attributes": metrics.get("num_attributes", 0),
@@ -83,23 +90,25 @@ def execute_algorithm_training(
     dataset_path: str,
     model_save_path: str,
     training_parameters: dict | None = None,
+    risk_labels: list[str] | None = None,
 ) -> dict:
     code = algorithm_code.upper()
     if code == "PMWNB":
-        return execute_pmwnb_training(dataset_path, model_save_path, training_parameters)
+        return execute_pmwnb_training(dataset_path, model_save_path, training_parameters, risk_labels)
     url = ALGORITHM_SERVICE_URLS.get(code)
     if not url:
         raise RuntimeError(f"未配置 {code} 算法服务")
-    return _request_train(url, code, dataset_path, model_save_path, training_parameters)
+    return _request_train(url, code, dataset_path, model_save_path, training_parameters, risk_labels)
 
 
 def execute_pmwnb_training(
     dataset_path: str,
     model_save_path: str,
     training_parameters: dict | None = None,
+    risk_labels: list[str] | None = None,
 ) -> dict:
     result = _request_train(
-        PMWNB_SERVICE_URL, "PMWNB", dataset_path, model_save_path, training_parameters
+        PMWNB_SERVICE_URL, "PMWNB", dataset_path, model_save_path, training_parameters, risk_labels
     )
     result["source"] = "java_pmwnb"
     return result
@@ -110,7 +119,13 @@ def build_model_save_path(model_id: int, algorithm_code: str = "PMWNB") -> str:
     return os.path.join(TRAINED_MODEL_DIR, f"{algorithm_code.lower()}_mv{model_id}.model")
 
 
-def _request_predict(url: str, model_path: str, arff_path: str, features: dict) -> dict:
+def _request_predict(
+    url: str,
+    model_path: str,
+    arff_path: str,
+    features: dict,
+    risk_labels: list[str] | None = None,
+) -> dict:
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"模型文件不存在: {model_path}")
     if not os.path.exists(arff_path):
@@ -118,7 +133,12 @@ def _request_predict(url: str, model_path: str, arff_path: str, features: dict) 
     try:
         resp = requests.post(
             f"{url}/predict",
-            json={"model_path": model_path, "arff_path": arff_path, "features": features},
+            json={
+                "model_path": model_path,
+                "arff_path": arff_path,
+                "features": features,
+                "risk_labels": risk_labels or [],
+            },
             timeout=PREDICT_TIMEOUT,
         )
         resp.raise_for_status()
@@ -130,13 +150,24 @@ def _request_predict(url: str, model_path: str, arff_path: str, features: dict) 
     return result["data"]
 
 
-def execute_algorithm_predict(algorithm_code: str, model_path: str, arff_path: str, features: dict) -> dict:
+def execute_algorithm_predict(
+    algorithm_code: str,
+    model_path: str,
+    arff_path: str,
+    features: dict,
+    risk_labels: list[str] | None = None,
+) -> dict:
     code = algorithm_code.upper()
     url = PREDICT_SERVICE_URL if code == "PMWNB" else ALGORITHM_SERVICE_URLS.get(code)
     if not url:
         raise RuntimeError(f"未配置 {code} 算法服务")
-    return _request_predict(url, model_path, arff_path, features)
+    return _request_predict(url, model_path, arff_path, features, risk_labels)
 
 
-def execute_pmwnb_predict(model_path: str, arff_path: str, features: dict) -> dict:
-    return execute_algorithm_predict("PMWNB", model_path, arff_path, features)
+def execute_pmwnb_predict(
+    model_path: str,
+    arff_path: str,
+    features: dict,
+    risk_labels: list[str] | None = None,
+) -> dict:
+    return execute_algorithm_predict("PMWNB", model_path, arff_path, features, risk_labels)

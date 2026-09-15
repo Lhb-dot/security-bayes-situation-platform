@@ -170,6 +170,16 @@ public class DIWNB_HE extends AbstractClassifier implements OptionHandler{
 		return new double[]{view_weight[1], view_weight[0]};
 	}
 
+	/** Read-only K values selected by the generated-view KNN ensemble. */
+	public int[] getKValuesForReport() {
+		return baseClassifier_view2.getSelectedKValuesForReport();
+	}
+
+	/** Read-only neighbor class ratios for each selected K. */
+	public double[][] getNeighborClassRatiosForReport(Instance instance) throws Exception {
+		return baseClassifier_view2.getNeighborClassRatiosForReport(instance);
+	}
+
 	public static void main(String[] args) {
 		runClassifier(new  DIWNB_HE(), args);
 	}

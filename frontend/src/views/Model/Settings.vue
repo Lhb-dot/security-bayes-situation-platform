@@ -20,7 +20,7 @@ import {
 } from '@/api/riskThresholdApi';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
-import { getAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
+import { getAISetting, testAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
 const userStore = useUserStore();
@@ -37,6 +37,7 @@ const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
 const changingPwd = ref(false);
 const aiSetting = ref<AISetting | null>(null);
 const savingAI = ref(false);
+const testingAI = ref(false);
 const aiForm = ref({
   provider: 'openai-compatible',
   base_url: 'https://api.openai.com/v1',
@@ -72,6 +73,19 @@ const saveAI = async () => {
     ElMessage.error(err instanceof Error ? err.message : 'AI 设置保存失败');
   } finally {
     savingAI.value = false;
+  }
+};
+
+const testAI = async () => {
+  testingAI.value = true;
+  try {
+    const result = await testAISetting();
+    if (result.connected) ElMessage.success(result.message);
+    else ElMessage.warning(result.message);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'AI 连通性测试失败');
+  } finally {
+    testingAI.value = false;
   }
 };
 const changePwd = async () => {
@@ -316,7 +330,10 @@ onMounted(async () => {
           </button>
         </div>
       </div>
-      <button class="settings-btn settings-btn--primary" :disabled="savingAI" @click="saveAI">{{ savingAI ? '保存中...' : '保存 AI 设置' }}</button>
+      <div class="settings-actions">
+        <button class="settings-btn" :disabled="savingAI || testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
+        <button class="settings-btn settings-btn--primary" :disabled="savingAI || testingAI" @click="saveAI">{{ savingAI ? '保存中...' : '保存 AI 设置' }}</button>
+      </div>
     </section>
 
     <!-- ==================== 当前账号阈值 ==================== -->

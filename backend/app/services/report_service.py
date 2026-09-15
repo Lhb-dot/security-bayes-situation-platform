@@ -34,6 +34,7 @@ from app.services.constants import (
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
+    USER_VISIBLE_MODEL_STATUSES,
     is_risk_label,
 )
 from app.services.situation_snapshot_service import SituationSnapshotService
@@ -277,7 +278,10 @@ class ReportService(ServiceBase):
                 Dataset.visibility == DATASET_VISIBILITY_PLATFORM
             )
         elif role == ROLE_SCENARIO_USER:
-            stmt = stmt.where(InferenceRecord.user_id == current_user.id)
+            stmt = stmt.where(
+                InferenceRecord.user_id == current_user.id,
+                ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES),
+            )
         if scope == "user" and target_user_id is not None:
             stmt = stmt.where(InferenceRecord.user_id == target_user_id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
@@ -319,17 +323,49 @@ class ReportService(ServiceBase):
 
         overview = self._overview(events, records)
         model_analysis = self._model_analysis(records)
+        model_evaluations = self._model_evaluations(current_user, records)
 
         return {
             "report_info": report_info,
             "overview": overview,
             "prediction": self._prediction(records),
             "model_analysis": model_analysis,
+            "model_evaluations": model_evaluations,
             "feature_analysis": self._feature_analysis(records),
             "trend": self._trend(records),
             "key_events": self._key_events(events, records),
             "data_notes": self._data_notes(report_info, overview, model_analysis),
         }
+
+    @staticmethod
+    def _model_evaluations(current_user, records):
+        """Reuse saved model wording without making an AI call during reports."""
+        management = getattr(current_user, "role", None) in (
+            ROLE_SUPER_ADMIN,
+            ROLE_SCENARIO_ADMIN,
+        )
+        role_key = "management" if management else "user"
+        result = []
+        seen = set()
+        for _record, model in records:
+            if model.id in seen:
+                continue
+            seen.add(model.id)
+            # Ordinary-user reports must never expose a disabled model's
+            # evaluation, even when an old inference record still exists.
+            if not management and model.status not in USER_VISIBLE_MODEL_STATUSES:
+                continue
+            artifact = (model.ai_evaluation or {}).get(role_key) or {}
+            result.append({
+                "model_version_id": model.id,
+                "algorithm_code": model.algorithm.code if model.algorithm else None,
+                "algorithm_name": model.algorithm.display_name if model.algorithm else None,
+                "available": bool(artifact.get("markdown")),
+                "source": artifact.get("source"),
+                "markdown": str(artifact["markdown"]) if artifact.get("markdown") else None,
+                "generated_at": artifact.get("generated_at"),
+            })
+        return result
 
     @staticmethod
     def _period(times):
@@ -691,15 +727,28 @@ class ReportService(ServiceBase):
             for e in report_data["key_events"]:
                 lines.append(f"- [{e['risk_level']}] {e['time']} · 概率 {e['probability']} · {e['status']}")
 
+        lines += ["", "## 七、模型版本评价"]
+        evaluations = report_data.get("model_evaluations") or []
+        if evaluations:
+            for evaluation in evaluations:
+                name = evaluation.get("algorithm_name") or evaluation.get("algorithm_code") or "模型"
+                lines.append(f"### {name}（模型 {evaluation.get('model_version_id')}）")
+                if evaluation.get("markdown"):
+                    lines.append(str(evaluation["markdown"]))
+                else:
+                    lines.append("该模型暂无已保存评价文本。")
+        else:
+            lines.append("本报告范围内暂无已保存的模型评价。")
+
         lines += [
             "",
-            "## 七、态势分析",
+            "## 八、态势分析",
             report_data.get("analysis_nl", ""),
             "",
-            "## 八、风险规避指导",
+            "## 九、风险规避指导",
             report_data.get("guidance_nl", ""),
             "",
-            "## 九、数据说明",
+            "## 十、数据说明",
             report_data.get("data_notes", ""),
             "",
             "---",

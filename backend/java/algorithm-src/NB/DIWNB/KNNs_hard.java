@@ -117,6 +117,31 @@ public class KNNs_hard extends AbstractClassifier {
 		  }
 		  return class_predictions; 
 	  }
+
+	  /** Read-only report data; does not participate in prediction. */
+	  public int[] getSelectedKValuesForReport() {
+		  return KValues == null ? new int[0] : KValues.clone();
+	  }
+
+	  /** Per-selected-K class ratios used by the DIWNB explanation layer. */
+	  public double[][] getNeighborClassRatiosForReport(Instance instance) throws Exception {
+		  if (KValues == null || instances == null) {
+			  return new double[0][];
+		  }
+		  Instances neighbors = knn.getNearestNeighbourSearchAlgorithm()
+				  .kNearestNeighbours(instance, TRAIN_NUM);
+		  double[][] ratios = new double[KValues.length][NumClasses];
+		  for (int i = 0; i < KValues.length; i++) {
+			  int k = KValues[i];
+			  for (int j = 0; j < k; j++) {
+				  ratios[i][(int) neighbors.instance(j).classValue()]++;
+			  }
+			  for (int c = 0; c < NumClasses; c++) {
+				  ratios[i][c] /= k;
+			  }
+		  }
+		  return ratios;
+	  }
 	  
 	  public static void main(String[] args) {
 		runClassifier(new  KNNs_hard(), args);

@@ -8,6 +8,8 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { useUserStore } from '@/stores/userStore';
 import { getAlgorithms } from '@/api/algorithmApi';
 import { getDatasets, getScenarios } from '@/api/trainingApi';
@@ -20,6 +22,12 @@ import {
   setDefaultModel,
 } from '@/api/modelVersionApi';
 import type { BackendModelVersion } from '@/api/modelVersionApi';
+import {
+  getModelEvaluation,
+  streamModelEvaluation,
+  type ModelEvaluationAudience,
+  type ModelEvaluationResponse,
+} from '@/api/modelEvaluationApi';
 import type { EvaluationMetrics } from '@/types/security';
 
 const userStore = useUserStore();
@@ -190,20 +198,32 @@ const clearCompare = () => {
 };
 
 /** 对比指标列定义 */
-const metricRows: Array<{ label: string; key: keyof EvaluationMetrics }> = [
+const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics }> = [
   { label: 'Accuracy', key: 'accuracy' },
   { label: 'Recall', key: 'recall' },
   { label: 'Precision', key: 'precision' },
   { label: 'Specificity', key: 'specificity' },
   { label: 'F1', key: 'f1' },
   { label: 'G-mean', key: 'g_mean' },
+  { label: 'Risk Recall', key: 'risk_recall' },
+  { label: 'Risk F1', key: 'risk_f1' },
+  { label: 'CV Mean', key: 'cv_mean' },
+  { label: 'CV Std', key: 'cv_std' },
 ];
+
+const visibleMetricRows = computed(() =>
+  isAdmin.value ? allMetricRows : allMetricRows.slice(0, 6)
+);
 
 /** 判断某模型在某指标上是否为最优（高亮） */
 const isBest = (m: BackendModelVersion, key: keyof EvaluationMetrics) => {
   if (compareList.value.length < 2) return false;
-  const best = Math.max(...compareList.value.map((x) => Number(x.evaluation_metrics[key]) || 0));
-  return Number(m.evaluation_metrics[key]) === best;
+  const value = Number(m.evaluation_metrics?.[key]);
+  if (!Number.isFinite(value)) return false;
+  const values = compareList.value
+    .map((x) => Number(x.evaluation_metrics?.[key]))
+    .filter((x) => Number.isFinite(x));
+  return values.length > 0 && value === Math.max(...values);
 };
 
 const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) => {
@@ -212,6 +232,86 @@ const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) =
 };
 
 const canPublish = (model: BackendModelVersion) => currentUser.value?.id === model.trained_by;
+
+// 模型评价独立于推理记录：先读模型快照，只有需要生成时才调用 AI。
+const evaluationTarget = ref<BackendModelVersion | null>(null);
+const evaluation = ref<ModelEvaluationResponse | null>(null);
+const evaluationMarkdown = ref('');
+const evaluationLoading = ref(false);
+const evaluationError = ref('');
+const evaluationStatus = ref('');
+let evaluationAbort: AbortController | null = null;
+
+const safeEvaluationHtml = computed(() => {
+  if (!evaluationMarkdown.value) return '';
+  return DOMPurify.sanitize(marked.parse(evaluationMarkdown.value, { async: false }) as string);
+});
+
+const openModelEvaluation = async (model: BackendModelVersion) => {
+  evaluationAbort?.abort();
+  evaluationTarget.value = model;
+  evaluation.value = null;
+  evaluationMarkdown.value = '';
+  evaluationError.value = '';
+  evaluationStatus.value = '正在读取模型属性...';
+  try {
+    evaluation.value = await getModelEvaluation(model.id);
+    evaluationMarkdown.value = evaluation.value.evaluation.markdown || '';
+    evaluationStatus.value = evaluation.value.evaluation.available ? '已读取已保存评价' : '尚未生成评价';
+  } catch (err) {
+    evaluationError.value = err instanceof Error ? err.message : '模型评价读取失败';
+    evaluationStatus.value = '';
+  }
+};
+
+const closeModelEvaluation = () => {
+  evaluationAbort?.abort();
+  evaluationAbort = null;
+  evaluationTarget.value = null;
+  evaluation.value = null;
+  evaluationMarkdown.value = '';
+  evaluationError.value = '';
+  evaluationStatus.value = '';
+};
+
+const generateModelEvaluation = async (
+  regenerate = false,
+  audience: ModelEvaluationAudience = 'current',
+) => {
+  const target = evaluationTarget.value;
+  if (!target || evaluationLoading.value) return;
+  evaluationAbort?.abort();
+  evaluationAbort = new AbortController();
+  evaluationLoading.value = true;
+  evaluationError.value = '';
+  evaluationMarkdown.value = regenerate ? '' : evaluationMarkdown.value;
+  evaluationStatus.value = audience === 'user'
+    ? '正在生成普通用户评价...'
+    : regenerate ? '正在重新生成模型评价...' : '正在生成模型评价...';
+  try {
+    await streamModelEvaluation(target.id, regenerate, {
+      onStart: (data) => { evaluationStatus.value = String(data.status || '评价生成中'); },
+      onDelta: (content) => { evaluationMarkdown.value += content; },
+      onError: (data) => {
+        evaluationError.value = String(data.message || 'AI 服务不可用，已回退规则评价');
+      },
+      onDone: (data) => {
+        evaluationStatus.value = data.source === 'fallback'
+          ? 'AI 失败，已完成规则回退'
+          : data.source === 'cached' ? '已读取已保存评价' : '模型评价已保存';
+      },
+    }, evaluationAbort.signal, audience);
+    evaluation.value = await getModelEvaluation(target.id);
+  } catch (err) {
+    if ((err as Error)?.name !== 'AbortError') {
+      evaluationError.value = err instanceof Error ? err.message : '模型评价生成失败';
+      evaluationStatus.value = '';
+    }
+  } finally {
+    evaluationLoading.value = false;
+    evaluationAbort = null;
+  }
+};
 
 onMounted(async () => {
   await userStore.bootstrap();
@@ -270,6 +370,68 @@ onMounted(async () => {
       </span>
     </div>
 
+    <!-- 模型级评价：不依赖样本、不创建推理记录，按当前角色返回不同内容。 -->
+    <section v-if="evaluationTarget" class="model-evaluation-panel card">
+      <div class="model-evaluation-panel__header">
+        <div>
+          <p class="eyebrow">Model Evaluation</p>
+          <h3>模型 #{{ evaluationTarget.id }} 评价</h3>
+          <p class="model-evaluation-panel__scope">
+            {{ isAdmin ? '管理员视图：质量诊断、算法结构和优化建议' : '用户视图：当前场景下的模型使用提示' }}
+          </p>
+        </div>
+        <div class="model-evaluation-panel__actions">
+          <button class="op-btn" :disabled="evaluationLoading" @click="generateModelEvaluation(Boolean(evaluationMarkdown))">
+            {{ evaluationMarkdown ? '重新生成' : '生成评价' }}
+          </button>
+          <button
+            v-if="isAdmin"
+            class="op-btn"
+            :disabled="evaluationLoading || evaluationTarget.status !== 'PUBLISHED'"
+            title="为已发布模型预生成普通用户可见的场景化评价"
+            @click="generateModelEvaluation(true, 'user')"
+          >
+            生成用户评价
+          </button>
+          <button class="op-btn op-btn--quiet" @click="closeModelEvaluation">关闭</button>
+        </div>
+      </div>
+
+      <div v-if="evaluationError" class="model-evaluation-panel__notice model-evaluation-panel__notice--error">
+        {{ evaluationError }}
+      </div>
+      <div v-if="evaluationStatus" class="model-evaluation-panel__status">{{ evaluationStatus }}</div>
+
+      <div v-if="evaluation?.model_attributes" class="model-evaluation-facts">
+        <div class="model-evaluation-fact">
+          <span>算法</span>
+          <strong>{{ evaluation.model_attributes.algorithm?.name || evaluation.model_attributes.algorithm?.code || '—' }}</strong>
+        </div>
+        <div class="model-evaluation-fact">
+          <span>数据集</span>
+          <strong>{{ evaluation.model_attributes.dataset?.logical_id || '—' }}</strong>
+        </div>
+        <div class="model-evaluation-fact">
+          <span>场景</span>
+          <strong>{{ evaluation.model_attributes.scenario?.name || '—' }}</strong>
+        </div>
+        <div class="model-evaluation-fact">
+          <span>评价范围</span>
+          <strong>模型版本本身</strong>
+        </div>
+      </div>
+
+      <div v-if="evaluation?.model_attributes?.feature_profile?.length" class="model-evaluation-fields">
+        <span class="model-evaluation-fields__label">场景重点字段</span>
+        <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, 8)" :key="field.name" class="model-evaluation-field">
+          {{ field.display_name || field.name }}
+        </span>
+      </div>
+
+      <div v-if="safeEvaluationHtml" class="model-evaluation-markdown" v-html="safeEvaluationHtml"></div>
+      <div v-else-if="!evaluationLoading" class="model-evaluation-empty">点击“生成评价”调用 AI；评价结果会保存到该模型版本。</div>
+    </section>
+
     <!-- 加载状态 -->
     <section v-if="loading" class="state-card">
       <div class="loader"></div>
@@ -314,7 +476,7 @@ onMounted(async () => {
               <td>状态</td>
               <td v-for="m in compareList" :key="'st-' + m.id">{{ statusLabel[m.status] ?? m.status }}</td>
             </tr>
-            <tr v-for="row in metricRows" :key="row.key">
+            <tr v-for="row in visibleMetricRows" :key="row.key">
               <td>{{ row.label }}</td>
               <td
                 v-for="m in compareList"
@@ -357,6 +519,13 @@ onMounted(async () => {
             >
               对比
             </button>
+            <button class="compare-btn" @click="openModelEvaluation(model)">AI 评价</button>
+            <span
+              class="model-evaluation-tag"
+              :class="{ 'model-evaluation-tag--ready': model.model_evaluation_available }"
+            >
+              {{ model.model_evaluation_available ? '评价已保存' : '待生成评价' }}
+            </span>
             <span
               class="model-card__status"
               :class="`model-status--${model.status}`"
@@ -418,10 +587,28 @@ onMounted(async () => {
             <span class="model-card__metric-value">{{ metricValue(model, 'g_mean') }}</span>
             <span class="model-card__metric-label">G-mean</span>
           </div>
+          <template v-if="isAdmin">
+            <div class="model-card__metric model-card__metric--internal">
+              <span class="model-card__metric-value">{{ metricValue(model, 'risk_recall') }}</span>
+              <span class="model-card__metric-label">Risk Recall</span>
+            </div>
+            <div class="model-card__metric model-card__metric--internal">
+              <span class="model-card__metric-value">{{ metricValue(model, 'risk_f1') }}</span>
+              <span class="model-card__metric-label">Risk F1</span>
+            </div>
+            <div class="model-card__metric model-card__metric--internal">
+              <span class="model-card__metric-value">{{ metricValue(model, 'cv_mean') }}</span>
+              <span class="model-card__metric-label">CV Mean</span>
+            </div>
+            <div class="model-card__metric model-card__metric--internal">
+              <span class="model-card__metric-value">{{ metricValue(model, 'cv_std') }}</span>
+              <span class="model-card__metric-label">CV Std</span>
+            </div>
+          </template>
         </div>
 
         <!-- 训练参数 -->
-        <div class="model-card__params">
+        <div v-if="isAdmin && Object.keys(model.training_parameters || {}).length" class="model-card__params">
           <span
             v-for="(v, k) in model.training_parameters"
             :key="k"
@@ -835,6 +1022,149 @@ onMounted(async () => {
   font-weight: 700;
 }
 
+.model-evaluation-tag {
+  color: rgba(220, 234, 255, 0.48);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.model-evaluation-tag--ready {
+  color: #53e5c8;
+}
+
+.model-evaluation-panel {
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border: 1px solid rgba(83, 229, 200, 0.2);
+}
+
+.model-evaluation-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.model-evaluation-panel__header h3 {
+  margin: 0 0 6px;
+  color: #e8f1ff;
+  font-size: 1.12rem;
+}
+
+.model-evaluation-panel__scope {
+  margin: 0;
+  color: rgba(220, 234, 255, 0.62);
+  font-size: 0.84rem;
+}
+
+.model-evaluation-panel__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.op-btn--quiet {
+  background: transparent;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.model-evaluation-panel__status,
+.model-evaluation-panel__notice,
+.model-evaluation-empty {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: rgba(91, 166, 255, 0.08);
+  color: rgba(220, 234, 255, 0.72);
+  font-size: 0.84rem;
+}
+
+.model-evaluation-panel__notice--error {
+  background: rgba(255, 123, 114, 0.1);
+  color: #ffaaa3;
+}
+
+.model-evaluation-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.model-evaluation-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(125, 201, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(8, 17, 31, 0.42);
+}
+
+.model-evaluation-fact span,
+.model-evaluation-fields__label {
+  color: rgba(220, 234, 255, 0.52);
+  font-size: 0.76rem;
+}
+
+.model-evaluation-fact strong {
+  overflow: hidden;
+  color: #d9e8ff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-evaluation-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.model-evaluation-field {
+  padding: 4px 9px;
+  border: 1px solid rgba(83, 229, 200, 0.2);
+  border-radius: 6px;
+  background: rgba(83, 229, 200, 0.06);
+  color: #9ee8d8;
+  font-size: 0.78rem;
+}
+
+.model-evaluation-markdown {
+  max-height: 520px;
+  overflow: auto;
+  padding-top: 4px;
+  color: rgba(232, 241, 255, 0.88);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.model-evaluation-markdown :deep(h1),
+.model-evaluation-markdown :deep(h2),
+.model-evaluation-markdown :deep(h3) {
+  margin: 16px 0 8px;
+  color: #d9e8ff;
+  font-size: 1rem;
+}
+
+.model-evaluation-markdown :deep(p),
+.model-evaluation-markdown :deep(ul),
+.model-evaluation-markdown :deep(ol) {
+  margin: 7px 0;
+}
+
+.model-evaluation-markdown :deep(code) {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(8, 17, 31, 0.65);
+  color: #9ad6ff;
+}
+
 @media (max-width: 768px) {
   .model-card__meta {
     flex-direction: column;
@@ -842,6 +1172,21 @@ onMounted(async () => {
   }
   .model-card__metrics {
     flex-wrap: wrap;
+  }
+  .model-evaluation-panel {
+    padding: 16px;
+  }
+  .model-evaluation-panel__header {
+    flex-direction: column;
+  }
+  .model-evaluation-panel__actions {
+    width: 100%;
+  }
+  .model-evaluation-panel__actions .op-btn {
+    flex: 1;
+  }
+  .model-evaluation-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

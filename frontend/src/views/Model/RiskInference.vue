@@ -71,6 +71,7 @@ const explanationMarkdown = ref('');
 const explanationLoading = ref(false);
 const explanationError = ref('');
 const explanationFallback = ref(false);
+const explanationStatus = ref<'idle' | 'generating' | 'completed' | 'failed' | 'fallback' | 'stopped'>('idle');
 let explanationController: AbortController | null = null;
 
 const safeExplanationHtml = computed(() => {
@@ -284,6 +285,7 @@ const generateExplanation = async (result: PredictResult) => {
   explanationError.value = '';
   explanationFallback.value = false;
   explanationLoading.value = true;
+  explanationStatus.value = 'generating';
   const explanation = result.explain_data ?? {};
   const scenario = scenarios.value.find((item) => item.code === selectedScenario.value);
   try {
@@ -302,12 +304,17 @@ const generateExplanation = async (result: PredictResult) => {
         model_version_id: result.model_version_id,
       },
       {
+        onStart: () => { explanationStatus.value = 'generating'; },
         onDelta: (content) => { explanationMarkdown.value += content; },
         onError: (message) => {
           explanationError.value = message;
           explanationFallback.value = true;
+          explanationStatus.value = 'fallback';
         },
-        onDone: () => { explanationLoading.value = false; },
+        onDone: (data) => {
+          explanationLoading.value = false;
+          explanationStatus.value = data.source === 'fallback' ? 'fallback' : 'completed';
+        },
       },
       explanationController.signal,
     );
@@ -315,6 +322,7 @@ const generateExplanation = async (result: PredictResult) => {
     if ((err as Error)?.name !== 'AbortError') {
       explanationError.value = err instanceof Error ? err.message : 'AI 分析请求失败';
       explanationFallback.value = true;
+      explanationStatus.value = 'failed';
     }
   } finally {
     explanationLoading.value = false;
@@ -325,6 +333,7 @@ const stopExplanation = () => {
   explanationController?.abort();
   explanationController = null;
   explanationLoading.value = false;
+  explanationStatus.value = 'stopped';
 };
 
 /** 推理结果 → 风险事件详情（Task 012 /events/:id） */
@@ -596,6 +605,8 @@ onMounted(async () => {
             </div>
           </div>
           <p v-if="explanationLoading && !explanationMarkdown" class="ai-explanation__status">正在根据模型结果生成说明...</p>
+          <p v-else-if="explanationStatus === 'stopped'" class="ai-explanation__status">用户已停止生成，可点击“重新生成”继续。</p>
+          <p v-else-if="explanationStatus === 'failed'" class="ai-explanation__status">生成失败，可点击“重新生成”重试。</p>
           <p v-if="explanationError" class="ai-explanation__error">{{ explanationError }}</p>
           <div v-if="explanationMarkdown" class="ai-explanation__markdown" v-html="safeExplanationHtml"></div>
           <p v-if="explanationFallback" class="ai-explanation__note">当前显示平台规则模板，模型预测结果未受影响。</p>

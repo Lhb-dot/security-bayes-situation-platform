@@ -16,10 +16,20 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
+import openai
 from openai import OpenAI
 
+from app.data.scenario_feature_catalog import expand_scenario_feature_catalog
 from app.models.user_ai_setting import UserAISetting
 from app.services.base import ServiceError, ServiceBase, service_call
+from app.schemas.explanation_contract import (
+    EXPLANATION_CONTRACT_VERSION,
+    availability,
+    explanation_for_role,
+    normalize_explanation,
+    unavailable,
+)
+from app.schemas.scenario_config import validate_scenario_config, validate_scenario_configs
 from app.schemas.common import ok
 from app.utils.common import get_logger, row_to_dict
 
@@ -27,9 +37,37 @@ logger = get_logger("explanation")
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "scenario_configs.json"
 
 
+def _env_float(name: str, default: float, minimum: float) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+AI_REQUEST_TIMEOUT_SECONDS = _env_float("AI_EXPLANATION_TIMEOUT_SECONDS", 60.0, 5.0)
+# Some OpenAI-compatible gateways need several seconds to warm up a model.
+# Keep connectivity checks strict, but allow a normal remote first response.
+AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 30.0, 3.0)
+AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 1200, 64)
+AI_MAX_OUTPUT_CHARS = _env_int("AI_EXPLANATION_MAX_CHARS", 12000, 512)
+
+
 def _configs() -> dict[str, dict[str, Any]]:
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        configs = expand_scenario_feature_catalog(
+            json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        )
+        errors = validate_scenario_configs(configs)
+        if errors:
+            logger.error("场景解释配置校验失败: %s", "；".join(errors[:10]))
+        return configs if isinstance(configs, dict) else {}
     except (OSError, json.JSONDecodeError):
         logger.exception("场景解释配置加载失败")
         return {}
@@ -48,7 +86,22 @@ def get_scenario_config(code: str | None) -> dict[str, Any]:
             "manual_review_advice": "信息不足时请结合原始数据进行人工复核。",
             "feature_dictionary": {},
         }
-    return {**config, "scenario_code": code}
+    errors = validate_scenario_config(code, config)
+    if errors:
+        logger.error("场景 %s 解释配置不可用: %s", code, "；".join(errors[:10]))
+        return {
+            "scenario_code": code,
+            "scenario_name": config.get("scenario_name") or code or "未指定场景",
+            "analysis_goal": "基于模型结果识别风险",
+            "risk_types": [],
+            "recommended_actions": [],
+            "manual_review_advice": "场景配置不完整，请结合原始数据进行人工复核。",
+            "risk_expression_template": None,
+            "feature_dictionary": {},
+            "configuration_available": False,
+            "configuration_errors": errors,
+        }
+    return {**config, "scenario_code": code, "configuration_available": True}
 
 
 def _finite_number(value: Any) -> float | None:
@@ -60,7 +113,7 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _availability(reason: str) -> dict[str, Any]:
-    return {"available": False, "reason": reason}
+    return unavailable(reason)
 
 
 def _raw_value(sample: dict[str, Any], name: str) -> Any:
@@ -179,10 +232,17 @@ def build_unified_explanation(
         "feature_dictionary": config.get("feature_dictionary", {}),
         "recommended_actions": config.get("recommended_actions", []),
         "manual_review_advice": config.get("manual_review_advice"),
+        "risk_expression_template": config.get("risk_expression_template"),
+        "configuration_available": config.get("configuration_available", True),
     }
     confidence_gap = abs((risk_probability if risk_probability is not None else 0.5) - risk_threshold)
     confidence = "高" if confidence_gap >= 0.25 else "中" if confidence_gap >= 0.1 else "低"
-    specific = result.get("algorithm_details")
+    raw_algorithm_details = result.get("algorithm_details")
+    specific = (
+        raw_algorithm_details.get("specific")
+        if isinstance(raw_algorithm_details, dict) and "specific" in raw_algorithm_details
+        else raw_algorithm_details
+    )
     if not specific:
         specific = {
             "MAWNB": {"views": views} if algorithm_code == "MAWNB" and views else _availability("MAWNB 未提供视图明细"),
@@ -209,7 +269,8 @@ def build_unified_explanation(
     }
     if not views and not result.get("feature_evidence") and not result.get("feature_attribution"):
         algorithm_details["availability"] = _availability("当前算法未提供视图或特征解释数据")
-    return {
+    return normalize_explanation({
+        "contract_version": EXPLANATION_CONTRACT_VERSION,
         "prediction": prediction,
         "prediction_is_risk": is_prediction_risk,
         "risk_probability": risk_probability,
@@ -222,8 +283,8 @@ def build_unified_explanation(
             "cv_mean": cv_mean,
             "cv_std": cv_std,
             "availability": {
-                "cv_mean": True if cv_mean is not None else _availability("训练结果未提供交叉验证均值"),
-                "cv_std": True if cv_std is not None else _availability("训练结果未提供交叉验证标准差"),
+                "cv_mean": availability(cv_mean is not None, "训练结果未提供交叉验证均值"),
+                "cv_std": availability(cv_std is not None, "训练结果未提供交叉验证标准差"),
             },
         },
         "conflict": {
@@ -234,23 +295,12 @@ def build_unified_explanation(
         "recommended_actions": config.get("recommended_actions", []),
         "algorithm_details": algorithm_details,
         "input_snapshot": sample,
-    }
+    })
 
 
 def public_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
     """Return the ordinary-user view while retaining the common contract."""
-    data = explanation or {}
-    public = {key: data.get(key) for key in (
-        "prediction", "prediction_is_risk", "risk_probability", "risk_threshold", "confidence", "conflict"
-    )}
-    public["top_features"] = (data.get("top_features") or [])[:3]
-    public["recommended_actions"] = data.get("recommended_actions") or []
-    scenario = data.get("scenario") or {}
-    public["scenario"] = {
-        key: scenario.get(key)
-        for key in ("scenario_code", "scenario_name", "analysis_goal", "risk_types", "manual_review_advice")
-    }
-    return public
+    return explanation_for_role(explanation, "SCENARIO_USER")
 
 
 def fallback_markdown(explanation: dict[str, Any]) -> str:
@@ -331,7 +381,7 @@ class AISettingService(ServiceBase):
                 "model": setting.model,
                 "enabled": setting.enabled,
                 "api_key_masked": _mask_key(key),
-                "updated_at": row_to_dict(setting).get("updated_at"),
+                "updated_at": getattr(setting, "updated_at", None),
             })
 
     @service_call
@@ -373,23 +423,95 @@ class AISettingService(ServiceBase):
         self.commit()
         return self.get(current_user)
 
+    @service_call
+    def test_connection(self, current_user) -> dict:
+        """Test the saved provider without returning a key or model response."""
+        self.require_login(current_user)
+        setting = self.db.get(UserAISetting, current_user.id)
+        if setting is None or not setting.enabled:
+            return ok(data={
+                "connected": False,
+                "reason_code": "not_configured",
+                "message": "当前账号未配置或未启用 AI 服务",
+            })
+        try:
+            key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
+            client = OpenAI(
+                api_key=key,
+                base_url=setting.base_url,
+                timeout=AI_CONNECTIVITY_TIMEOUT_SECONDS,
+            )
+            response = client.chat.completions.create(
+                model=setting.model,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                temperature=0,
+                max_tokens=1,
+                stream=False,
+            )
+            if not response or not getattr(response, "choices", None):
+                return ok(data={
+                    "connected": False,
+                    "reason_code": "empty_response",
+                    "message": "AI 服务返回空响应",
+                })
+            return ok(data={
+                "connected": True,
+                "reason_code": "ok",
+                "message": "AI 服务连接正常",
+            })
+        except Exception as exc:  # noqa: BLE001
+            reason_code, message = _classify_ai_error(exc)
+            logger.warning(
+                "AI connectivity test failed user_id=%s model=%s reason=%s",
+                current_user.id,
+                setting.model,
+                reason_code,
+            )
+            return ok(data={
+                "connected": False,
+                "reason_code": reason_code,
+                "message": message,
+            })
+
 
 def _openai_stream(setting: UserAISetting, messages: list[dict[str, str]]) -> Iterable[str]:
     key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
-    client = OpenAI(api_key=key, base_url=setting.base_url, timeout=60.0)
+    client = OpenAI(api_key=key, base_url=setting.base_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
     stream = client.chat.completions.create(
         model=setting.model,
         messages=messages,
         temperature=0.1,
-        max_tokens=1200,
+        max_tokens=AI_MAX_OUTPUT_TOKENS,
         stream=True,
     )
+    emitted = 0
     for chunk in stream:
         choices = getattr(chunk, "choices", None) or []
         if choices:
             content = getattr(getattr(choices[0], "delta", None), "content", None)
             if content:
-                yield content
+                remaining = AI_MAX_OUTPUT_CHARS - emitted
+                if remaining <= 0:
+                    break
+                content = str(content)[:remaining]
+                emitted += len(content)
+                if content:
+                    yield content
+
+
+def _classify_ai_error(exc: Exception) -> tuple[str, str]:
+    """Map provider failures to stable, non-sensitive API messages."""
+    if isinstance(exc, openai.APITimeoutError):
+        return "timeout", "AI 服务请求超时"
+    if isinstance(exc, openai.RateLimitError):
+        return "rate_limited", "AI 服务请求过于频繁，请稍后重试"
+    if isinstance(exc, openai.AuthenticationError):
+        return "authentication_failed", "AI 服务认证失败，请检查 API key"
+    if isinstance(exc, openai.NotFoundError):
+        return "model_not_found", "AI 服务或模型不存在，请检查地址和模型名称"
+    if isinstance(exc, openai.APIConnectionError):
+        return "connection_failed", "无法连接 AI 服务，请检查地址和网络"
+    return "provider_error", "AI 服务暂时不可用"
 
 
 def build_prompt(explanation: dict[str, Any]) -> list[dict[str, str]]:
@@ -428,12 +550,27 @@ def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterabl
         yield "done", {"status": "已使用规则模板完成", "source": "fallback"}
         return
     try:
+        logger.info(
+            "AI explanation started user_id=%s model=%s",
+            current_user.id,
+            setting.model,
+        )
+        emitted = False
         for chunk in _openai_stream(setting, build_prompt(facts)):
+            emitted = True
             yield "delta", {"content": chunk}
+        if not emitted:
+            raise RuntimeError("empty AI response")
         yield "done", {"status": "完成", "source": "ai"}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("AI 流式解释失败，回退规则模板: %s", exc)
-        yield "error", {"message": "AI 服务不可用，已回退规则模板"}
+        reason_code, _ = _classify_ai_error(exc)
+        logger.warning(
+            "AI explanation failed user_id=%s model=%s reason=%s",
+            current_user.id,
+            setting.model,
+            reason_code,
+        )
+        yield "error", {"message": "AI 服务不可用，已回退规则模板", "reason_code": reason_code}
         for chunk in _chunk_text(fallback_markdown(facts)):
             yield "delta", {"content": chunk}
         yield "done", {"status": "已使用规则模板完成", "source": "fallback"}

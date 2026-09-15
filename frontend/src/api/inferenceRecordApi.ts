@@ -21,6 +21,12 @@ export interface PredictResult {
   /** 预测为风险类时后端自动生成的风险事件；正常类为 null */
   risk_event: RiskEventResult | null;
   explain_data?: InferenceExplain;
+  model_evaluation?: {
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
+  };
 }
 
 /** 风险事件最小字段（predict 响应中内嵌） */
@@ -64,6 +70,13 @@ export const getInferenceExplain = async (recordId: string): Promise<{
   inference_record_id: number;
   prediction_label: string;
   explain_data: InferenceExplain;
+  generated_explanation?: {
+    available: boolean;
+    markdown?: string;
+    source?: 'ai' | 'fallback' | null;
+    generated_at?: string | null;
+    data_snapshot?: Record<string, unknown>;
+  };
 }> =>
   unwrapData(await request.get(`/api/v1/inference-records/${recordId}/explain`));
 

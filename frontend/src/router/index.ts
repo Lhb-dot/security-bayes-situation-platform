@@ -48,8 +48,8 @@ const routes = [
   {
     path: '/overview',
     name: '管理员首页',
-    component: () => import('@/views/Admin/AdminOverviewView.vue'),
-    // 管理员首页（原全局总览）：全平台跨用户态势，仅管理员可访问；普通用户的首页是 /home
+    component: () => import('@/views/Home/HomepageDashboardView.vue'),
+    // 最外层管理员首页：平台总览聚合
     meta: { title: '平台运行总览', requiresAdmin: true, hiddenForUser: true },
   },
   {
@@ -61,8 +61,8 @@ const routes = [
   {
     path: '/scenarios/:scenarioId/dashboard',
     name: '场景大屏',
-    // Task 009：场景看板容器（四场景动态分发）；旧 views/Model/ScenarioDashboard.vue 保留未使用
-    component: () => import('@/views/Scenario/ScenarioDashboardView.vue'),
+    // 角色化场景首页：场景管理员显示画像，场景用户显示工作台
+    component: () => import('@/views/Home/HomepageDashboardView.vue'),
     meta: { title: '场景大屏' },
   },
   {

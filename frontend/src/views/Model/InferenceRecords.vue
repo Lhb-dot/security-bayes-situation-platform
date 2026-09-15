@@ -8,7 +8,9 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { getInferenceRecordList } from '@/api/inferenceRecordApi';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+import { getInferenceExplain, getInferenceRecordList } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
 
 /** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
@@ -32,6 +34,12 @@ interface InferenceRecordItem {
   executed_at: string;
   risk_event_id: number | null;
   input_features: Record<string, unknown>;
+  model_evaluation?: {
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
+  };
 }
 
 const records = ref<InferenceRecordItem[]>([]);
@@ -81,6 +89,60 @@ const featureRows = computed(() =>
 const closeFeatures = () => {
   featureDialogVisible.value = false;
   featureTarget.value = null;
+};
+
+const explanationTarget = ref<InferenceRecordItem | null>(null);
+const explanationDialogVisible = ref(false);
+const explanationLoading = ref(false);
+const explanationMarkdown = ref('');
+const explanationSource = ref<'ai' | 'fallback' | null>(null);
+const explanationGeneratedAt = ref<string | null>(null);
+const explanationError = ref('');
+const modelEvaluationMarkdown = ref('');
+
+const safeExplanationHtml = computed(() =>
+  explanationMarkdown.value
+    ? DOMPurify.sanitize(marked.parse(explanationMarkdown.value, { async: false }) as string)
+    : '',
+);
+
+const safeModelEvaluationHtml = computed(() =>
+  modelEvaluationMarkdown.value
+    ? DOMPurify.sanitize(marked.parse(modelEvaluationMarkdown.value, { async: false }) as string)
+    : '',
+);
+
+const openExplanation = async (record: InferenceRecordItem) => {
+  explanationTarget.value = record;
+  explanationDialogVisible.value = true;
+  explanationLoading.value = true;
+  explanationMarkdown.value = '';
+  explanationSource.value = null;
+  explanationGeneratedAt.value = null;
+  explanationError.value = '';
+  modelEvaluationMarkdown.value = record.model_evaluation?.markdown ?? '';
+  try {
+    const result = await getInferenceExplain(String(record.id));
+    const saved = result.generated_explanation;
+    if (!saved?.available || !saved.markdown) {
+      explanationError.value = '该记录尚未保存解释文本，请在风险研判页重新生成。';
+      return;
+    }
+    explanationMarkdown.value = saved.markdown;
+    explanationSource.value = saved.source ?? null;
+    explanationGeneratedAt.value = saved.generated_at ?? null;
+  } catch (err) {
+    explanationError.value = err instanceof Error ? err.message : '解释文本读取失败';
+  } finally {
+    explanationLoading.value = false;
+  }
+};
+
+const closeExplanation = () => {
+  explanationDialogVisible.value = false;
+  explanationTarget.value = null;
+  explanationMarkdown.value = '';
+  modelEvaluationMarkdown.value = '';
 };
 
 /** 风险记录 → 跳转风险事件详情 */
@@ -152,6 +214,7 @@ onMounted(() => {
               <td>
                 <div class="op-group">
                   <button class="op-btn" @click="openFeatures(r)">输入特征</button>
+                  <button class="op-btn" @click="openExplanation(r)">查看解释</button>
                   <button v-if="r.is_risk_event" class="op-btn" @click="goEventDetail(r)">查看事件</button>
                 </div>
               </td>
@@ -184,6 +247,31 @@ onMounted(() => {
         <el-table-column prop="name" label="特征名" min-width="220" />
         <el-table-column prop="value" label="特征值" min-width="260" show-overflow-tooltip />
       </el-table>
+    </el-dialog>
+
+    <el-dialog
+      v-model="explanationDialogVisible"
+      class="inference-explanation-dialog"
+      :title="`模型解释 - 推理记录 ${explanationTarget?.id ?? ''}`"
+      width="820px"
+      top="5vh"
+      append-to-body
+      :close-on-click-modal="false"
+      @close="closeExplanation"
+    >
+      <p v-if="explanationLoading" class="explanation-state">正在读取已保存解释...</p>
+      <p v-else-if="explanationError" class="explanation-state explanation-state--error">{{ explanationError }}</p>
+      <template v-else>
+        <section v-if="safeModelEvaluationHtml" class="linked-model-evaluation">
+          <div class="linked-model-evaluation__title">关联模型评价（已保存）</div>
+          <div class="saved-explanation-markdown" v-html="safeModelEvaluationHtml"></div>
+        </section>
+        <div class="explanation-meta">
+          <span>{{ explanationSource === 'ai' ? 'AI 生成' : '规则回退' }}</span>
+          <span v-if="explanationGeneratedAt">保存于 {{ explanationGeneratedAt }}</span>
+        </div>
+        <div class="saved-explanation-markdown" v-html="safeExplanationHtml"></div>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -299,6 +387,7 @@ onMounted(() => {
 .op-group {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .risk-badge,
@@ -393,5 +482,76 @@ onMounted(() => {
 
 .inference-feature-dialog .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
+}
+
+.inference-explanation-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.inference-explanation-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
+}
+
+.inference-explanation-dialog .el-dialog__body {
+  padding: 20px 24px !important;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.explanation-meta,
+.explanation-state {
+  color: rgba(220, 234, 255, 0.68);
+  font-size: 0.86rem;
+}
+
+.explanation-meta {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.linked-model-evaluation {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(83, 229, 200, 0.18);
+  border-radius: 8px;
+  background: rgba(83, 229, 200, 0.04);
+}
+
+.linked-model-evaluation__title {
+  margin-bottom: 8px;
+  color: #53e5c8;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.explanation-state--error {
+  color: #ff9a91;
+}
+
+.saved-explanation-markdown {
+  color: rgba(225, 237, 255, 0.9);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.saved-explanation-markdown :is(h1, h2, h3) {
+  color: #9ad6ff;
+  margin: 18px 0 8px;
+}
+
+.saved-explanation-markdown :is(p, ol, ul) {
+  margin: 8px 0;
+}
+
+.saved-explanation-markdown code {
+  color: #ffd166;
+  background: rgba(125, 201, 255, 0.1);
+  padding: 1px 4px;
+  border-radius: 4px;
 }
 </style>

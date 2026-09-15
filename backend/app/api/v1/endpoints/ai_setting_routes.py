@@ -23,3 +23,8 @@ def update_ai_setting(
     db=Depends(get_db),
 ):
     return unwrap(AISettingService(db).update(current_user, payload.model_dump()))
+
+
+@router.post("/test", summary="测试当前用户 AI 服务连通性")
+def test_ai_setting(current_user: AppUser = Depends(get_current_user), db=Depends(get_db)):
+    return unwrap(AISettingService(db).test_connection(current_user))

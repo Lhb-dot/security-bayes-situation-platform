@@ -44,6 +44,10 @@ class ModelVersion(Base):
     )
     training_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
     evaluation_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Model-level explanation facts and role-scoped AI wording. These are
+    # independent from any inference record and can be reviewed by model ID.
+    model_attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    ai_evaluation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     trained_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=False
     )

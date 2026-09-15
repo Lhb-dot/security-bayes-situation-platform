@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import weka.classifiers.Classifier;
+import weka.classifiers.AbstractClassifier;
 import weka.classifiers.Evaluation;
 import weka.classifiers.meta.FilteredClassifier;
 import weka.classifiers.zh.A2WNB.A2WNB;
@@ -31,6 +32,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Random;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -94,17 +97,10 @@ public final class NbAlgorithmService {
             SerializationHelper.write(modelSavePath, classifier);
             MODEL_CACHE.put(modelSavePath, classifier);
 
-            // 评估指标改用分层 10 折交叉验证（避免训练集重代入偏乐观）；
+            // 评估指标使用固定随机种子的分层交叉验证（避免训练集重代入偏乐观）；
             // 保存的模型仍用全量数据训练（上面的 classifier.buildClassifier(data)）。
-            Evaluation evaluation = new Evaluation(data);
-            evaluation.crossValidateModel(classifier, data, 10, new Random(1));
-
-            double accuracy = evaluation.pctCorrect() / 100.0;
-            double recall = evaluation.weightedRecall();
-            double precision = evaluation.weightedPrecision();
-            double f1 = evaluation.weightedFMeasure();
-            double specificity = evaluation.weightedTrueNegativeRate();
-            double gMean = Math.sqrt(Math.max(0.0, recall * specificity));
+            JSONObject quality = calculateQualityMetrics(
+                    classifier, data, req.optJSONArray("risk_labels"));
 
             JSONArray distribution = new JSONArray();
             for (int i = 0; i < data.numClasses(); i++) {
@@ -114,12 +110,17 @@ public final class NbAlgorithmService {
 
             JSONObject metrics = new JSONObject()
                     .put("algorithm", algorithmCode)
-                    .put("accuracy", round(accuracy))
-                    .put("precision", round(precision))
-                    .put("recall", round(recall))
-                    .put("f1", round(f1))
-                    .put("specificity", round(specificity))
-                    .put("g_mean", round(gMean))
+                    .put("accuracy", quality.get("accuracy"))
+                    .put("precision", quality.get("precision"))
+                    .put("recall", quality.get("recall"))
+                    .put("f1", quality.get("f1"))
+                    .put("specificity", quality.get("specificity"))
+                    .put("g_mean", quality.get("g_mean"))
+                    .put("risk_recall", quality.get("risk_recall"))
+                    .put("risk_f1", quality.get("risk_f1"))
+                    .put("cv_mean", quality.get("cv_mean"))
+                    .put("cv_std", quality.get("cv_std"))
+                    .put("quality_availability", quality.get("quality_availability"))
                     .put("train_time_s", round((System.nanoTime() - started) / 1_000_000_000.0))
                     .put("num_instances", data.numInstances())
                     .put("num_attributes", data.numAttributes() - 1)
@@ -167,10 +168,15 @@ public final class NbAlgorithmService {
                 data.put("feature_attribution", new JSONArray());
             }
             // 追加多视图预测 / 视图权重 / 特征加权条件概率（未接入算法返回空数组）
-            JSONObject explain = buildExplain(classifier, instance, header);
+            JSONObject explain = buildExplain(
+                    classifier, instance, header, req.optJSONArray("risk_labels"), dist);
             data.put("views", explain.getJSONArray("views"));
             data.put("view_weights", explain.getJSONArray("view_weights"));
             data.put("feature_evidence", explain.getJSONArray("feature_evidence"));
+            data.put("algorithm_details", explain.getJSONObject("algorithm_details"));
+            if (explain.has("calculation_method")) {
+                data.put("calculation_method", explain.getString("calculation_method"));
+            }
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
         } catch (Exception e) {
             respond(ex, 500, new JSONObject().put("success", false).put("error", message(e)));
@@ -182,14 +188,21 @@ public final class NbAlgorithmService {
      *
      * 说明：序列化后的模型是 FilteredClassifierWithDiscretize（外层离散化包裹内层
      * 研究算法），因此先解包拿到真实算法实例，并用训练好的离散化过滤器把原始实例
-     * 转成离散实例，再调用各算法的 per-view 方法。任一环节异常都回退为空解释，
-     * 不影响预测主流程。PMWNB / DIWNB 本次未接入，返回空 views / feature_evidence。
+     * 转成离散实例，再调用各算法的只读 report 方法。任一环节异常都回退为
+     * available=false 的专属解释，不影响预测主流程。
      */
-    private static JSONObject buildExplain(Classifier classifier, Instance instance, Instances header) {
+    private static JSONObject buildExplain(
+            Classifier classifier, Instance instance, Instances header,
+            JSONArray riskLabels, double[] finalDistribution) {
         JSONObject explain = new JSONObject();
         explain.put("views", new JSONArray());
         explain.put("view_weights", new JSONArray());
         explain.put("feature_evidence", new JSONArray());
+        JSONObject unavailable = unavailable("算法专属解释提取失败");
+        explain.put("algorithm_details", new JSONObject()
+                .put("algorithm_code", algorithmCode)
+                .put("specific", unavailable)
+                .put("availability", unavailable));
         try {
             if (!(classifier instanceof FilteredClassifier)) {
                 return explain;
@@ -211,17 +224,26 @@ public final class NbAlgorithmService {
             JSONArray viewWeights = new JSONArray();
             JSONArray featureEvidence = new JSONArray();
             String calculationMethod = null;
+            JSONObject specific = new JSONObject();
 
             if (base instanceof CAVWNB) {
                 // 单视图（原始属性视图），无独立视图；但提供特征加权条件概率
                 CAVWNB cav = (CAVWNB) base;
                 featureEvidence = buildCavwnbEvidence(cav, disc, header);
+                specific.put("feature_evidence", featureEvidence)
+                        .put("available", featureEvidence.length() > 0);
+                if (featureEvidence.length() == 0) specific.put("reason", "未提供有效特征值证据");
                 calculationMethod = "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）";
             } else if (base instanceof MVCAVWNB) {
                 MVCAVWNB mv = (MVCAVWNB) base;
-                views.put(viewObj("原始属性视图", mv.classifier_view1.distributionForInstance(disc), header));
-                views.put(viewObj("SPODE 标签视图", mv.distributionForInstance_SPODE_Label(disc), header));
-                views.put(viewObj("RT 标签视图", mv.distributionForInstance_RT_Label(disc), header));
+                JSONObject original = viewObj("原始属性视图", mv.classifier_view1.distributionForInstance(disc), header);
+                JSONObject spode = viewObj("SPODE 标签视图", mv.distributionForInstance_SPODE_Label(disc), header);
+                JSONObject randomForest = viewObj("RF 标签视图", mv.distributionForInstance_RT_Label(disc), header);
+                views.put(original).put(spode).put(randomForest);
+                specific.put("original_view", original)
+                        .put("spode_view", spode)
+                        .put("random_forest_view", randomForest)
+                        .put("available", true);
                 double third = 1.0 / 3.0;
                 viewWeights.put(third).put(third).put(third);
                 if (mv.classifier_view1 instanceof CAVWNB) {
@@ -230,11 +252,16 @@ public final class NbAlgorithmService {
                 calculationMethod = "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）";
             } else if (base instanceof EMAWNB) {
                 EMAWNB ema = (EMAWNB) base;
-                ema.LearningViewWweight(disc);
-                views.put(viewObj("原始属性视图", ema.distributionForInstance1(disc), header));
-                views.put(viewObj("SPODE 标签视图", ema.distributionForInstance2(disc), header));
-                views.put(viewObj("RT 标签视图", ema.distributionForInstance3(disc), header));
+                JSONObject original = viewObj("原始属性视图", ema.distributionForInstance1(disc), header);
+                JSONObject spode = viewObj("SPODE 标签视图", ema.distributionForInstance2(disc), header);
+                JSONObject randomForest = viewObj("RF 标签视图", ema.distributionForInstance3(disc), header);
+                views.put(original).put(spode).put(randomForest);
                 viewWeights.put(round(ema.w_view1)).put(round(ema.w_view2)).put(round(ema.w_view3));
+                specific.put("dynamic_view_weights", viewWeights)
+                        .put("before_fusion", views)
+                        .put("after_fusion", viewObj("融合后", finalDistribution, header))
+                        .put("view_conflict", viewConflict(views))
+                        .put("available", true);
                 if (ema.classifier_view1 instanceof CAVWNB) {
                     featureEvidence = buildCavwnbEvidence((CAVWNB) ema.classifier_view1, disc, header);
                 }
@@ -242,17 +269,84 @@ public final class NbAlgorithmService {
             } else if (base instanceof DIWNB_HE) {
                 // 双视图：原始视图 + 生成视图（KNN 生成）
                 DIWNB_HE diwnb = (DIWNB_HE) base;
-                views.put(viewObj("原始视图", diwnb.distributionForView1(disc), header));
-                views.put(viewObj("生成视图", diwnb.distributionForView2(disc), header));
+                JSONObject original = viewObj("原始视图", diwnb.distributionForView1(disc), header);
+                JSONObject knn = viewObj("KNN 生成视图", diwnb.distributionForView2(disc), header);
+                views.put(original).put(knn);
                 double[] vw = diwnb.getViewWeightsForReport();
                 viewWeights.put(round(vw[0])).put(round(vw[1]));
+                JSONArray ks = new JSONArray();
+                for (int value : diwnb.getKValuesForReport()) ks.put(value);
+                JSONArray ratios = new JSONArray();
+                for (double[] row : diwnb.getNeighborClassRatiosForReport(disc)) {
+                    JSONArray values = new JSONArray();
+                    for (double value : row) values.put(round(value));
+                    ratios.put(values);
+                }
+                specific.put("original_view", original)
+                        .put("knn_view", knn)
+                        .put("k", ks)
+                        .put("neighbor_class_ratios", ratios)
+                        .put("consistency", viewConflict(views))
+                        .put("available", true);
+                if (riskLabels != null && ks.length() > 0) {
+                    double riskRatio = 0.0;
+                    int rows = 0;
+                    for (int i = 0; i < ratios.length(); i++) {
+                        JSONArray row = ratios.getJSONArray(i);
+                        double total = 0.0;
+                        for (int c = 0; c < row.length(); c++) {
+                            if (isRiskLabel(header.classAttribute().value(c), riskLabels)) {
+                                total += row.getDouble(c);
+                            }
+                        }
+                        riskRatio += total;
+                        rows++;
+                    }
+                    specific.put("neighbor_risk_ratio", rows == 0 ? JSONObject.NULL : round(riskRatio / rows));
+                }
             } else if (base instanceof A2WNB) {
-                // 增广单视图，无独立视图；特征证据暂未接入
+                A2WNB a2 = (A2WNB) base;
+                double[] original = a2.getOriginalDistributionForReport(disc);
+                double[] enhanced = a2.getEnhancedDistributionForReport(disc);
+                JSONArray originalAttributes = buildA2FeatureAttribution(
+                        a2, instance, disc, header, featuresFromInstance(instance, header), false);
+                JSONArray enhancedAttributes = buildA2FeatureAttribution(
+                        a2, instance, disc, header, featuresFromInstance(instance, header), true);
+                JSONArray enhancedValues = new JSONArray();
+                for (String value : a2.getEnhancedAttributeValuesForReport(disc)) {
+                    enhancedValues.put(value);
+                }
+                JSONArray probabilityChange = new JSONArray();
+                for (int i = 0; i < original.length; i++) {
+                    probabilityChange.put(new JSONObject()
+                            .put("class", header.classAttribute().value(i))
+                            .put("original_probability", round(original[i]))
+                            .put("enhanced_probability", round(enhanced[i]))
+                            .put("delta", round(enhanced[i] - original[i])));
+                }
+                JSONObject rode = new JSONObject()
+                        .put("available", a2.getRodeModelCountForReport() > 0)
+                        .put("model_count", a2.getRodeModelCountForReport())
+                        .put("task", a2.getRodeTaskForReport());
+                if (!rode.optBoolean("available")) rode.put("reason", "RODE 未完成训练");
+                specific.put("original_attributes", originalAttributes)
+                        .put("enhanced_attributes", new JSONObject()
+                                .put("values", enhancedValues)
+                                .put("contributions", enhancedAttributes))
+                        .put("probability_change", probabilityChange)
+                        .put("rode", rode)
+                        .put("available", true);
             }
 
             explain.put("views", views);
             explain.put("view_weights", viewWeights);
             explain.put("feature_evidence", featureEvidence);
+            explain.put("algorithm_details", new JSONObject()
+                    .put("algorithm_code", algorithmCode)
+                    .put("specific", specific)
+                    .put("availability", availability(
+                            specific.optBoolean("available", true),
+                            specific.optString("reason", "算法专属解释不可用"))));
             if (calculationMethod != null) {
                 explain.put("calculation_method", calculationMethod);
             }
@@ -260,6 +354,232 @@ public final class NbAlgorithmService {
             // 解释提取失败不阻断预测，返回空解释
         }
         return explain;
+    }
+
+    /**
+     * Calculate aggregate metrics and fold accuracy statistics without changing
+     * the classifier used for the saved full-data model.
+     */
+    private static JSONObject calculateQualityMetrics(
+            Classifier template, Instances data, JSONArray riskLabels) throws Exception {
+        int folds = Math.min(10, data.numInstances());
+        if (folds < 2) throw new IllegalArgumentException("交叉验证至少需要 2 条样本");
+
+        Instances cvData = new Instances(data);
+        Random random = new Random(1);
+        cvData.randomize(random);
+        if (cvData.classAttribute().isNominal()) cvData.stratify(folds);
+
+        double[][] confusion = new double[data.numClasses()][data.numClasses()];
+        double[] foldAccuracy = new double[folds];
+        for (int fold = 0; fold < folds; fold++) {
+            Classifier copy = AbstractClassifier.makeCopy(template);
+            Instances train = cvData.trainCV(folds, fold, random);
+            Instances test = cvData.testCV(folds, fold);
+            copy.buildClassifier(train);
+            double correct = 0.0;
+            double total = 0.0;
+            for (int i = 0; i < test.numInstances(); i++) {
+                Instance row = test.instance(i);
+                if (row.classIsMissing()) continue;
+                double[] distribution = copy.distributionForInstance(row);
+                int predicted = 0;
+                for (int c = 1; c < distribution.length; c++) {
+                    if (distribution[c] > distribution[predicted]) predicted = c;
+                }
+                int actual = (int) row.classValue();
+                double weight = row.weight();
+                confusion[actual][predicted] += weight;
+                total += weight;
+                if (actual == predicted) correct += weight;
+            }
+            foldAccuracy[fold] = total == 0.0 ? Double.NaN : correct / total;
+        }
+
+        double total = 0.0;
+        double diagonal = 0.0;
+        for (int actual = 0; actual < confusion.length; actual++) {
+            for (int predicted = 0; predicted < confusion[actual].length; predicted++) {
+                total += confusion[actual][predicted];
+                if (actual == predicted) diagonal += confusion[actual][predicted];
+            }
+        }
+        double weightedRecall = 0.0;
+        double weightedPrecision = 0.0;
+        double weightedF1 = 0.0;
+        double weightedSpecificity = 0.0;
+        for (int c = 0; c < confusion.length; c++) {
+            double actualCount = 0.0;
+            double predictedCount = 0.0;
+            for (int i = 0; i < confusion.length; i++) {
+                actualCount += confusion[c][i];
+                predictedCount += confusion[i][c];
+            }
+            double tp = confusion[c][c];
+            double fn = actualCount - tp;
+            double fp = predictedCount - tp;
+            double tn = total - tp - fn - fp;
+            double weight = total == 0.0 ? 0.0 : actualCount / total;
+            weightedRecall += weight * ratio(tp, tp + fn);
+            weightedPrecision += weight * ratio(tp, tp + fp);
+            weightedF1 += weight * f1(tp, fp, fn);
+            weightedSpecificity += weight * ratio(tn, tn + fp);
+        }
+
+        boolean riskAvailable = false;
+        double riskTp = 0.0;
+        double riskActual = 0.0;
+        double riskPredicted = 0.0;
+        for (int actual = 0; actual < confusion.length; actual++) {
+            boolean actualRisk = isRiskClass(data.classAttribute().value(actual), riskLabels);
+            for (int predicted = 0; predicted < confusion[actual].length; predicted++) {
+                boolean predictedRisk = isRiskClass(data.classAttribute().value(predicted), riskLabels);
+                if (actualRisk) {
+                    riskAvailable = true;
+                    riskActual += confusion[actual][predicted];
+                }
+                if (predictedRisk) riskPredicted += confusion[actual][predicted];
+                if (actualRisk && predictedRisk) riskTp += confusion[actual][predicted];
+            }
+        }
+
+        double cvMean = mean(foldAccuracy);
+        double cvStd = standardDeviation(foldAccuracy, cvMean);
+        JSONObject quality = new JSONObject()
+                .put("accuracy", round(ratio(diagonal, total)))
+                .put("precision", round(weightedPrecision))
+                .put("recall", round(weightedRecall))
+                .put("f1", round(weightedF1))
+                .put("specificity", round(weightedSpecificity))
+                .put("g_mean", round(Math.sqrt(Math.max(0.0, weightedRecall * weightedSpecificity))))
+                .put("risk_recall", riskAvailable ? round(ratio(riskTp, riskActual)) : JSONObject.NULL)
+                .put("risk_f1", riskAvailable
+                        ? round(f1(riskTp, riskPredicted - riskTp, riskActual - riskTp))
+                        : JSONObject.NULL)
+                .put("cv_mean", Double.isNaN(cvMean) ? JSONObject.NULL : round(cvMean))
+                .put("cv_std", Double.isNaN(cvStd) ? JSONObject.NULL : round(cvStd))
+                .put("quality_availability", new JSONObject()
+                        .put("risk_recall", availability(riskAvailable, "训练请求未提供有效风险类别映射"))
+                        .put("risk_f1", availability(riskAvailable, "训练请求未提供有效风险类别映射"))
+                        .put("cv_mean", availability(!Double.isNaN(cvMean), "交叉验证均值不可用"))
+                        .put("cv_std", availability(!Double.isNaN(cvStd), "交叉验证标准差不可用")));
+        return quality;
+    }
+
+    private static boolean isRiskClass(String label, JSONArray riskLabels) {
+        if (riskLabels == null) return false;
+        for (int i = 0; i < riskLabels.length(); i++) {
+            if (label.equals(String.valueOf(riskLabels.opt(i)))) return true;
+        }
+        return false;
+    }
+
+    private static double ratio(double numerator, double denominator) {
+        return denominator == 0.0 ? 0.0 : numerator / denominator;
+    }
+
+    private static double f1(double tp, double fp, double fn) {
+        double precision = ratio(tp, tp + fp);
+        double recall = ratio(tp, tp + fn);
+        return ratio(2.0 * precision * recall, precision + recall);
+    }
+
+    private static double mean(double[] values) {
+        double sum = 0.0;
+        int count = 0;
+        for (double value : values) {
+            if (!Double.isNaN(value)) { sum += value; count++; }
+        }
+        return count == 0 ? Double.NaN : sum / count;
+    }
+
+    private static double standardDeviation(double[] values, double mean) {
+        if (Double.isNaN(mean)) return Double.NaN;
+        double sum = 0.0;
+        int count = 0;
+        for (double value : values) {
+            if (!Double.isNaN(value)) { double delta = value - mean; sum += delta * delta; count++; }
+        }
+        return count == 0 ? Double.NaN : Math.sqrt(sum / count);
+    }
+
+    private static JSONObject unavailable(String reason) {
+        return new JSONObject().put("available", false).put("reason", reason);
+    }
+
+    private static JSONObject availability(boolean available, String reason) {
+        return available
+                ? new JSONObject().put("available", true).put("reason", JSONObject.NULL)
+                : unavailable(reason);
+    }
+
+    private static boolean isRiskLabel(String label, JSONArray riskLabels) {
+        if (riskLabels == null) return false;
+        for (int i = 0; i < riskLabels.length(); i++) {
+            if (label.equals(String.valueOf(riskLabels.opt(i)))) return true;
+        }
+        return false;
+    }
+
+    private static JSONObject viewConflict(JSONArray views) {
+        Set<String> labels = new HashSet<>();
+        JSONArray labelArray = new JSONArray();
+        for (int i = 0; i < views.length(); i++) {
+            String label = views.getJSONObject(i).optString("predicted_label", "");
+            if (!label.isEmpty() && labels.add(label)) labelArray.put(label);
+        }
+        return new JSONObject().put("has_conflict", labels.size() > 1).put("labels", labelArray);
+    }
+
+    private static JSONObject featuresFromInstance(Instance instance, Instances header) {
+        JSONObject features = new JSONObject();
+        for (int i = 0; i < header.numAttributes(); i++) {
+            if (i == header.classIndex() || instance.isMissing(i)) continue;
+            Attribute attr = header.attribute(i);
+            if (attr.isNominal()) features.put(attr.name(), instance.stringValue(i));
+            else features.put(attr.name(), instance.value(i));
+        }
+        return features;
+    }
+
+    private static JSONArray buildA2FeatureAttribution(
+            A2WNB a2, Instance rawInstance, Instance discreteInstance, Instances header,
+            JSONObject features, boolean enhanced)
+            throws Exception {
+        double[] original = enhanced
+                ? a2.getEnhancedDistributionForReport(discreteInstance)
+                : a2.getOriginalDistributionForReport(discreteInstance);
+        int predicted = 0;
+        for (int i = 1; i < original.length; i++) {
+            if (original[i] > original[predicted]) predicted = i;
+        }
+        ArrayList<JSONObject> items = new ArrayList<>();
+        for (int i = 0; i < header.numAttributes(); i++) {
+            if (i == header.classIndex() || rawInstance.isMissing(i)) continue;
+            Instance masked = new DenseInstance(discreteInstance);
+            masked.setDataset(discreteInstance.dataset());
+            masked.setMissing(i);
+            double[] changed = enhanced
+                    ? a2.getEnhancedDistributionForReport(masked)
+                    : a2.getOriginalDistributionForReport(masked);
+            double delta = original[predicted] - changed[predicted];
+            Attribute attr = header.attribute(i);
+            Object raw = features.has(attr.name()) ? features.get(attr.name()) : JSONObject.NULL;
+            String processed = attr.isNominal() ? rawInstance.stringValue(i) : String.valueOf(rawInstance.value(i));
+            items.add(new JSONObject()
+                    .put("feature_name", attr.name())
+                    .put("raw_value", raw)
+                    .put("processed_value", processed)
+                    .put("contribution", round(Math.abs(delta)))
+                    .put("signed_contribution", round(delta))
+                    .put("supports_predicted", delta >= 0));
+        }
+        items.sort(Comparator.comparingDouble(x -> -x.optDouble("contribution", 0.0)));
+        JSONArray result = new JSONArray();
+        for (int i = 0; i < Math.min(10, items.size()); i++) {
+            result.put(items.get(i).put("rank", i + 1));
+        }
+        return result;
     }
 
     private static JSONObject viewObj(String name, double[] dist, Instances header) {
