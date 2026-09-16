@@ -260,15 +260,15 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
 /* ==========================================================================
    按钮：.settings-btn（来自 Settings.vue）
    ========================================================================== */
-/* 按钮：统一浅色底（与页面整体浅色元素同一套色板） */
+/* 按钮：与全站 .el-button 同一套描边样式 */
 .settings-btn{
-  padding:10px 20px;border:1px solid rgba(255,255,255,.28);border-radius:10px;
-  background:linear-gradient(135deg,#e6f1ff,#b8d6fb);color:#0b2038;font-size:.9rem;font-weight:500;
-  transition:filter .2s;width:fit-content;
+  padding:10px 20px;border:1px solid rgba(125,201,255,.35);border-radius:10px;
+  background:rgba(91,166,255,.1);color:#9ad6ff;font-size:.9rem;
+  transition:background .2s,border-color .2s,color .2s;width:fit-content;
 }
-.settings-btn:hover{filter:brightness(1.07)}
+.settings-btn:hover{background:rgba(91,166,255,.18);border-color:rgba(91,166,255,.5);color:#fff}
 .settings-btn--primary{padding:12px 32px;font-weight:600}
-.settings-btn--primary:hover{filter:brightness(1.07)}
+.settings-btn--primary:hover{background:rgba(91,166,255,.18);border-color:rgba(91,166,255,.5);color:#fff}
 .settings-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 
 /* ==========================================================================
@@ -356,8 +356,8 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
   color:#9ad6ff;background:rgba(91,166,255,.1);font-size:.88rem;transition:.2s;
 }
 .el-button:hover{border-color:rgba(91,166,255,.5);color:#fff;background:rgba(91,166,255,.18)}
-.el-button--primary{background:linear-gradient(135deg,#5ba6ff,#407acc);border-color:transparent;color:#fff}
-.el-button--primary:hover{opacity:.9;background:linear-gradient(135deg,#5ba6ff,#407acc);color:#fff}
+.el-button--primary{background:rgba(91,166,255,.1);border-color:rgba(125,201,255,.35);color:#9ad6ff;font-weight:600}
+.el-button--primary:hover{background:rgba(91,166,255,.18);border-color:rgba(91,166,255,.5);color:#fff}
 
 /* 表格：对应 .el-table（来自 style.css 暗色覆盖） */
 .dtable-wrap{overflow-x:auto;border-radius:10px}
@@ -468,7 +468,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
         <button class="tabs__item is-active" data-tab="account">账号与安全</button>
         <button class="tabs__item" data-tab="general">基础设置</button>
         <button class="tabs__item only-admin" data-tab="threshold">风险阈值</button>
-        <button class="tabs__item only-super" data-tab="scenario">场景管理</button>
       </nav>
 
       <!-- ==================== 操作区域（bar 下方，左右两栏卡片） ==================== -->
@@ -632,49 +631,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
                 </div>
                 <button class="settings-btn" data-save="阈值已保存并实时生效">保存并生效</button>
               </div>
-            </div>
-          </section>
-        </div>
-
-        <!-- ---------------- 场景管理（仅系统管理员，单卡片占左栏） ---------------- -->
-        <div class="tabpanel only-super" data-panel="scenario">
-          <section class="card">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Scenarios</p>
-                <h3>场景启停控制</h3>
-              </div>
-            </div>
-
-            <div class="settings-switches">
-              <div class="settings-switches__item" title="network_security · 已接入">
-                <span class="settings-switches__label">网络安全态势感知</span>
-                <button class="settings-switches__toggle is-on" data-toggle aria-label="网络安全态势感知">
-                  <span class="settings-switches__knob"></span>
-                </button>
-              </div>
-              <div class="settings-switches__item" title="power_system · 已接入">
-                <span class="settings-switches__label">电力系统风险态势感知</span>
-                <button class="settings-switches__toggle is-on" data-toggle aria-label="电力系统风险态势感知">
-                  <span class="settings-switches__knob"></span>
-                </button>
-              </div>
-              <div class="settings-switches__item" title="geological_risk · 已接入">
-                <span class="settings-switches__label">地质风险态势感知</span>
-                <button class="settings-switches__toggle is-on" data-toggle aria-label="地质风险态势感知">
-                  <span class="settings-switches__knob"></span>
-                </button>
-              </div>
-              <div class="settings-switches__item" title="flightdeck_operation · 预留停用">
-                <span class="settings-switches__label">航母甲板作业态势感知</span>
-                <button class="settings-switches__toggle" data-toggle aria-label="航母甲板作业态势感知">
-                  <span class="settings-switches__knob"></span>
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-actions">
-              <button class="settings-btn settings-btn--primary" data-save="场景启停状态已保存">保存全部系统设置</button>
             </div>
           </section>
         </div>

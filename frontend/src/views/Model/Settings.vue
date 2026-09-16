@@ -3,12 +3,14 @@
  * Settings — 设置（普通用户）/ 系统设置（管理员）
  *
  * 布局对齐 settings-demo/index.html：
- * - 顶部横向页签：账号与安全 / 基础设置 / 风险阈值 / 场景管理（按角色过滤可见性）
+ * - 顶部横向页签：账号与安全 / 基础设置 / 风险阈值（按角色过滤可见性）
  * - 每个页签内容为左右两栏卡片；需要横向空间的卡片用 .settings-section--span 占满整行
  *
  * 功能口径保持不变：
  * - 普通用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + 模型解释服务）
- * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）；系统管理员额外可见场景启停
+ * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）
+ *
+ * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -47,7 +49,7 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 // ===================== 页签 =====================
-type TabKey = 'account' | 'general' | 'threshold' | 'scenario';
+type TabKey = 'account' | 'general' | 'threshold';
 const activeTab = ref<TabKey>('account');
 const tabs = computed<{ key: TabKey; label: string }[]>(() => {
   const list: { key: TabKey; label: string }[] = [
@@ -55,7 +57,6 @@ const tabs = computed<{ key: TabKey; label: string }[]>(() => {
     { key: 'general', label: '基础设置' },
   ];
   if (canConfigureThresholds.value) list.push({ key: 'threshold', label: '风险阈值' });
-  if (isSuperAdmin.value) list.push({ key: 'scenario', label: '场景管理' });
   return list;
 });
 // 当前页签被角色隐藏时，自动落到第一个可见页签
@@ -320,19 +321,6 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   }
 };
 
-// ===================== 场景启停（系统管理员） =====================
-const scenarioSwitches = ref([
-  { id: 'network_security', label: '网络安全态势感知', enabled: true },
-  { id: 'power_system', label: '电力系统风险态势感知', enabled: true },
-  { id: 'geological_risk', label: '地质风险态势感知', enabled: true },
-  { id: 'flightdeck_operation', label: '航母甲板作业态势感知', enabled: false },
-]);
-
-const saveAdminSettings = () => {
-  settingsStore.saveRefreshSettings();
-  ElMessage.success('系统设置已保存');
-};
-
 onMounted(async () => {
   currentUser.value = userStore.currentUser;
   settingsStore.loadForUser(currentUser.value?.user_id);
@@ -528,29 +516,6 @@ onMounted(async () => {
               {{ saving ? '保存中...' : '保存并生效' }}
             </button>
           </div>
-        </div>
-      </section>
-    </div>
-
-    <!-- ==================== 场景管理（系统管理员） ==================== -->
-    <div class="settings-panel" :class="{ 'is-active': activeTab === 'scenario' }">
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Scenarios</p>
-            <h3>场景启停控制</h3>
-          </div>
-        </div>
-        <div class="settings-switches">
-          <div v-for="sc in scenarioSwitches" :key="sc.id" class="settings-switches__item">
-            <span class="settings-switches__label">{{ sc.label }}</span>
-            <button class="settings-switches__toggle" :class="{ 'is-on': sc.enabled }" @click="sc.enabled = !sc.enabled">
-              <span class="settings-switches__knob"></span>
-            </button>
-          </div>
-        </div>
-        <div class="settings-actions">
-          <button class="settings-btn settings-btn--primary" @click="saveAdminSettings">保存全部系统设置</button>
         </div>
       </section>
     </div>
@@ -1027,26 +992,27 @@ select.settings-form__input option {
   transform: translateX(20px);
 }
 
-/* ===================== 按钮：统一浅色底（与页面整体浅色元素同一套色板） ===================== */
+/* ===================== 按钮：与全站 .el-button 同一套描边样式 ===================== */
 .settings-btn {
   padding: 10px 20px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(125, 201, 255, 0.35);
   border-radius: 10px;
-  background: linear-gradient(135deg, #e6f1ff, #b8d6fb);
-  color: #0b2038;
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
   font-size: 0.9rem;
-  font-weight: 500;
   cursor: pointer;
-  transition: filter 0.2s, opacity 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
   width: fit-content;
 }
 
 .settings-btn:hover {
-  filter: brightness(1.07);
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
 }
 
 .settings-btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -1167,18 +1133,17 @@ select.settings-form__input option {
 
 .pwd-setting-dialog .el-button--primary,
 .ai-setting-dialog .el-button--primary {
-  background: linear-gradient(135deg, #e6f1ff, #b8d6fb) !important;
-  border-color: rgba(255, 255, 255, 0.28) !important;
-  color: #0b2038 !important;
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
   font-weight: 600 !important;
 }
 
 .pwd-setting-dialog .el-button--primary:hover,
 .ai-setting-dialog .el-button--primary:hover {
-  background: linear-gradient(135deg, #e6f1ff, #b8d6fb) !important;
-  border-color: rgba(255, 255, 255, 0.28) !important;
-  color: #0b2038 !important;
-  filter: brightness(1.07);
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
 }
 
 .ai-dialog-form {
