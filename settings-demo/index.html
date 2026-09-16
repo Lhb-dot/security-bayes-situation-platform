@@ -69,7 +69,6 @@ body::before{
   margin-bottom:18px;
 }
 .section-heading h3{margin:0;font-size:1.05rem}
-.section-heading__hint{margin:6px 0 0;color:rgba(220,234,255,.55);font-size:.82rem}
 
 /* ==========================================================================
    顶部 bar：完全沿用 App.vue 的 .topbar + style.css 的 .nav-tabs
@@ -261,17 +260,15 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
 /* ==========================================================================
    按钮：.settings-btn（来自 Settings.vue）
    ========================================================================== */
+/* 次级按钮与主按钮统一为蓝色填充（与「编辑」按钮同款） */
 .settings-btn{
-  padding:10px 20px;border:1px solid rgba(125,201,255,.25);border-radius:10px;
-  background:rgba(91,166,255,.1);color:#9ad6ff;font-size:.9rem;
-  transition:background .2s;width:fit-content;
+  padding:10px 20px;border:none;border-radius:10px;
+  background:linear-gradient(135deg,#5ba6ff,#407acc);color:#fff;font-size:.9rem;
+  transition:opacity .2s;width:fit-content;
 }
-.settings-btn:hover{background:rgba(91,166,255,.2)}
-.settings-btn--primary{
-  background:linear-gradient(135deg,#5ba6ff,#407acc);color:#fff;border:none;
-  padding:12px 32px;font-weight:600;
-}
-.settings-btn--primary:hover{opacity:.9;background:linear-gradient(135deg,#5ba6ff,#407acc)}
+.settings-btn:hover{opacity:.9}
+.settings-btn--primary{padding:12px 32px;font-weight:600}
+.settings-btn--primary:hover{opacity:.9}
 .settings-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 
 /* ==========================================================================
@@ -489,7 +486,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">Account</p>
                 <h3>账号信息</h3>
-                <p class="section-heading__hint">当前登录账号的资料，角色与绑定场景由管理员分配</p>
               </div>
             </div>
 
@@ -521,16 +517,12 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">Security</p>
                 <h3>安全设置</h3>
-                <p class="section-heading__hint">本人改密统一在设置页完成，用户管理只保留「重置他人密码」</p>
               </div>
             </div>
 
             <div class="settings-form">
               <div class="settings-form__item settings-form__item--row">
-                <div>
-                  <div class="settings-form__label">登录密码</div>
-                  <p class="section-heading__hint">上次修改：2026-08-02 · 建议每 90 天更换一次</p>
-                </div>
+                <span class="settings-form__label">登录密码</span>
                 <button class="settings-btn settings-btn--primary" data-open-pwd>修改密码</button>
               </div>
             </div>
@@ -547,7 +539,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">Refresh</p>
                 <h3>自动刷新设置</h3>
-                <p class="section-heading__hint">按账号保存在浏览器本地，刷新页面后仍生效</p>
               </div>
             </div>
 
@@ -581,7 +572,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">AI Provider</p>
                 <h3>模型解释服务</h3>
-                <p class="section-heading__hint">使用 OpenAI 兼容的 Chat Completions 接口。API key 按当前账号绑定并仅在服务端保存，页面不会回显原文。</p>
               </div>
               <span class="status-badge status-badge--off" id="aiBadge">未配置</span>
             </div>
@@ -616,7 +606,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">Threshold</p>
                 <h3>我的风险阈值</h3>
-                <p class="section-heading__hint">告警按当前账号在对应场景的阈值判定，修改后立即生效。</p>
               </div>
               <button class="settings-btn" data-open-logs>查看阈值修改记录</button>
             </div>
@@ -661,7 +650,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
               <div>
                 <p class="eyebrow">Scenarios</p>
                 <h3>场景启停控制</h3>
-                <p class="section-heading__hint">控制各场景的接入状态，影响全平台场景可用范围。</p>
               </div>
             </div>
 
@@ -792,7 +780,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
         <label class="settings-form__label">API key</label>
         <input type="password" class="settings-form__input" id="aiKey" placeholder="留空则保留已保存的 key" autocomplete="new-password">
       </div>
-      <p class="section-heading__hint">API key 仅在服务端保存，页面不会回显原文；留空提交表示不修改已保存的 key。</p>
     </div>
     <div class="dialog__footer">
       <button class="el-button" data-close-ai>取消</button>
