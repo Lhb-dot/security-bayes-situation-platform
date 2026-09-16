@@ -184,7 +184,7 @@ onBeforeUnmount(() => {
           fill="rgba(255, 209, 102, 0.7)"
         />
       </svg>
-      <span class="deck-heatmap__label">占位甲板底图（美工替换）· 基准 1000×{{ baseHeight }}</span>
+      <span class="deck-heatmap__label">甲板底图 · 基准 1000×{{ baseHeight }}</span>
     </div>
 
     <!-- 红色故障点（需求 7.4.1：position absolute + 缩放换算） -->

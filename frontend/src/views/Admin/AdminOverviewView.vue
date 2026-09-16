@@ -398,7 +398,7 @@ onBeforeUnmount(() => {
   <!-- 权限兜底：仅系统管理员 -->
   <div v-if="!isSuperAdmin" class="admin-overview">
     <section class="admin-state admin-state--error">
-      <p>无权访问：本页面仅系统管理员（SUPER_ADMIN）可见</p>
+      <p>无权访问：本页面仅系统管理员可见</p>
     </section>
   </div>
 

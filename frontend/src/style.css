@@ -73,20 +73,11 @@ button {
   z-index: 10; /* 高于页面内容，让用户悬停弹层不被盖住；低于弹窗层 20/25 */
 }
 
-.topbar h1,
 .hero-panel h2,
 .section-heading h2,
 .section-heading h3,
 .detail-hero h2 {
   margin: 0;
-}
-
-.topbar h1 {
-  font-size: clamp(1.6rem, 2vw, 2.6rem);
-  /* 长标题（首页/AI模型训练等 11 字）不得换行，避免 topbar 高度随页面变化导致 bar 跳动 */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .eyebrow {
@@ -1141,8 +1132,7 @@ button {
     display: none;
   }
 
-  .metric-card h3,
-  .topbar h1 {
+  .metric-card h3 {
     font-size: 1.5rem;
   }
 

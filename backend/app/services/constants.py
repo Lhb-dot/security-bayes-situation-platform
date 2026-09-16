@@ -99,6 +99,36 @@ DATASET_LOGICAL_IDS = (
     "carrier_paired_trail",
 )
 
+# 数据集展示名（面向用户的中文名，与 logical_id 解耦）。
+# logical_id 是文件派生的稳定标识，供常量字典与去重逻辑做键值匹配，不得改写；
+# 所有「需要展示给用户」的位置一律经 dataset_display_name() 取中文名，
+# 未登记的数据集（管理员自行上传）回退为 logical_id 本身。
+DATASET_DISPLAY_NAMES = {
+    # 网络安全
+    "kdd_train_20_percent": "KDD 网络入侵训练集",
+    "nf_unsw_nb15_v2": "UNSW-NB15 网络流量集",
+    # 电力系统
+    "powergrid_knowledgebase": "电网风险知识库",
+    # 地质灾害
+    "dis_raw_data": "滑坡主数据集",
+    "dis_landslides": "滑坡样本集",
+    "dis_causative_factors": "滑坡致灾因子集",
+    "dis_global_catalog": "全球滑坡灾害目录",
+    "dis_guaruja_random": "瓜鲁雅滑坡随机样本集",
+    # 舰面调度
+    "carrier_feature2_biaoqian": "舰载机碰撞标注特征集",
+    "carrier_feature2_lisan": "舰载机碰撞离散特征集",
+    "carrier_paired_trail": "舰载机配对轨迹集",
+}
+
+
+def dataset_display_name(logical_id: str | None) -> str | None:
+    """logical_id → 面向用户的中文展示名；未登记则原样返回。"""
+    if logical_id is None:
+        return None
+    return DATASET_DISPLAY_NAMES.get(logical_id, logical_id)
+
+
 # ---------------------------------------------------------------------------
 # 算法（数据库设计文档v2 2.4；需求文档 6.6.1）
 # ---------------------------------------------------------------------------

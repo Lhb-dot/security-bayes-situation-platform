@@ -38,37 +38,75 @@ const changingPwd = ref(false);
 const aiSetting = ref<AISetting | null>(null);
 const savingAI = ref(false);
 const testingAI = ref(false);
-const aiForm = ref({
+const aiDialogVisible = ref(false);
+/** 编辑弹窗临时表单：取消不影响已保存配置；api_key 留空表示保留服务端已保存的 key。 */
+const aiEditForm = ref({
   provider: 'openai-compatible',
-  base_url: 'https://api.openai.com/v1',
-  model: 'gpt-4o-mini',
+  base_url: '',
+  model: '',
   api_key: '',
   enabled: true,
 });
 
+/** 只读展示行：未配置的字段统一显示「未填入」，key 只显示服务端下发的掩码。 */
+const aiReadonlyRows = computed(() => [
+  { label: '接口地址', value: aiSetting.value?.base_url?.trim() ?? '' },
+  { label: '模型名称', value: aiSetting.value?.model?.trim() ?? '' },
+  { label: 'API key', value: aiSetting.value?.api_key_masked?.trim() ?? '' },
+]);
+
 const loadAISetting = async () => {
   try {
     aiSetting.value = await getAISetting();
-    if (aiSetting.value.base_url) aiForm.value.base_url = aiSetting.value.base_url;
-    if (aiSetting.value.model) aiForm.value.model = aiSetting.value.model;
-    if (typeof aiSetting.value.enabled === 'boolean') aiForm.value.enabled = aiSetting.value.enabled;
   } catch {
     aiSetting.value = null;
   }
 };
 
+const openAIEdit = () => {
+  aiEditForm.value = {
+    provider: aiSetting.value?.provider ?? 'openai-compatible',
+    base_url: aiSetting.value?.base_url ?? '',
+    model: aiSetting.value?.model ?? '',
+    api_key: '',
+    enabled: aiSetting.value?.enabled ?? true,
+  };
+  aiDialogVisible.value = true;
+};
+
 const saveAI = async () => {
-  if (!aiForm.value.base_url.trim() || !aiForm.value.model.trim()) {
+  const { base_url, model, api_key } = aiEditForm.value;
+  if (!base_url.trim() || !model.trim()) {
     ElMessage.warning('请填写 AI 服务地址和模型名称');
+    return;
+  }
+  if (!api_key.trim() && !aiSetting.value?.configured) {
+    ElMessage.warning('首次配置需填写 API key');
     return;
   }
   savingAI.value = true;
   try {
-    const payload = { ...aiForm.value };
-    if (!payload.api_key.trim()) delete (payload as Partial<typeof payload>).api_key;
-    aiSetting.value = await updateAISetting(payload as typeof aiForm.value);
-    aiForm.value.api_key = '';
-    ElMessage.success('AI 设置已保存，API key 仅在服务端保存');
+    const payload: {
+      provider: string;
+      base_url: string;
+      model: string;
+      enabled: boolean;
+      api_key?: string;
+    } = {
+      provider: aiEditForm.value.provider,
+      base_url: base_url.trim(),
+      model: model.trim(),
+      enabled: aiEditForm.value.enabled,
+    };
+    // key 留空 = 不修改服务端已保存的 key
+    if (api_key.trim()) payload.api_key = api_key.trim();
+    aiSetting.value = await updateAISetting(payload);
+    aiDialogVisible.value = false;
+    ElMessage.success(
+      api_key.trim()
+        ? 'AI 设置已保存，API key 仅在服务端保存'
+        : 'AI 设置已保存，API key 保持不变',
+    );
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'AI 设置保存失败');
   } finally {
@@ -308,31 +346,26 @@ onMounted(async () => {
           <h3>模型解释服务</h3>
           <p class="settings-section__hint">使用 OpenAI 兼容的 Chat Completions 接口。API key 按当前账号绑定并仅在服务端保存，页面不会回显原文。</p>
         </div>
-        <span v-if="aiSetting?.configured" class="ai-configured">已配置：{{ aiSetting.api_key_masked }}</span>
+        <span
+          class="ai-badge"
+          :class="aiSetting?.configured ? 'ai-badge--on' : 'ai-badge--off'"
+        >{{ aiSetting?.configured ? '已配置' : '未配置' }}</span>
       </div>
-      <div class="settings-form settings-form--ai">
-        <div class="settings-form__item">
-          <label class="settings-form__label">接口地址</label>
-          <input v-model="aiForm.base_url" class="settings-form__input" placeholder="https://api.openai.com/v1" />
+
+      <div class="detail-info ai-readonly">
+        <div v-for="row in aiReadonlyRows" :key="row.label">
+          <span>{{ row.label }}</span>
+          <strong :class="{ 'detail-info__empty': !row.value }">{{ row.value || '未填入' }}</strong>
         </div>
-        <div class="settings-form__item">
-          <label class="settings-form__label">模型名称</label>
-          <input v-model="aiForm.model" class="settings-form__input" placeholder="gpt-4o-mini" />
-        </div>
-        <div class="settings-form__item">
-          <label class="settings-form__label">API key</label>
-          <input v-model="aiForm.api_key" type="password" class="settings-form__input" autocomplete="new-password" placeholder="留空则保留已保存的 key" />
-        </div>
-        <div class="settings-form__item settings-form__item--row">
-          <label class="settings-form__label">启用 AI 解释</label>
-          <button class="settings-switches__toggle" :class="{ 'is-on': aiForm.enabled }" type="button" @click="aiForm.enabled = !aiForm.enabled">
-            <span class="settings-switches__knob"></span>
-          </button>
+        <div>
+          <span>启用 AI 解释</span>
+          <strong>{{ aiSetting?.enabled ? '已开启' : '已关闭' }}</strong>
         </div>
       </div>
+
       <div class="settings-actions">
-        <button class="settings-btn" :disabled="savingAI || testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
-        <button class="settings-btn settings-btn--primary" :disabled="savingAI || testingAI" @click="saveAI">{{ savingAI ? '保存中...' : '保存 AI 设置' }}</button>
+        <button class="settings-btn" :disabled="testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
+        <button class="settings-btn settings-btn--primary" @click="openAIEdit">编辑</button>
       </div>
     </section>
 
@@ -426,6 +459,56 @@ onMounted(async () => {
       </el-table>
     </el-dialog>
 
+    <!-- ==================== 编辑 AI 设置弹窗 ==================== -->
+    <el-dialog
+      v-model="aiDialogVisible"
+      title="编辑 AI 设置"
+      class="ai-setting-dialog"
+      width="520px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="ai-dialog-form">
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">接口地址</label>
+          <input v-model="aiEditForm.base_url" class="ai-dialog-input" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">模型名称</label>
+          <input v-model="aiEditForm.model" class="ai-dialog-input" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">API key</label>
+          <input
+            v-model="aiEditForm.api_key"
+            type="password"
+            class="ai-dialog-input"
+            autocomplete="new-password"
+            placeholder="留空则保留已保存的 key"
+          />
+        </div>
+        <div class="ai-dialog-field ai-dialog-field--row">
+          <label class="ai-dialog-field__label">启用 AI 解释</label>
+          <button
+            class="settings-switches__toggle"
+            :class="{ 'is-on': aiEditForm.enabled }"
+            type="button"
+            @click="aiEditForm.enabled = !aiEditForm.enabled"
+          >
+            <span class="settings-switches__knob"></span>
+          </button>
+        </div>
+        <p class="ai-dialog-hint">API key 仅在服务端保存，页面不会回显原文；留空提交表示不修改已保存的 key。</p>
+      </div>
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="savingAI" @click="saveAI">
+          {{ savingAI ? '保存中...' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- ==================== 管理员：系统设置 ==================== -->
     <template v-if="isAdmin">
       <div class="settings-grid">
@@ -510,6 +593,7 @@ onMounted(async () => {
 .settings-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: start;
   gap: 18px;
   margin-bottom: 24px;
 }
@@ -589,14 +673,36 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 
-.settings-form--ai {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 16px;
+/* AI 配置状态徽标：与 .status-badge 同一套色板，深底亮字保证对比度 */
+.ai-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.ai-configured {
-  color: #53e5c8;
-  font-size: 0.82rem;
+.ai-badge--on {
+  background: rgba(14, 99, 76, 0.62);
+  color: #6ef0c4;
+  border: 1px solid rgba(83, 229, 200, 0.36);
+}
+
+.ai-badge--off {
+  background: rgba(112, 32, 30, 0.55);
+  color: #ff9a92;
+  border: 1px solid rgba(255, 123, 114, 0.34);
+}
+
+/* 只读展示行：未填入占位 + 长 URL 折行 */
+.detail-info .detail-info__empty {
+  color: rgba(220, 234, 255, 0.36);
+  font-weight: 400;
+}
+
+.ai-readonly strong {
+  min-width: 0;
+  word-break: break-all;
 }
 
 /* 阈值 */
@@ -906,9 +1012,6 @@ select.settings-form__input option {
   .settings-form--row3 {
     grid-template-columns: 1fr;
   }
-  .settings-form--ai {
-    grid-template-columns: 1fr;
-  }
 }
 </style>
 
@@ -963,5 +1066,137 @@ select.settings-form__input option {
 
 .threshold-log-dialog .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
+}
+
+/* 编辑 AI 设置弹窗：append-to-body 后挂到 body，scoped 样式不生效，故在此补齐。 */
+.ai-setting-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.ai-setting-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
+}
+
+.ai-setting-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(220, 234, 255, 0.5) !important;
+}
+
+.ai-setting-dialog .el-dialog__body {
+  padding: 20px 24px !important;
+}
+
+.ai-setting-dialog .el-dialog__footer {
+  padding: 12px 24px 18px !important;
+}
+
+/* style.css 里的 .el-button 暗色覆盖与 Element Plus 自身样式同权重、且 EP 在后，
+   实际不生效（实测取消按钮渲染成白底）。此处用 !important 兜住。 */
+.ai-setting-dialog .el-button {
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.3) !important;
+  color: #9ad6ff !important;
+}
+
+.ai-setting-dialog .el-button:hover {
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
+}
+
+.ai-setting-dialog .el-button--primary {
+  background: linear-gradient(135deg, #5ba6ff, #407acc) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+}
+
+.ai-setting-dialog .el-button--primary:hover {
+  background: linear-gradient(135deg, #5ba6ff, #407acc) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  opacity: 0.9;
+}
+
+.ai-dialog-form {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-dialog-field--row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-dialog-field__label {
+  font-size: 0.88rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.ai-dialog-input {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.ai-dialog-input:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.ai-dialog-input::placeholder {
+  color: rgba(220, 234, 255, 0.32);
+}
+
+.ai-dialog-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(220, 234, 255, 0.5);
+  line-height: 1.6;
+}
+
+/* 开关：scoped 版本覆盖不到 body 下的弹窗内容，此处补齐同一套样式。 */
+.ai-setting-dialog .settings-switches__toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(220, 234, 255, 0.15);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.25s;
+  padding: 0;
+}
+
+.ai-setting-dialog .settings-switches__toggle.is-on {
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+}
+
+.ai-setting-dialog .settings-switches__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.25s;
+}
+
+.ai-setting-dialog .settings-switches__toggle.is-on .settings-switches__knob {
+  transform: translateX(20px);
 }
 </style>

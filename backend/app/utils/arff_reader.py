@@ -10,7 +10,9 @@
 - 数据行支持带引号字段（值内可能含逗号，如 `'Circuit Breaker'`）
 - 样例值取每个字段前 2 个不同的真实值（`?` 缺失值跳过）
 """
+import csv
 import re
+from collections import Counter
 
 _ATTR_RE = re.compile(r"@ATTRIBUTE\s+(.+)$", re.IGNORECASE)
 
@@ -81,6 +83,37 @@ def _split_data_row(line: str):
     return values
 
 
+def _parse_attribute(body: str):
+    """解析一条 @ATTRIBUTE 的「名字 + 类型」部分。
+
+    返回字段描述 dict（与 read_arff 的 fields 元素同构）；无法解析时返回 None。
+    由 read_arff 与 read_arff_header 共用，保证两条路径解析出的字段完全一致。
+    """
+    if body.startswith("'") or body.startswith('"'):
+        q = body[0]
+        name, _, typ = body[1:].partition(q)
+        typ = typ.strip()
+    else:
+        parts = body.split(None, 1)
+        if len(parts) != 2:
+            return None
+        name, typ = parts[0], parts[1].strip()
+    name = name.lstrip("\ufeff").strip()
+    if typ.lower().startswith("{"):
+        enum_values = _split_enum_values(typ.strip("{}"))
+        field_type = "enum"
+    else:
+        enum_values = []
+        base = typ.lower().split()[0] if typ.split() else "numeric"
+        field_type = "numeric" if base in ("numeric", "real", "integer", "date") else "string"
+    return {
+        "name": name,
+        "type": field_type,
+        "enum_values": enum_values,
+        "sample_values": [],
+    }
+
+
 def read_arff(path: str, max_rows: int | None = None):
     """解析 ARFF，返回 (fields, rows)。
 
@@ -101,32 +134,9 @@ def read_arff(path: str, max_rows: int | None = None):
                 m = _ATTR_RE.match(line)
                 if not m:
                     continue
-                body = m.group(1).strip()
-                if body.startswith("'") or body.startswith('"'):
-                    q = body[0]
-                    name, _, typ = body[1:].partition(q)
-                    typ = typ.strip()
-                else:
-                    parts = body.split(None, 1)
-                    if len(parts) != 2:
-                        continue
-                    name, typ = parts[0], parts[1].strip()
-                name = name.lstrip("﻿").strip()
-                if typ.lower().startswith("{"):
-                    enum_values = _split_enum_values(typ.strip("{}"))
-                    field_type = "enum"
-                else:
-                    enum_values = []
-                    base = typ.lower().split()[0] if typ.split() else "numeric"
-                    field_type = "numeric" if base in ("numeric", "real", "integer", "date") else "string"
-                fields.append(
-                    {
-                        "name": name,
-                        "type": field_type,
-                        "enum_values": enum_values,
-                        "sample_values": [],
-                    }
-                )
+                field = _parse_attribute(m.group(1).strip())
+                if field is not None:
+                    fields.append(field)
                 continue
             if upper.startswith("@DATA"):
                 in_data = True
@@ -148,6 +158,76 @@ def read_arff(path: str, max_rows: int | None = None):
                 break
 
     return fields, rows
+
+
+def read_arff_header(path: str) -> list[dict]:
+    """只解析 @ATTRIBUTE 段即返回，不读取 @DATA。
+
+    与 read_arff 共用 _parse_attribute，因此 fields 结构（含 name / type /
+    enum_values）完全一致，仅 sample_values 恒为空。用于「只需要知道表头」
+    的场景（例如定位标签列下标），避免为拿表头而解析整份数据文件。
+    """
+    fields: list[dict] = []
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n").rstrip("\r").strip()
+            if not line or line.startswith("%"):
+                continue
+            upper = line.upper()
+            if upper.startswith("@DATA"):
+                break
+            if not upper.startswith("@ATTRIBUTE"):
+                continue
+            m = _ATTR_RE.match(line)
+            if not m:
+                continue
+            field = _parse_attribute(m.group(1).strip())
+            if field is not None:
+                fields.append(field)
+    return fields
+
+
+def tally_arff_column(path: str, column_index: int, expected_columns: int):
+    """流式统计 @DATA 段某一列的取值分布，不物化其它列。
+
+    首页 / 场景中心的标签统计只需要「总行数 + 标签列取值」，而 read_arff 会把
+    所有列的所有值都建成 Python 字符串（实测占页面耗时约 90%）。本函数只切分
+    每一行、取出目标列，其余列直接丢弃。
+
+    返回 ``(行数, Counter[原始取值, 出现次数])``。
+
+    **安全兜底**：一旦发现某行的字段数与 ``expected_columns`` 不一致（引号内含
+    逗号等 read_arff 状态机能处理、csv 无法处理的复杂情形），立即返回 ``None``，
+    由调用方回退到 read_arff 全量解析，保证结果与旧实现完全一致。
+    """
+    counter: Counter[str] = Counter()
+    rows = 0
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+            in_data = False
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("%"):
+                    continue
+                if stripped.upper().startswith("@DATA"):
+                    in_data = True
+                    break
+            if not in_data:
+                return 0, counter
+            for parts in csv.reader(f):
+                if not parts:
+                    continue
+                head = parts[0].lstrip()
+                if head.startswith("%") or head.startswith("@"):
+                    continue
+                if len(parts) != expected_columns:
+                    return None
+                rows += 1
+                if 0 <= column_index < len(parts):
+                    counter[parts[column_index].strip()] += 1
+    except OSError:
+        return None
+    return rows, counter
 
 
 def count_arff_rows(path: str) -> int:

@@ -37,6 +37,7 @@ from app.services.constants import (
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_PLATFORM,
     DATASET_POSITIVE_LABELS,
+    dataset_display_name,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
@@ -111,6 +112,9 @@ class ModelVersionService(ServiceBase):
                 "scenario_code": model.scenario.code if model.scenario else None,
                 "scenario_name": model.scenario.name if model.scenario else None,
                 "dataset_logical_id": model.dataset.logical_id if model.dataset else None,
+                "dataset_name": dataset_display_name(
+                    model.dataset.logical_id if model.dataset else None
+                ),
                 "dataset_version": model.dataset.version if model.dataset else None,
                 "algorithm_code": model.algorithm.code if model.algorithm else None,
                 "algorithm_name": model.algorithm.display_name if model.algorithm else None,

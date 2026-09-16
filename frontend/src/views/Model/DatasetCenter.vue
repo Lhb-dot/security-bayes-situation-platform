@@ -151,6 +151,10 @@ const submitUpload = async () => {
       ElMessage.warning('请填写数据集编码');
       return;
     }
+    if (!uploadForm.value.name.trim()) {
+      ElMessage.warning('请填写数据集名称');
+      return;
+    }
     if (!selectedFile.value) {
       ElMessage.warning('请选择要上传的 ARFF / CSV 文件');
       return;
@@ -163,10 +167,11 @@ const submitUpload = async () => {
       await uploadDatasetFile({
         file: selectedFile.value,
         logical_id: uploadForm.value.dataset_id.trim(),
+        name: uploadForm.value.name.trim(),
         scenario_id: uploadForm.value.scenario_id,
         label_field: uploadForm.value.label_field.trim(),
       });
-      ElMessage.success('数据集上传成功（已自动识别格式并解析字段）');
+      ElMessage.success('数据集上传成功');
       uploadDialogVisible.value = false;
       await loadDatasets();
     } catch (err) {
@@ -533,7 +538,7 @@ onMounted(async () => {
         <!-- 上传模式：文件选择 + 标签字段（后端自动识别 ARFF/CSV 并解析字段） -->
         <template v-if="uploadDialogMode === 'upload'">
           <div class="upload-form__row">
-            <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv，自动识别格式并解析字段）</label>
+            <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv）</label>
             <input type="file" accept=".arff,.csv" class="upload-form__input" @change="onFileChange" />
             <p v-if="selectedFile" class="version-tip">已选择：{{ selectedFile.name }}（{{ (selectedFile.size / 1024).toFixed(1) }} KB）</p>
           </div>
@@ -605,7 +610,7 @@ onMounted(async () => {
       :close-on-click-modal="false"
     >
       <div class="version-dialog-toolbar">
-        <span class="version-dialog-toolbar__tip">修改已用数据集时将创建新版本并保留旧版本（需求 2.3.3）</span>
+        <span class="version-dialog-toolbar__tip">修改已用数据集时将创建新版本并保留旧版本</span>
         <el-button
           v-if="versionTarget"
           class="version-create-button"

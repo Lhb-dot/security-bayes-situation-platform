@@ -33,6 +33,7 @@ from app.services.constants import (
     ROLE_SUPER_ADMIN,
     MODEL_STATUS_PUBLISHED,
     DATASET_POSITIVE_LABELS,
+    dataset_display_name,
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
@@ -67,6 +68,7 @@ class InferenceRecordService(ServiceBase):
             if dataset is not None:
                 data["dataset_id"] = dataset.id
                 data["dataset_logical_id"] = dataset.logical_id
+                data["dataset_name"] = dataset_display_name(dataset.logical_id)
                 data["dataset_version"] = dataset.version
                 data["risk_type"] = DATASET_RISK_TYPES.get(dataset.logical_id)
         data["original_label"] = record.prediction_label

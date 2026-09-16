@@ -19,6 +19,9 @@ class Dataset(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     logical_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 展示名（面向用户的中文名）。NULL 时由 constants.dataset_display_name(logical_id) 兜底，
+    # 故平台预置数据集无需回填；用户上传时可自填。
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     scenario_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("scenario.id"), nullable=False

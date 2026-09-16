@@ -123,26 +123,9 @@ const goAlertsList = () => {
   router.push({ path: '/alerts' });
 };
 
-// ===================== 页面标题计算属性 =====================
-const pageTitle = computed(() => {
-  if (route.path === '/login') return '用户登录';
-  if (route.path === '/home') return '首页';
-  if (route.path === '/risk') return 'AI模型训练与风险研判配置';
-  if (route.path === '/alerts') return '告警详情总览';
-  if (route.path.startsWith('/alerts/')) return '告警处置分析';
-  if (route.path === '/overview') return '平台运行总览';
-  if (route.path === '/scenarios') return '场景中心';
-  if (route.path.startsWith('/scenarios/')) return isSuperAdmin.value ? '场景大屏' : '首页';
-  if (route.path === '/datasets') return '数据集中心';
-  if (route.path.startsWith('/datasets/')) return '数据集详情';
-  if (route.path === '/models') return '模型中心';
-  if (route.path === '/inference') return '风险研判';
-  if (route.path === '/inference-records') return '推理记录';
-  if (route.path === '/reports') return '报告中心';
-  if (route.path === '/settings') return isSuperAdmin.value ? '系统设置' : '设置';
-  if (route.path.startsWith('/events/')) return '风险事件详情';
-  return '态势感知与威胁可视化平台';
-});
+// 说明：顶部 bar 只保留品牌名「AI Security Operations Center」+ 当前场景，
+// 不再渲染页面大标题——bar 下方的各页面自带标题/说明，避免重复。
+// 浏览器标签页标题全站统一为品牌名，由 index.html 的 <title> 静态提供，不随路由变化。
 
 onMounted(async () => {
   // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
@@ -150,13 +133,12 @@ onMounted(async () => {
     if (isSuperAdmin.value) router.push('/overview');
     else if (userStore.currentUser?.scenario_code) {
       router.push(`/scenarios/${userStore.currentUser.scenario_code}/dashboard`);
-    } else router.push('/home');
+    } else router.push('/scenarios');
   }
 });
 
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');
-const isHomePage = computed(() => route.path === '/home');
 const isAlertsListPage = computed(() => route.path === '/alerts');
 const isRiskPage = computed(() => route.path === '/risk');
 const isOverviewPage = computed(() => route.path === '/overview');
@@ -171,7 +153,7 @@ const isUsersPage = computed(() => route.path === '/users');
 const isSettingsPage = computed(() => route.path === '/settings');
 const isNewRoutePage = computed(() => {
   const path = route.path;
-  return path === '/home' || path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
+  return path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
     || path === '/models' || path === '/inference' || path === '/inference-records' || path === '/situation'
     || path === '/reports' || path === '/users' || path === '/settings' || path === '/alerts' || path.startsWith('/events/');
 });
@@ -191,7 +173,7 @@ const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER']
 const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
 
 const navItems: NavItem[] = [
-  // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard），不再单独显示 /home 入口
+  // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
   { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview },
   { path: '/scenarios', label: '场景中心', roles: ALL_ROLES, action: goScenarioCenter },
   { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter },
@@ -214,7 +196,6 @@ const visibleNavItems = computed(() => {
 /** 导航激活态：沿用原 isXxxPage 判断，保持既有高亮逻辑（含告警详情前缀高亮） */
 const isNavActive = (item: NavItem): boolean => {
   switch (item.path) {
-    case '/home': return isHomePage.value;
     case '/overview': return isOverviewPage.value;
     case '/scenarios':
       // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
@@ -250,11 +231,8 @@ const handleNavClick = (item: NavItem): void => {
     <div class="app-shell__backdrop"></div>
     <header class="topbar">
       <div class="topbar__heading">
-        <div class="topbar__heading-left">
-          <p class="eyebrow">AI Security Operations Center</p>
-          <h1>{{ pageTitle }}</h1>
-        </div>
-        <!-- 当前场景（管理员/用户）：与标题同字号，放标题行最右 -->
+        <p class="eyebrow">AI Security Operations Center</p>
+        <!-- 当前场景（管理员/用户）：放标题行最右 -->
         <span v-if="myScenarioName" class="topbar__heading-scenario">{{ myScenarioName }}</span>
       </div>
       <div class="topbar__actions">
@@ -301,22 +279,23 @@ const handleNavClick = (item: NavItem): void => {
   box-sizing: border-box;
 }
 
-/* 标题区占满首整行（英文 eyebrow + 当前页面标题各一行），导航换到第二行，标题永不被遮挡。
-   左侧标题 + 右侧当前场景（管理员/用户）同字号大字，flex 两端对齐 */
+/* 品牌行占满首整行（左侧英文 eyebrow + 右侧当前场景），导航换到第二行。
+   页面大标题已移除：bar 下方各页面自带标题/说明，避免重复。 */
 .topbar__heading {
   flex: 1 1 100%;
   min-width: 0;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
 
-.topbar__heading-left {
-  min-width: 0;
+/* 标题行不再有大标题，eyebrow 底部外边距归零，避免行间空隙过大 */
+.topbar__heading .eyebrow {
+  margin-bottom: 0;
 }
 
-/* 当前场景大字（与页面标题同字号 clamp，标题行最右） */
+/* 当前场景大字（标题行最右） */
 .topbar__heading-scenario {
   flex-shrink: 0;
   color: #9ad6ff;

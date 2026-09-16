@@ -176,9 +176,9 @@ const regionRanking = computed<RankingItem[]>(() =>
       </section>
     </div>
 
-    <!-- 区域易发性评分（需求 8.3 轻量算法：地形因子标准化叠加 → 0-100） -->
+    <!-- 区域易发性评分 -->
     <section class="scenario-card scenario-card--wide">
-      <h3 class="scenario-card__title">区域易发性评分 TOP（轻量算法）</h3>
+      <h3 class="scenario-card__title">区域易发性评分 TOP</h3>
       <div v-if="regionRanking.length" class="scenario-algo">
         <div class="scenario-algo__chart">
           <BarChart :data="regionRanking" horizontal height="240px" />
@@ -186,7 +186,7 @@ const regionRanking = computed<RankingItem[]>(() =>
         <div class="scenario-algo__side">
           <p class="scenario-algo__note">
             易发性指数 0-100 由坡度、TWI、SPI、高程与距断层 / 河流 / 道路距离
-            标准化叠加计算（需求 8.3）。评分越高表示该区域越需要优先核查与布防。
+            标准化叠加计算。评分越高表示该区域越需要优先核查与布防。
           </p>
           <div class="scenario-algo__tags">
             <span
@@ -202,7 +202,7 @@ const regionRanking = computed<RankingItem[]>(() =>
       <p v-else class="scenario-empty">暂无数据</p>
     </section>
 
-    <!-- 风险事件时间线（需求 7.3：标注风险等级与触发因素） -->
+    <!-- 风险事件时间线 -->
     <section class="scenario-card">
       <h3 class="scenario-card__title">风险事件时间线</h3>
       <div class="scenario-timeline-toolbar">

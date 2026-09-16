@@ -662,7 +662,7 @@ class ReportService(ServiceBase):
             parts.append("样本量不足，风险变化方向无法判断。")
         parts.append(
             "本报告结论基于系统真实推理与风险事件数据，预测概率为模型输出，不构成确定性事因判断；"
-            "加权贡献值口径见“特征加权条件概率”的 calculation_method。"
+            "加权贡献值的计算方式见“特征加权条件概率”说明。"
         )
         return "".join(parts)
 

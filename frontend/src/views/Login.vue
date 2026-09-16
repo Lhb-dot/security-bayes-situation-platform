@@ -43,7 +43,7 @@ const handleLogin = async () => {
     } else if (user.scenario_code) {
       router.push(`/scenarios/${user.scenario_code}/dashboard`);
     } else {
-      router.push('/home');
+      router.push('/scenarios');
     }
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '登录失败';
@@ -59,7 +59,7 @@ const handleLogin = async () => {
     <div class="login-backdrop"></div>
     <div class="login-card">
       <div class="login-card__head">
-        <p class="eyebrow">Bayes Situation Awareness Platform</p>
+        <p class="eyebrow">AI Security Operations Center</p>
         <h1>多场景贝叶斯分类态势感知系统</h1>
         <p class="login-card__sub">网络 · 电力 · 地质 · 航母甲板保障作业</p>
       </div>

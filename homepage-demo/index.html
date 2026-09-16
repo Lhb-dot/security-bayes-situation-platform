@@ -56,21 +56,21 @@ border:1px solid rgba(83,229,200,.25);background:rgba(83,229,200,.06);margin-bot
 
   <div class="doc">
     <a href="字段来源说明.md">字段来源说明.md</a>
-    <span>← 每个字段的来源 / 口径 / 类型 / 实测值，以及三轮口径修正记录</span>
+    <span>← 每个字段的来源与统计方式说明</span>
   </div>
 
   <div class="group">
-    <div class="ghead"><h2>管理端首页 · 5 个</h2><span>数据画像视角（数据集全量实测）</span><code>admin/</code></div>
+    <div class="ghead"><h2>管理端首页 · 5 个</h2><span>数据画像视角</span><code>admin/</code></div>
     <div class="cards">
       <a class="card" href="admin/network.html">
         <div class="tr"><span class="dot" style="background:#5ba6ff"></span><span class="mini">数据画像</span></div>
         <h3>网络安全</h3>
-        <p>连接量 / 异常占比、协议、端口 TOP、包长五段、<b>重传占比</b>（替代失真均值）。</p>
+        <p>连接量 / 异常占比、协议、端口 TOP、包长五段、<b>重传占比</b>。</p>
       </a>
       <a class="card" href="admin/power.html">
         <div class="tr"><span class="dot" style="background:#ffd166"></span><span class="mini">数据画像</span></div>
         <h3>电力系统</h3>
-        <p>故障占比、四电参量均值/范围、IssueType、设备分布 + <b>区分度检验</b>。</p>
+        <p>故障占比、四电参量均值/范围、问题类型与设备分布。</p>
       </a>
       <a class="card" href="admin/flightdeck.html">
         <div class="tr"><span class="dot" style="background:#5ba6ff"></span><span class="mini">数据画像</span></div>
@@ -85,13 +85,13 @@ border:1px solid rgba(83,229,200,.25);background:rgba(83,229,200,.06);margin-bot
       <a class="card" href="admin/overview.html">
         <div class="tr"><span class="dot" style="background:#53e5c8"></span><span class="mini">平台总览</span></div>
         <h3>平台运行总览</h3>
-        <p>场景 / 数据集 / 算法、<b>去重样本量</b>、运行态指标（含真实库值）。</p>
+        <p>场景 / 数据集 / 算法、有效样本量、运行态指标。</p>
       </a>
     </div>
   </div>
 
   <div class="group">
-    <div class="ghead"><h2>用户端首页 · 4 个</h2><span>用户工作台视角（各具特色 · 修正口径）</span><code>user/</code></div>
+    <div class="ghead"><h2>用户端首页 · 4 个</h2><span>用户工作台视角</span><code>user/</code></div>
     <div class="cards">
       <a class="card" href="user/network.html">
         <div class="tr"><span class="dot" style="background:#ff7b72"></span><span class="mini">端口攻防台</span></div>
@@ -101,7 +101,7 @@ border:1px solid rgba(83,229,200,.25);background:rgba(83,229,200,.06);margin-bot
       <a class="card" href="user/power.html">
         <div class="tr"><span class="dot" style="background:#ffd166"></span><span class="mini">设备体检</span></div>
         <h3>电力系统</h3>
-        <p>电参量刻度条 + <b>设备×问题类型构成</b>（替代无区分度健康度）+ 设备排行。</p>
+        <p>电参量刻度条 + <b>设备×问题类型构成</b> + 设备排行。</p>
       </a>
       <a class="card" href="user/flightdeck.html">
         <div class="tr"><span class="dot" style="background:#5ba6ff"></span><span class="mini">甲板时空台</span></div>
@@ -111,14 +111,14 @@ border:1px solid rgba(83,229,200,.25);background:rgba(83,229,200,.06);margin-bot
       <a class="card" href="user/geological.html">
         <div class="tr"><span class="dot" style="background:#a78bfa"></span><span class="mini">因子分析台</span></div>
         <h3>地质风险</h3>
-        <p>因子贡献 + 触发因素 + <b>坡度档位风险分排行</b>（替代不存在的“分区”）。</p>
+        <p>因子贡献 + 触发因素 + <b>坡度档位风险分排行</b>。</p>
       </a>
     </div>
   </div>
 
   <p class="foot">
     目录结构：<code>index.html</code> · <code>admin/</code>（5 页）· <code>user/</code>（4 页）· <code>字段来源说明.md</code><br>
-    管理端数值 = <code>data/</code> 数据集全量实测；用户端 = 模拟生产数据（事件 <code>raw_features</code> 驱动）。
+    管理端数值取自数据集全量统计；用户端为模拟生产数据。
   </p>
 </div>
 </body>

@@ -133,6 +133,10 @@ export interface Scenario {
   high_risk_count: number;
   dataset_count: number;
   model_count: number;
+  /** 去重口径有效样本量（GET /scenarios/overview 提供） */
+  sample_count?: number;
+  /** 已发布（status=PUBLISHED）模型版本数（GET /scenarios/overview 提供） */
+  published_model_count?: number;
   status: 'active' | 'inactive';
 }
 

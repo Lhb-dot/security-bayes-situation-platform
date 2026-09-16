@@ -64,7 +64,7 @@ onMounted(async () => {
           <p class="eyebrow">Transformer Threat Insight Engine</p>
           <h2>面向攻防研判的态势感知中枢</h2>
           <p class="hero-panel__desc">
-            聚合网络日志、行为链路与 AI 推理结果，形成清晰、动态、可接后端扩展的威胁监测视图。
+            聚合网络日志、行为链路与 AI 推理结果，形成清晰、动态的威胁监测视图。
           </p>
           <div class="hero-panel__actions">
             <button class="hero-button" @click="$emit('openWarRoom')">进入作战大屏</button>

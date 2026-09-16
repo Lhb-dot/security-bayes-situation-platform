@@ -2,8 +2,9 @@
 /**
  * ScenarioCenter - 场景中心页面
  *
- * 展示三大场景卡片：网络安全 / 电力系统 / 航母甲板
- * 点击卡片跳转至对应场景大屏
+ * 展示全部业务场景卡片：网络安全 / 电力系统 / 舰面调度 / 地质风险
+ * 卡片指标为后端真实聚合值（去重口径数据集数、有效样本量、已发布模型数），
+ * 数据源 GET /api/v1/scenarios/overview。点击卡片跳转至对应场景大屏。
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -14,19 +15,19 @@ import ScenarioCard from '@/components/common/ScenarioCard.vue';
 const router = useRouter();
 const scenarioStore = useScenarioStore();
 
-/** 场景列表数据（由 scenarioStore 经 mockApi 过滤后注入，页面不直连 mockApi） */
+/** 场景列表数据（由 scenarioStore 的真实聚合接口注入，页面不直连 API） */
 const scenarios = computed<Scenario[]>(() => scenarioStore.scenarios);
 /** 加载状态 */
 const loading = ref(true);
 /** 错误信息 */
 const error = ref('');
 
-/** 获取场景列表 */
+/** 获取场景列表（真实数据集 / 已发布模型 / 有效样本量） */
 const loadScenarios = async () => {
   loading.value = true;
   error.value = '';
   try {
-    await scenarioStore.fetchScenarioList();
+    await scenarioStore.fetchScenarioOverview();
   } catch (err) {
     error.value = err instanceof Error ? err.message : '场景数据加载失败';
   } finally {

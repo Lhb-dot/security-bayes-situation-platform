@@ -19,6 +19,7 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
+    dataset_display_name,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
@@ -88,6 +89,7 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
         },
         "dataset": {
             "logical_id": getattr(dataset, "logical_id", None),
+            "name": dataset_display_name(getattr(dataset, "logical_id", None)),
             "version": getattr(dataset, "version", None),
             "label_field": getattr(dataset, "label_field", None),
             "field_count": len(feature_profile),
@@ -157,7 +159,10 @@ def fallback_model_evaluation(facts: dict[str, Any], role: str) -> str:
     lines = [title, f"模型版本 `{model.get('model_version_id')}` 使用算法 **{algorithm.get('name') or algorithm.get('code') or '未命名算法'}**。"]
     lines.extend(["", "### 模型结论"])
     if quality.get("f1") is not None:
-        lines.append(f"当前模型 F1 为 `{quality['f1']}`，基于数据集 `{dataset.get('logical_id')}` 的训练结果进行评价。")
+        lines.append(
+            f"当前模型 F1 为 `{quality['f1']}`，基于数据集 "
+            f"`{dataset.get('name') or dataset.get('logical_id')}` 的训练结果进行评价。"
+        )
     else:
         lines.append("当前模型缺少完整质量指标，使用时需要结合实际效果持续复核。")
     lines.extend(["", "### 场景重点字段"])

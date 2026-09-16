@@ -520,6 +520,45 @@ from app.api.v1 import api_router
 
 app.include_router(api_router)
 
+
+# ============ 数据集缓存预热（后台线程，不阻塞启动） ============
+def _warm_dataset_caches_async() -> None:
+    """启动后于后台线程预热数据集解析缓存。
+
+    首页 / 场景中心 / 数据画像的统计都依赖 ARFF 解析（原先每个请求都要重新
+    解析，实测占页面耗时 90%）。预热让首个请求即可命中进程级缓存，
+    避免"服务刚起来第一次打开特别慢"。
+
+    可通过环境变量 WARM_DATASET_CACHES=0 关闭；测试进程下自动跳过。
+    """
+    if os.getenv("WARM_DATASET_CACHES", "1") != "1" or "pytest" in sys.modules:
+        return
+
+    def run() -> None:
+        from app.db import SessionLocal
+        from app.services.dashboard_service import warm_dataset_caches
+
+        db = SessionLocal()
+        try:
+            stats = warm_dataset_caches(db)
+            logger.info(
+                "数据集缓存预热完成: %s/%s 份, 跳过 %s 份, 耗时 %sms, 行缓存 %.1f MB",
+                stats["warmed"],
+                stats["total"],
+                stats["skipped"],
+                stats["elapsed_ms"],
+                stats["row_cache_bytes"] / 1024 / 1024,
+            )
+        except Exception as exc:  # noqa: BLE001 - 预热失败不影响服务启动
+            logger.warning("数据集缓存预热失败（不影响服务）: %s", exc)
+        finally:
+            db.close()
+
+    threading.Thread(target=run, name="dataset-cache-warmup", daemon=True).start()
+
+
+_warm_dataset_caches_async()
+
 train_record = {
     "is_trained": False,
     "dataset": ""
@@ -618,6 +657,16 @@ PROJECT_ROOT = BASE_DIR.parent                      # security-bayes-platform/
 OUTPUT_DIR = BASE_DIR / "storage" / "output"        # backend/storage/output/
 INPUT_DIR = PROJECT_ROOT / "data"                   # data/ at project root
 WEB_DIR = PROJECT_ROOT / "frontend"                 # frontend/ at project root
+#: 前端构建产物目录。静态站点优先用它（`npm run build` 之后单端口即可访问完整站点）。
+DIST_DIR = WEB_DIR / "dist"
+#: 实际挂载的站点根目录。
+#:
+#: 原先直接挂 frontend/ 源码目录，而该目录下的 index.html 是 Vite 的 **dev 版**入口，
+#: 引用的是 `/src/main.ts` —— 浏览器无法执行 .ts（Windows 上 mimetypes 还会把它
+#: 识别成 `video/vnd.dlna.mpeg-tts`，直接触发 MIME 校验失败）。结果是 12312 的
+#: 静态站点从未真正可用过，只能靠 5173 的 Vite dev server 访问。
+#: 现在改为优先挂 dist/，dist 不存在时回退到原行为，不影响任何已有流程。
+SITE_DIR = DIST_DIR if (DIST_DIR / "index.html").exists() else WEB_DIR
 TASKS_FILE = OUTPUT_DIR / "tasks.json"
 EQUIPMENT_EVENTS_FILE = OUTPUT_DIR / "equipment_events.json"
 TASK_EVENTS_DIR = OUTPUT_DIR / "task_events"
@@ -1945,7 +1994,7 @@ def get_bayes_risk_stat(current_user=Depends(get_current_user)):  # noqa: ARG001
     }
 
 
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+app.mount("/", StaticFiles(directory=str(SITE_DIR), html=True), name="web")
 
 if __name__ == '__main__':
     import uvicorn

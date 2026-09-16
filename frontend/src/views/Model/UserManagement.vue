@@ -296,7 +296,7 @@ onMounted(async () => {
         <table class="users-table">
           <thead>
             <tr>
-              <th>ID</th>
+              <th>用户ID</th>
               <th>用户名</th>
               <th>角色</th>
               <th>状态</th>
@@ -689,13 +689,15 @@ onMounted(async () => {
 }
 
 .status-badge--on {
-  background: rgba(83, 229, 200, 0.14);
-  color: #53e5c8;
+  background: rgba(14, 99, 76, 0.62);
+  color: #6ef0c4;
+  border: 1px solid rgba(83, 229, 200, 0.36);
 }
 
 .status-badge--off {
-  background: rgba(255, 123, 114, 0.14);
-  color: #ff7b72;
+  background: rgba(112, 32, 30, 0.55);
+  color: #ff9a92;
+  border: 1px solid rgba(255, 123, 114, 0.34);
 }
 
 .pwd-form {

@@ -109,6 +109,7 @@ def create_dataset(
         DatasetService(db).create(
             current_user=current_user,
             logical_id=payload.logical_id,
+            name=payload.name,
             scenario_id=payload.scenario_id,
             file_path=payload.file_path,
             fields_schema=payload.fields_schema,
@@ -128,6 +129,7 @@ async def upload_dataset(
     logical_id: str = Form(..., description="数据集逻辑 ID"),
     scenario_id: int = Form(..., description="所属场景 ID"),
     label_field: str = Form(..., description="标签字段名"),
+    name: Optional[str] = Form(None, description="数据集展示名（面向用户的中文名，可缺省）"),
     visibility: Optional[str] = Form(None, description="可见性 platform/company/personal"),
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
@@ -137,6 +139,7 @@ async def upload_dataset(
         DatasetService(db).upload_from_file(
             current_user=current_user,
             logical_id=logical_id,
+            name=name,
             scenario_id=scenario_id,
             label_field=label_field,
             filename=file.filename or "",

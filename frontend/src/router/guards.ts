@@ -15,8 +15,6 @@ declare module 'vue-router' {
     title: string;
     /** 仅管理员可访问（USER 访问时重定向） */
     requiresAdmin?: boolean;
-    /** 仅普通用户可访问（ADMIN 访问时重定向；如 /home） */
-    userOnly?: boolean;
     /** 普通用户隐藏导航入口（仅入口隐藏，不影响路由注册） */
     hiddenForUser?: boolean;
   }
@@ -31,7 +29,7 @@ const roleLanding = (user: UserAccount): string => {
   if (user.role === 'SUPER_ADMIN') return '/overview';
   const bound = user.scenario_code;
   if (bound) return `/scenarios/${bound}/dashboard`;
-  return '/home';
+  return '/scenarios';
 };
 
 /** 注册角色化路由守卫（由 router/index.ts 调用） */
@@ -50,10 +48,6 @@ export const setupRouterGuards = (router: Router): void => {
     }
     // 最外层管理员专属页面（/overview、/risk）：非 SUPER_ADMIN → 落地页
     if (to.meta.requiresAdmin && user.role !== 'SUPER_ADMIN') {
-      return roleLanding(user);
-    }
-    // 场景用户专属页面（如 /home）：管理级访问 → 落地页
-    if (to.meta.userOnly && (user.role === 'SUPER_ADMIN' || user.role === 'SCENARIO_ADMIN')) {
       return roleLanding(user);
     }
     // 根路径按角色落地（路由配置中也有函数式 redirect，此处双保险）

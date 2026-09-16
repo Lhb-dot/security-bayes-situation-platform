@@ -121,7 +121,7 @@ const clearComponentFilter = () => {
         <BarChart v-if="deviceRanking.length" :data="deviceRanking" horizontal height="240px" @bar-click="setComponentFilter" />
         <p v-else class="scenario-empty">暂无数据</p>
         <p class="scenario-algo__note scenario-algo__note--mt">
-          健康分由设备越限率（事件占比）与平均风险评分加权计算（需求 8.2）；点击柱条筛选该设备事件。
+          健康分由设备越限率（事件占比）与平均风险评分加权计算；点击柱条筛选该设备事件。
         </p>
         <p v-if="componentFilter" class="scenario-filter-tip">
           已筛选设备：{{ componentFilter }}
@@ -135,9 +135,9 @@ const clearComponentFilter = () => {
       </section>
     </div>
 
-    <!-- 风险评分模型（需求 8.2 轻量算法：Sensor_Packet_Loss_% + 电参量偏差加权） -->
+    <!-- 风险评分模型 -->
     <section v-if="latestPowerRisk" class="scenario-card scenario-card--wide">
-      <h3 class="scenario-card__title">风险评分模型（轻量算法）</h3>
+      <h3 class="scenario-card__title">风险评分模型</h3>
       <div class="scenario-algo">
         <div class="scenario-algo__side">
           <p class="scenario-algo__note">
@@ -175,7 +175,7 @@ const clearComponentFilter = () => {
       </div>
     </section>
 
-    <!-- 风险事件时间线（需求 7.2：标注 IssueType 与受影响设备） -->
+    <!-- 风险事件时间线 -->
     <section class="scenario-card">
       <h3 class="scenario-card__title">风险事件时间线</h3>
       <EventTimeline v-if="filteredEvents.length" :events="filteredEvents" :meta-keys="['IssueType', 'Component']" />

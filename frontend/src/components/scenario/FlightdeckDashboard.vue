@@ -150,11 +150,11 @@ const goEventDetail = (eventId: string) => {
       />
     </section>
 
-    <!-- 热点图状态说明（需求 7.4.1：占位底图，美工替换后仅更换背景） -->
+    <!-- 热点图状态说明 -->
     <section class="scenario-card scenario-note">
       <p class="scenario-note__text">
-        甲板热点图已接入（需求 7.4.1）：当前使用占位底图（坐标基准 1000px），
-        红点按 fault_position_x/y 定位，悬停显示评分/碰撞概率/时间，点击跳事件详情；美工底图替换后仅更换背景。
+        甲板热点图按风险方位展示甲板态势，红点表示风险位置，
+        悬停显示评分 / 碰撞概率 / 时间，点击可查看事件详情。
       </p>
     </section>
 
@@ -178,15 +178,15 @@ const goEventDetail = (eventId: string) => {
       </div>
     </div>
 
-    <!-- 碰撞风险评估 + 轨迹偏差检测（需求 8.4 轻量算法） -->
+    <!-- 碰撞风险评估 + 轨迹偏差检测 -->
     <section v-if="collisionRisk" class="scenario-card scenario-card--wide">
-      <h3 class="scenario-card__title">碰撞风险评估（轻量算法）</h3>
+      <h3 class="scenario-card__title">碰撞风险评估</h3>
       <div class="scenario-algo">
         <div class="scenario-algo__side">
           <p class="scenario-algo__note">
             碰撞风险评分由最小间距（60%）与接近率（40%）加权得到 0-100 分；
             轨迹偏差评分基于双机方向角 / 相对角 / 间距标准差相对经验基线的偏差，
-            作为二分类结果的辅助解释层（需求 8.4）。
+            作为二分类结果的辅助解释层。
           </p>
           <div class="scenario-algo__tags">
             <span

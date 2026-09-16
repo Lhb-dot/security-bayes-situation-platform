@@ -18,6 +18,11 @@ from app.utils.auth import csrf_cookie_name, digest_token, session_cookie_name
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+#: last_seen_at 的写库节流窗口（秒）。
+#: 该字段只用于会话续期展示，没必要每个请求都写 —— 原先每个请求（含 GET）都会
+#: 触发一次 UPDATE + COMMIT，而首页一次加载就有 2~3 个请求，等于白白多出几次写事务。
+_LAST_SEEN_REFRESH_SECONDS = 60
+
 
 def _unauthorized() -> HTTPException:
     return HTTPException(status_code=401, detail="未登录或账号不可用")
@@ -58,8 +63,14 @@ def get_current_session(
         ):
             raise HTTPException(status_code=403, detail="CSRF 校验失败")
 
-    session.last_seen_at = now
-    db.commit()
+    # 节流写入：距上次记录超过 _LAST_SEEN_REFRESH_SECONDS 才落库，
+    # 避免每个请求都产生一次 UPDATE + COMMIT（首页一次加载就有多个请求）。
+    last_seen = session.last_seen_at
+    if last_seen is not None and last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    if last_seen is None or (now - last_seen).total_seconds() >= _LAST_SEEN_REFRESH_SECONDS:
+        session.last_seen_at = now
+        db.commit()
     return session
 
 

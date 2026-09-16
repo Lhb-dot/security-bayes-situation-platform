@@ -78,7 +78,7 @@ watch(
     </div>
 
     <template v-else>
-      <p class="data-preview__tip">只读数据预览（需求 2.4）：每页最多 {{ pageSize }} 条，标签列已高亮。</p>
+      <p class="data-preview__tip">只读数据预览：每页最多 {{ pageSize }} 条，标签列已高亮。</p>
       <div class="data-preview__table-wrap">
         <el-table
           :data="rows"

@@ -48,6 +48,7 @@ interface ScenarioOption {
 interface DatasetOption {
   id: number;
   logical_id: string;
+  name: string;
   version: number;
   scenario_id: number;
   scenario_code: string;
@@ -82,7 +83,7 @@ const datasetOptions = computed(() => {
     .filter((dataset) => selectedScenario.value === 'all' || dataset.scenario_code === selectedScenario.value)
     .map((dataset) => ({
       id: String(dataset.id),
-      name: `${dataset.logical_id}（v${dataset.version}）`,
+      name: `${dataset.name}（v${dataset.version}）`,
     }));
 });
 
@@ -326,7 +327,7 @@ onMounted(async () => {
     .map((scenario) => ({ id: scenario.id, code: scenario.code, name: scenario.name }));
   const datasetRows = await Promise.all(allScenarios.value.map((scenario) => getDatasets(scenario.id)));
   allDatasets.value = datasetRows.flatMap((rows) =>
-    (rows as Array<{ id: number; logical_id: string; version: number; scenario_id: number }>).map((dataset) => ({
+    (rows as Array<{ id: number; logical_id: string; name: string; version: number; scenario_id: number }>).map((dataset) => ({
       ...dataset,
       scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
     }))
@@ -409,7 +410,7 @@ onMounted(async () => {
         </div>
         <div class="model-evaluation-fact">
           <span>数据集</span>
-          <strong>{{ evaluation.model_attributes.dataset?.logical_id || '—' }}</strong>
+          <strong>{{ evaluation.model_attributes.dataset?.name || evaluation.model_attributes.dataset?.logical_id || '—' }}</strong>
         </div>
         <div class="model-evaluation-fact">
           <span>场景</span>
@@ -470,7 +471,7 @@ onMounted(async () => {
             </tr>
             <tr>
               <td>数据集</td>
-              <td v-for="m in compareList" :key="'ds-' + m.id">{{ m.dataset_logical_id || m.dataset_id }} v{{ m.dataset_version || '—' }}</td>
+              <td v-for="m in compareList" :key="'ds-' + m.id">{{ m.dataset_name || m.dataset_logical_id || m.dataset_id }} v{{ m.dataset_version || '—' }}</td>
             </tr>
             <tr>
               <td>状态</td>
@@ -538,7 +539,7 @@ onMounted(async () => {
         <div class="model-card__meta">
           <div class="model-card__meta-item">
             <span class="model-card__meta-label">数据集</span>
-            <span class="model-card__meta-value">{{ model.dataset_logical_id || '未知数据集' }} <em class="model-card__version">v{{ model.dataset_version || '—' }}</em></span>
+            <span class="model-card__meta-value">{{ model.dataset_name || model.dataset_logical_id || '未知数据集' }} <em class="model-card__version">v{{ model.dataset_version || '—' }}</em></span>
           </div>
           <div class="model-card__meta-item">
             <span class="model-card__meta-label">算法</span>

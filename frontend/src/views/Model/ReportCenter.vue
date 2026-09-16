@@ -558,7 +558,7 @@ onMounted(async () => {
           <h3 class="report-section__title">不同视图预测结果与概率</h3>
           <div v-for="m in multiViewModels" :key="m.model_version_id" class="model-block">
             <p class="report-section__hint">
-              <b>{{ m.algorithm_name ?? m.algorithm_code }}</b>（模型 {{ m.model_version_id }}）
+              <b>{{ m.algorithm_name ?? m.algorithm_code }}</b>
               · 推理 {{ m.inference_count }} 条 / 风险 {{ m.risk_count }} 条
               <template v-if="m.view_weights.length">
                 · 视图权重：{{ m.view_weights.map((w) => w.toFixed(2)).join(' / ') }}
@@ -598,7 +598,6 @@ onMounted(async () => {
           >
             <p class="report-section__hint">
               <b>{{ evaluation.algorithm_name ?? evaluation.algorithm_code ?? '模型' }}</b>
-              （模型 {{ evaluation.model_version_id }}）
               · {{ evaluation.available ? (evaluation.source === 'ai' ? 'AI 评价' : '规则回退') : '暂无已保存评价' }}
             </p>
             <div
@@ -611,9 +610,9 @@ onMounted(async () => {
 
         <!-- 五、特征加权条件概率 -->
         <section v-if="topFeatures.length" class="report-section">
-          <h3 class="report-section__title">特征加权条件概率（Top {{ topFeatures.length }}）</h3>
+          <h3 class="report-section__title">特征加权条件概率（前 {{ topFeatures.length }} 项）</h3>
           <p v-if="viewReportData.feature_analysis.calculation_method" class="report-section__hint">
-            口径：{{ viewReportData.feature_analysis.calculation_method }}
+            计算方式：{{ viewReportData.feature_analysis.calculation_method }}
           </p>
           <table class="mini-table">
             <thead><tr><th>#</th><th>特征值</th><th>所属视图</th><th>权重</th><th>支持方向</th></tr></thead>

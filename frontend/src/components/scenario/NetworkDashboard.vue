@@ -209,9 +209,9 @@ const goInferenceWithPort = (port: string) => {
       </section>
     </div>
 
-    <!-- 轻量算法预判（需求 8.1：端口偏离度评分 + Z-score 突变检测） -->
+    <!-- 轻量算法预判 -->
     <section class="scenario-card scenario-card--wide">
-      <h3 class="scenario-card__title">流量偏离度预判（轻量算法）</h3>
+      <h3 class="scenario-card__title">流量偏离度预判</h3>
       <div v-if="portDeviation.length" class="scenario-algo">
         <div class="scenario-algo__chart">
           <BarChart

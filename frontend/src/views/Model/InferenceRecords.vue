@@ -24,6 +24,7 @@ interface InferenceRecordItem {
   algorithm_name: string | null;
   dataset_id: number;
   dataset_logical_id: string | null;
+  dataset_name: string | null;
   dataset_version: number;
   risk_type: string | null;
   original_label: string;
@@ -196,7 +197,7 @@ onMounted(() => {
               <td>{{ r.id }}</td>
               <td>{{ r.user_id }}</td>
               <td>{{ scenarioName(r.scenario_id) }}</td>
-              <td>{{ r.dataset_logical_id }}</td>
+              <td>{{ r.dataset_name || r.dataset_logical_id }}</td>
               <td>{{ r.dataset_version }}</td>
               <td>{{ r.algorithm_name }}</td>
               <td>{{ r.model_version_id }}</td>
