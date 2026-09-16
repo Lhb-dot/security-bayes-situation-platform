@@ -72,7 +72,7 @@ const accountRoleBadge = computed(() => {
   return 'role-badge--admin';
 });
 const accountScenarioLabel = computed(() => {
-  if (isSuperAdmin.value) return '全部场景（不绑定）';
+  if (isSuperAdmin.value) return '全部场景';
   const code = currentUser.value?.scenario_code;
   return code ? (SCENARIO_LABEL[code] ?? code) : '未绑定场景';
 });
@@ -325,6 +325,7 @@ const scenarioSwitches = ref([
   { id: 'network_security', label: '网络安全态势感知', enabled: true },
   { id: 'power_system', label: '电力系统风险态势感知', enabled: true },
   { id: 'geological_risk', label: '地质风险态势感知', enabled: true },
+  { id: 'flightdeck_operation', label: '航母甲板作业态势感知', enabled: false },
 ]);
 
 const saveAdminSettings = () => {
@@ -513,24 +514,16 @@ onMounted(async () => {
         <div class="threshold-bar">
           <div class="threshold-bar__head">
             <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
-            <span class="threshold-bar__scene">{{ thresholdScenario }}</span>
           </div>
           <div class="threshold-bar__form">
             <div class="threshold-field">
               <label>中风险阈值（0~1）</label>
               <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-              <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold !== undefined" class="threshold-bar__current">
-                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold) }}
-              </span>
             </div>
             <div class="threshold-field">
               <label>高风险阈值（0~1）</label>
               <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-              <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold !== undefined" class="threshold-bar__current">
-                当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold) }}
-              </span>
             </div>
-            <p class="threshold-bar__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
             <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
               {{ saving ? '保存中...' : '保存并生效' }}
             </button>
@@ -909,11 +902,6 @@ onMounted(async () => {
   color: #e8f1ff;
 }
 
-.threshold-bar__scene {
-  font-size: 0.78rem;
-  color: rgba(154, 214, 255, 0.55);
-}
-
 .threshold-bar__form {
   display: flex;
   align-items: flex-end;
@@ -935,18 +923,6 @@ onMounted(async () => {
 
 .threshold-field .settings-form__input {
   width: 150px;
-}
-
-.threshold-bar__current {
-  font-size: 0.74rem;
-  color: rgba(154, 214, 255, 0.6);
-}
-
-.threshold-bar__rule {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 0.76rem;
-  color: rgba(255, 209, 102, 0.7);
 }
 
 /* ===================== 表单 ===================== */
@@ -1051,25 +1027,26 @@ select.settings-form__input option {
   transform: translateX(20px);
 }
 
-/* ===================== 按钮：统一蓝色填充（与主按钮同款） ===================== */
+/* ===================== 按钮：统一浅色底（与页面整体浅色元素同一套色板） ===================== */
 .settings-btn {
   padding: 10px 20px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 10px;
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
+  background: linear-gradient(135deg, #e6f1ff, #b8d6fb);
+  color: #0b2038;
   font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: filter 0.2s, opacity 0.2s;
   width: fit-content;
 }
 
 .settings-btn:hover {
-  opacity: 0.9;
+  filter: brightness(1.07);
 }
 
 .settings-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -1190,17 +1167,18 @@ select.settings-form__input option {
 
 .pwd-setting-dialog .el-button--primary,
 .ai-setting-dialog .el-button--primary {
-  background: linear-gradient(135deg, #5ba6ff, #407acc) !important;
-  border-color: transparent !important;
-  color: #fff !important;
+  background: linear-gradient(135deg, #e6f1ff, #b8d6fb) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #0b2038 !important;
+  font-weight: 600 !important;
 }
 
 .pwd-setting-dialog .el-button--primary:hover,
 .ai-setting-dialog .el-button--primary:hover {
-  background: linear-gradient(135deg, #5ba6ff, #407acc) !important;
-  border-color: transparent !important;
-  color: #fff !important;
-  opacity: 0.9;
+  background: linear-gradient(135deg, #e6f1ff, #b8d6fb) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #0b2038 !important;
+  filter: brightness(1.07);
 }
 
 .ai-dialog-form {

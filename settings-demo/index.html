@@ -260,15 +260,15 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
 /* ==========================================================================
    按钮：.settings-btn（来自 Settings.vue）
    ========================================================================== */
-/* 次级按钮与主按钮统一为蓝色填充（与「编辑」按钮同款） */
+/* 按钮：统一浅色底（与页面整体浅色元素同一套色板） */
 .settings-btn{
-  padding:10px 20px;border:none;border-radius:10px;
-  background:linear-gradient(135deg,#5ba6ff,#407acc);color:#fff;font-size:.9rem;
-  transition:opacity .2s;width:fit-content;
+  padding:10px 20px;border:1px solid rgba(255,255,255,.28);border-radius:10px;
+  background:linear-gradient(135deg,#e6f1ff,#b8d6fb);color:#0b2038;font-size:.9rem;font-weight:500;
+  transition:filter .2s;width:fit-content;
 }
-.settings-btn:hover{opacity:.9}
+.settings-btn:hover{filter:brightness(1.07)}
 .settings-btn--primary{padding:12px 32px;font-weight:600}
-.settings-btn--primary:hover{opacity:.9}
+.settings-btn--primary:hover{filter:brightness(1.07)}
 .settings-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 
 /* ==========================================================================
@@ -313,13 +313,10 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
   padding-right:18px;border-right:1px solid rgba(125,201,255,.1);
 }
 .threshold-bar__head h4{margin:0;font-size:1.05rem;color:#e8f1ff}
-.threshold-bar__scene{font-size:.78rem;color:rgba(154,214,255,.55)}
 .threshold-bar__form{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;flex:1}
 .threshold-field{display:flex;flex-direction:column;gap:5px}
 .threshold-field label{font-size:.8rem;color:rgba(220,234,255,.65)}
 .threshold-field .settings-form__input{width:150px}
-.threshold-bar__current{font-size:.74rem;color:rgba(154,214,255,.6)}
-.threshold-bar__rule{flex-basis:100%;margin:0;font-size:.76rem;color:rgba(255,209,102,.7)}
 
 /* ==========================================================================
    弹窗：对应 .el-overlay .el-dialog（来自 style.css 全局暗色覆盖）
@@ -492,7 +489,7 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
             <div class="detail-info only-super">
               <div><span>用户名</span><strong>admin</strong></div>
               <div><span>角色</span><strong><span class="role-badge role-badge--admin">系统管理员</span></strong></div>
-              <div><span>绑定场景</span><strong>全部场景（不绑定）</strong></div>
+              <div><span>绑定场景</span><strong>全部场景</strong></div>
               <div><span>账号状态</span><strong><span class="status-badge status-badge--on">启用</span></strong></div>
             </div>
 
@@ -623,20 +620,16 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
             <div class="threshold-bar">
               <div class="threshold-bar__head">
                 <h4 id="thSceneName">网络安全态势感知</h4>
-                <span class="threshold-bar__scene" id="thSceneCode">network_security</span>
               </div>
               <div class="threshold-bar__form">
                 <div class="threshold-field">
                   <label>中风险阈值（0~1）</label>
                   <input type="number" min="0" max="1" step="0.01" class="settings-form__input" value="0.35">
-                  <span class="threshold-bar__current">当前值：0.35</span>
                 </div>
                 <div class="threshold-field">
                   <label>高风险阈值（0~1）</label>
                   <input type="number" min="0" max="1" step="0.01" class="settings-form__input" value="0.70">
-                  <span class="threshold-bar__current">当前值：0.70</span>
                 </div>
-                <p class="threshold-bar__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1，最多两位小数</p>
                 <button class="settings-btn" data-save="阈值已保存并实时生效">保存并生效</button>
               </div>
             </div>
@@ -949,7 +942,6 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
     thScene.addEventListener('change', function(){
       var code = thScene.value;
       document.getElementById('thSceneName').textContent = LABEL[code] || code;
-      document.getElementById('thSceneCode').textContent = code;
     });
   }
 
