@@ -10,13 +10,6 @@ export interface CountItem {
   count: number;
 }
 
-/** 标签 + 数值项（柱状图/条形图统一结构） */
-export interface LabelValue {
-  label: string;
-  value?: number | null;
-  count?: number | null;
-}
-
 /** 数值列统计 */
 export interface NumericStats {
   mean: number;
