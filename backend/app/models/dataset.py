@@ -19,6 +19,10 @@ class Dataset(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     logical_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 自填名（上传时用户填写，中文）。注意：它不是平台展示名 ——
+    # 展示名由 constants.dataset_display_name_of(dataset) 统一给出（上传文件名去扩展名），
+    # 本列只作为 file_path 缺失时的兜底。
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     scenario_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("scenario.id"), nullable=False

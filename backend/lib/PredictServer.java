@@ -8,6 +8,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -97,12 +101,18 @@ public class PredictServer {
                     .put("prediction_label", label)
                     .put("probability", probability)
                     .put("class_distribution", classes);
-            JSONObject explain = buildExplain(clf, inst, header);
+            JSONObject explain = buildExplain(clf, inst, header, req.optJSONArray("risk_labels"));
             data.put("views", explain.getJSONArray("views"));
             data.put("view_weights", explain.getJSONArray("view_weights"));
             data.put("feature_evidence", explain.getJSONArray("feature_evidence"));
+            data.put("algorithm_details", explain.getJSONObject("algorithm_details"));
             if (explain.has("calculation_method")) {
                 data.put("calculation_method", explain.getString("calculation_method"));
+            }
+            try {
+                data.put("feature_attribution", buildFeatureAttribution(clf, inst, header, features));
+            } catch (Exception ignored) {
+                data.put("feature_attribution", new JSONArray());
             }
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
         } catch (Exception e) {
@@ -112,12 +122,17 @@ public class PredictServer {
         }
     }
 
-    /** 组装 PMWNB 可解释性信息：双视图预测 + 特征加权条件概率（6.6.2 统一解释输出）。 */
-    private static JSONObject buildExplain(Classifier clf, Instance instance, Instances header) {
+    /** 组装 PMWNB 可解释性信息：双基础视图、十个子模型和特征证据。 */
+    private static JSONObject buildExplain(
+            Classifier clf, Instance instance, Instances header, JSONArray riskLabels) {
         JSONObject explain = new JSONObject();
         explain.put("views", new JSONArray());
         explain.put("view_weights", new JSONArray());
         explain.put("feature_evidence", new JSONArray());
+        explain.put("algorithm_details", new JSONObject()
+                .put("algorithm_code", "PMWNB")
+                .put("specific", unavailable("PMWNB 专属解释提取失败"))
+                .put("availability", unavailable("PMWNB 专属解释提取失败")));
         try {
             if (!(clf instanceof PMWNB)) {
                 return explain;
@@ -130,11 +145,53 @@ public class PredictServer {
             explain.put("view_weights", new JSONArray().put(0.5).put(0.5));
             explain.put("feature_evidence", buildCavwnbEvidence(
                     pm.getView1BaseCAVWNB(), pm.toView1(instance), header));
+            JSONArray submodels = new JSONArray();
+            double[][] probabilities = pm.distributionForSubmodels(instance);
+            String[] names = {
+                    "EWD 原始属性视图", "EWD SPODE 标签视图", "EWD SPODE 概率视图",
+                    "EWD RF 标签视图", "EWD RF 概率视图", "MDLP 原始属性视图",
+                    "MDLP SPODE 标签视图", "MDLP SPODE 概率视图", "MDLP RF 标签视图",
+                    "MDLP RF 概率视图"
+            };
+            for (int i = 0; i < probabilities.length; i++) {
+                submodels.put(viewObj(names[i], probabilities[i], header));
+            }
+            int riskSupport = 0;
+            Set<String> labels = new HashSet<>();
+            for (int i = 0; i < submodels.length(); i++) {
+                JSONObject item = submodels.getJSONObject(i);
+                String label = item.optString("predicted_label", "");
+                labels.add(label);
+                if (isRiskLabel(label, riskLabels)) riskSupport++;
+            }
+            JSONObject specific = new JSONObject()
+                    .put("submodels", submodels)
+                    .put("risk_support_count", riskLabels == null ? JSONObject.NULL : riskSupport)
+                    .put("disagreement", new JSONObject()
+                            .put("has_conflict", labels.size() > 1)
+                            .put("distinct_label_count", labels.size()))
+                    .put("available", true);
+            explain.put("algorithm_details", new JSONObject()
+                    .put("algorithm_code", "PMWNB")
+                    .put("specific", specific)
+                    .put("availability", new JSONObject().put("available", true).put("reason", JSONObject.NULL)));
             explain.put("calculation_method", "类×属性值权重 × 对数条件概率（weight × log P(x|c)，非归一化）");
         } catch (Exception ignored) {
             // 解释提取失败不阻断预测，返回空解释
         }
         return explain;
+    }
+
+    private static JSONObject unavailable(String reason) {
+        return new JSONObject().put("available", false).put("reason", reason);
+    }
+
+    private static boolean isRiskLabel(String label, JSONArray riskLabels) {
+        if (riskLabels == null) return false;
+        for (int i = 0; i < riskLabels.length(); i++) {
+            if (label.equals(String.valueOf(riskLabels.opt(i)))) return true;
+        }
+        return false;
     }
 
     private static JSONObject viewObj(String name, double[] dist, Instances header) {
@@ -150,6 +207,38 @@ public class PredictServer {
         }
         obj.put("predicted_label", header.classAttribute().value(argmax));
         return obj.put("distribution", arr);
+    }
+
+    /** Read-only local sensitivity diagnostic; it does not change model inference. */
+    private static JSONArray buildFeatureAttribution(
+            Classifier classifier, Instance instance, Instances header, JSONObject features) throws Exception {
+        double[] original = classifier.distributionForInstance(instance);
+        int predicted = 0;
+        for (int i = 1; i < original.length; i++) if (original[i] > original[predicted]) predicted = i;
+        ArrayList<JSONObject> items = new ArrayList<>();
+        for (int i = 0; i < header.numAttributes(); i++) {
+            if (i == header.classIndex() || instance.isMissing(i)) continue;
+            Instance masked = new DenseInstance(instance);
+            masked.setDataset(header);
+            masked.setMissing(i);
+            double[] changed = classifier.distributionForInstance(masked);
+            double delta = original[predicted] - changed[predicted];
+            Attribute attr = header.attribute(i);
+            Object raw = features.has(attr.name()) ? features.get(attr.name()) : JSONObject.NULL;
+            String processed = attr.isNominal() ? instance.stringValue(i) : String.valueOf(instance.value(i));
+            items.add(new JSONObject()
+                    .put("feature_name", attr.name())
+                    .put("raw_value", raw)
+                    .put("processed_value", processed)
+                    .put("contribution", round(Math.abs(delta)))
+                    .put("signed_contribution", round(delta))
+                    .put("supports_predicted", delta >= 0));
+        }
+        items.sort(Comparator.comparingDouble(x -> -x.optDouble("contribution", 0.0)));
+        JSONArray result = new JSONArray();
+        int limit = Math.min(10, items.size());
+        for (int i = 0; i < limit; i++) result.put(items.get(i).put("rank", i + 1));
+        return result;
     }
 
     private static JSONArray buildCavwnbEvidence(CAVWNB cav, Instance disc, Instances header) throws Exception {

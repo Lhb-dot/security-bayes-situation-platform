@@ -11,10 +11,14 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth_routes,
+    ai_setting_routes,
     algorithm_routes,
+    dashboard_routes,
+    explanation_routes,
     dataset_routes,
     inference_record_routes,
     model_version_routes,
+    model_evaluation_routes,
     report_routes,
     risk_event_routes,
     risk_threshold_routes,
@@ -26,10 +30,14 @@ from app.api.v1.endpoints import (
 api_router = APIRouter(prefix="/api/v1")
 
 api_router.include_router(auth_routes.router)
+api_router.include_router(ai_setting_routes.router)
+api_router.include_router(explanation_routes.router)
 api_router.include_router(user_routes.router)
 api_router.include_router(scenario_routes.router)
 api_router.include_router(dataset_routes.router)
 api_router.include_router(algorithm_routes.router)
+api_router.include_router(dashboard_routes.router)
+api_router.include_router(model_evaluation_routes.router)
 api_router.include_router(model_version_routes.router)
 api_router.include_router(inference_record_routes.router)
 api_router.include_router(risk_event_routes.router)

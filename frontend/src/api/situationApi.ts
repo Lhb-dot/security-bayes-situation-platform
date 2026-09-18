@@ -5,14 +5,11 @@
  * 本模块负责调用与数据映射（后端真实统计 → 前端 SituationData/RiskEvent 结构）。
  */
 import request, { unwrapData } from '@/utils/request';
-import { getScenarioList, resolveScenarioId } from '@/api/scenarioApi';
+import { resolveScenarioId, getScenarioOverview, toScenarioCard } from '@/api/scenarioApi';
 import { getRiskEventList } from '@/api/riskEventApi';
-import { getModelVersionList } from '@/api/modelVersionApi';
-import { getDatasetList } from '@/api/datasetApi';
 import type {
   GlobalOverview,
   RiskEvent,
-  Scenario,
   ScenarioId,
   SituationData,
   TrendPoint,
@@ -134,24 +131,23 @@ const buildDailyTrend = (events: RiskEvent[]): TrendPoint[] => {
 };
 
 /**
- * 全局态势总览（真实数据，前端聚合）。
+ * 全局态势总览（真实数据）。
  *
- * 数据来源均为后端真实接口：场景 / 风险事件 / 模型版本 / 数据集。
+ * 场景卡片与平台合计**全部来自后端 `/scenarios/overview`**（`DashboardService.get_scenario_overview`），
+ * 与场景中心共用同一套去重口径（carrier 同源三份只计 1 个数据集）—— 前端不再自行
+ * `datasets.filter(scenario_id === code)` 计数（那条路径没有去重，会和场景中心对不上）。
  * SUPER_ADMIN 的风险事件由后端强制过滤为 platform 派生事件（见 risk_event_service.get_list）。
- * 各场景风险评分 = 该场景真实风险事件 risk_score 的均值（换算为 0-100 分）。
  */
 export const getGlobalOverview = async (): Promise<GlobalOverview> => {
-  const [scenarios, rawEvents, models, datasets] = await Promise.all([
-    getScenarioList(),
+  const [overview, rawEvents] = await Promise.all([
+    getScenarioOverview(),
     getRiskEventList({ page_size: 200 }),
-    getModelVersionList({ page_size: 200 }),
-    getDatasetList({ page_size: 200 }),
   ]);
 
-  const codeById: Record<number, string> = {};
-  for (const s of scenarios) codeById[s.id] = s.code;
-
   // 用真实场景列表的 id→code 映射覆盖 mapRiskEvent 的硬编码回退，避免种子 ID 顺序变化时错位
+  const codeById: Record<number, string> = {};
+  for (const s of overview.scenarios) codeById[s.scenario_id] = s.code;
+
   const events: RiskEvent[] = (rawEvents as unknown as Array<Record<string, unknown>>).map((e) => {
     const mapped = mapRiskEvent(e);
     const code = codeById[Number(e.scenario_id)];
@@ -159,39 +155,13 @@ export const getGlobalOverview = async (): Promise<GlobalOverview> => {
     return mapped;
   });
 
-  const scenarioCards: Scenario[] = scenarios.map((s) => {
-    const code = s.code as ScenarioId;
-    const list = events.filter((e) => e.scenario_id === code);
-    const high = list.filter((e) => e.risk_level === 'HIGH').length;
-    const medium = list.filter((e) => e.risk_level === 'MEDIUM').length;
-    return {
-      scenario_id: code,
-      name: s.name,
-      description: s.description ?? '',
-      risk_level: high > 0 ? 'high' : medium > 0 ? 'medium' : 'low',
-      risk_score: list.length
-        ? Math.round((list.reduce((sum, e) => sum + e.risk_score, 0) / list.length) * 100)
-        : 0,
-      event_count: list.length,
-      high_risk_count: high,
-      dataset_count: datasets.filter((d) => d.scenario_id === code).length,
-      model_count: models.filter((m) => (m.scenario_code ?? codeById[m.scenario_id]) === code).length,
-      status: s.access_status === 'ACTUAL' ? 'active' : 'inactive',
-    };
-  });
-
-  const highCount = events.filter((e) => e.risk_level === 'HIGH').length;
-  const mediumCount = events.filter((e) => e.risk_level === 'MEDIUM').length;
-
   return {
-    global_risk_score: events.length
-      ? Math.round((events.reduce((sum, e) => sum + e.risk_score, 0) / events.length) * 100)
-      : 0,
-    global_risk_level: highCount > 0 ? 'high' : mediumCount > 0 ? 'medium' : 'low',
-    scenario_count: scenarios.length,
-    high_risk_count: highCount,
-    active_model_count: models.filter((m) => m.status === 'PUBLISHED').length,
-    scenarios: scenarioCards,
+    global_risk_score: overview.totals.risk_score,
+    global_risk_level: overview.totals.risk_level,
+    scenario_count: overview.totals.scenario_count,
+    high_risk_count: overview.totals.high_risk_count,
+    active_model_count: overview.totals.published_model_count,
+    scenarios: overview.scenarios.map(toScenarioCard),
     global_trend: buildDailyTrend(events),
   };
 };

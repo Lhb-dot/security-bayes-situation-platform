@@ -2,7 +2,7 @@
  * reportStore.ts — 报告列表/生成（Task 004）
  *
  * 职责边界：仅 state / action，不含业务过滤与页面逻辑。
- * 过渡期数据源：mockApi；后端就绪后切换至 src/api/reportApi.*。
+ * 数据源：src/api/reportApi（真实后端）。
  */
 import { defineStore } from 'pinia';
 import { getReportList, generateReport } from '@/api/reportApi';

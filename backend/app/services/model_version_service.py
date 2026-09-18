@@ -34,8 +34,12 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     ALGORITHM_STATUS_AVAILABLE,
+    DATASET_VISIBILITY_COMPANY,
+    DATASET_VISIBILITY_PERSONAL,
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_PLATFORM,
+    DATASET_POSITIVE_LABELS,
+    dataset_display_name_of,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
@@ -77,34 +81,87 @@ class ModelVersionService(ServiceBase):
         elif role == ROLE_SCENARIO_ADMIN:
             if (
                 model.scenario_id != getattr(current_user, "scenario_id", None)
-                or dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, "company")
+                or dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
             ):
                 raise ServiceError(403, "无权限操作")
         else:
             raise ServiceError(403, "无权限操作")
+
+    def _authorize_lifecycle(self, current_user, model: ModelVersion) -> None:
+        """Authorize a management operation on a model in its own scenario."""
+        self.require_scenario_admin_of(current_user, model.scenario_id)
+        self._require_manageable_model(current_user, model)
 
     def _require_trainer(self, current_user, model: ModelVersion) -> None:
         """模型只能由发起训练的管理员发布。"""
         if getattr(current_user, "id", None) != model.trained_by:
             raise ServiceError(403, "只有训练该模型的管理员可以发布")
 
-    def _to_dict(self, model: ModelVersion) -> dict:
-        """Serialize a model with the display fields needed by the real model center."""
-        data = row_to_dict(model)
+    def _to_dict(self, model: ModelVersion, current_user=None, include_model_attributes: bool = False) -> dict:
+        """Serialize a model and hide internal quality metrics from scenario users."""
+        data = row_to_dict(
+            model,
+            exclude=("model_attributes", "ai_evaluation", "training_parameters"),
+        )
+        from app.services.model_evaluation_service import (
+            build_model_attributes,
+            public_model_attributes,
+        )
+
+        attributes = model.model_attributes or build_model_attributes(model)
+        is_management = getattr(current_user, "role", None) in (
+            ROLE_SUPER_ADMIN,
+            ROLE_SCENARIO_ADMIN,
+        )
         data.update(
             {
                 "model_version_id": model.id,
                 "scenario_code": model.scenario.code if model.scenario else None,
                 "scenario_name": model.scenario.name if model.scenario else None,
                 "dataset_logical_id": model.dataset.logical_id if model.dataset else None,
+                "dataset_name": dataset_display_name_of(model.dataset),
                 "dataset_version": model.dataset.version if model.dataset else None,
                 "algorithm_code": model.algorithm.code if model.algorithm else None,
                 "algorithm_name": model.algorithm.display_name if model.algorithm else None,
                 "trained_by_name": model.trainer.username if model.trainer else None,
                 "published_by_name": model.publisher.username if model.publisher else None,
+                "evaluation_metrics": self._visible_metrics(model, current_user),
+                # Training parameters are model-internal tuning details. Keep
+                # the response shape stable while returning them only to management.
+                "training_parameters": model.training_parameters if is_management else {},
+                "model_attributes": (
+                    attributes if is_management else public_model_attributes(attributes)
+                ) if include_model_attributes else {
+                    "contract_version": attributes.get("contract_version"),
+                    "model_version_id": attributes.get("model_version_id"),
+                    "scenario": attributes.get("scenario"),
+                    "dataset": attributes.get("dataset"),
+                    "algorithm": (attributes.get("algorithm") or {}) | {"parameter_schema": None},
+                    "quality_metrics": {
+                        key: (attributes.get("quality_metrics") or {}).get(key)
+                        for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+                        if key in (attributes.get("quality_metrics") or {})
+                    },
+                    "feature_profile": [],
+                    "evaluation_scope": attributes.get("evaluation_scope"),
+                },
+                "model_evaluation_available": bool(
+                    ((model.ai_evaluation or {}).get("management" if is_management else "user") or {}).get("markdown")
+                ),
             }
         )
         return data
+
+    def _visible_metrics(self, model: ModelVersion, current_user=None) -> dict:
+        """Return full quality data only to management roles."""
+        metrics = dict(model.evaluation_metrics or {})
+        if getattr(current_user, "role", None) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+            return metrics
+        return {
+            key: metrics[key]
+            for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+            if key in metrics
+        }
 
     def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
         """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
@@ -206,7 +263,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(403, "系统管理员只能使用平台数据集训练模型")
         if (
             getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
-            and dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, "company")
+            and dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
         ):
             raise ServiceError(403, "场景管理员不能使用个人数据集训练模型")
 
@@ -278,6 +335,8 @@ class ModelVersionService(ServiceBase):
             )
             self._transition(model, MODEL_STATUS_DRAFT)
             model.evaluation_metrics = metrics
+            from app.services.model_evaluation_service import build_model_attributes
+            model.model_attributes = build_model_attributes(model)
             self.commit()
         except Exception as exc:
             self._transition(model, MODEL_STATUS_FAILED)
@@ -302,7 +361,11 @@ class ModelVersionService(ServiceBase):
         dataset_path = resolve_dataset_path(dataset.file_path)
         model_save_path = build_model_save_path(model.id, algorithm_code)
         return execute_algorithm_training(
-            algorithm_code, dataset_path, model_save_path, training_parameters
+            algorithm_code,
+            dataset_path,
+            model_save_path,
+            training_parameters,
+            sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
         )
 
     @service_call
@@ -313,10 +376,11 @@ class ModelVersionService(ServiceBase):
         if not isinstance(evaluation_metrics, dict):
             raise ServiceError(400, "evaluation_metrics 必须是 JSON 对象")
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         self._transition(model, MODEL_STATUS_DRAFT)
         model.evaluation_metrics = evaluation_metrics
+        from app.services.model_evaluation_service import build_model_attributes
+        model.model_attributes = build_model_attributes(model)
         self.commit()
         return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
 
@@ -326,8 +390,7 @@ class ModelVersionService(ServiceBase):
     ):
         """训练失败：TRAINING → FAILED。"""
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         self._transition(model, MODEL_STATUS_FAILED)
         if error_message:
             metrics = dict(model.evaluation_metrics or {})
@@ -343,8 +406,7 @@ class ModelVersionService(ServiceBase):
     def publish(self, current_user, model_id: int):
         """发布模型：仅训练人可将 DRAFT 模型发布。"""
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         self._require_trainer(current_user, model)
         self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
         self.commit()
@@ -356,26 +418,21 @@ class ModelVersionService(ServiceBase):
 
         需求 6.7.4.5：默认模型被下线时，系统必须同时取消其默认状态（is_default=False）。
         """
+        return self._disable_model(current_user, model_id)
+
+    def _disable_model(self, current_user, model_id: int):
+        """Disable a published model and clear its default marker."""
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         self._transition(model, MODEL_STATUS_DISABLED)
-        if model.is_default:
-            model.is_default = False
+        model.is_default = False
         self.commit()
         return ok(data=self._to_dict(model), message="模型已禁用，默认推荐状态已清除")
 
     @service_call
     def disable(self, current_user, model_id: int):
         """禁用模型：PUBLISHED → DISABLED，保留模型记录。"""
-        model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
-        self._transition(model, MODEL_STATUS_DISABLED)
-        if model.is_default:
-            model.is_default = False
-        self.commit()
-        return ok(data=self._to_dict(model), message="模型已禁用，默认推荐状态已清除")
+        return self._disable_model(current_user, model_id)
 
     @service_call
     def enable(self, current_user, model_id: int):
@@ -384,8 +441,7 @@ class ModelVersionService(ServiceBase):
 禁用时已清除默认推荐标记，重新启用后不自动恢复，需管理员根据当前场景单独设置。
         """
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         self._transition(model, MODEL_STATUS_PUBLISHED, operator_id=current_user.id)
         self.commit()
         return ok(data=self._to_dict(model), message="模型已重新启用")
@@ -398,8 +454,7 @@ class ModelVersionService(ServiceBase):
         与 uk_mv_default 部分唯一索引保持一致）。
         """
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         if model.status != MODEL_STATUS_PUBLISHED:
             raise ServiceError(400, "只有已发布模型才能设为默认推荐模型")
         others = self.db.scalars(
@@ -420,8 +475,7 @@ class ModelVersionService(ServiceBase):
     def clear_default(self, current_user, model_id: int):
         """取消默认推荐状态（管理级角色，仅场景内）。"""
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         if not model.is_default:
             raise ServiceError(400, "该模型不是默认推荐模型")
         model.is_default = False
@@ -463,7 +517,7 @@ class ModelVersionService(ServiceBase):
                 .join(AppUser, AppUser.id == ModelVersion.trained_by)
                 .where(
                     ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, "company")),
+                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
                     or_(
                         AppUser.role != ROLE_SUPER_ADMIN,
                         ModelVersion.status == MODEL_STATUS_PUBLISHED,
@@ -482,8 +536,8 @@ class ModelVersionService(ServiceBase):
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
             stmt = stmt.where(
                 ModelVersion.scenario_id == bound,
-                (Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, "company")))
-                | ((Dataset.visibility == "personal") & (Dataset.uploaded_by == current_user.id)),
+                Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY))
+                | ((Dataset.visibility == DATASET_VISIBILITY_PERSONAL) & (Dataset.uploaded_by == current_user.id)),
             )
         if scenario_id is not None:
             if role != ROLE_SUPER_ADMIN:
@@ -493,7 +547,7 @@ class ModelVersionService(ServiceBase):
             stmt = stmt.where(ModelVersion.dataset_id == dataset_id)
         stmt = stmt.order_by(ModelVersion.id.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._to_dict(m) for m in result["items"]]
+        result["items"] = [self._to_dict(m, current_user) for m in result["items"]]
         return ok(data=result)
 
     def _can_view_model(self, current_user, model: ModelVersion) -> bool:
@@ -512,7 +566,7 @@ class ModelVersionService(ServiceBase):
             return (
                 model.scenario_id == getattr(current_user, "scenario_id", None)
                 and bool(dataset)
-                and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, "company")
+                and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
                 and not (
                     trainer
                     and trainer.role == ROLE_SUPER_ADMIN
@@ -525,9 +579,9 @@ class ModelVersionService(ServiceBase):
             and model.status in USER_VISIBLE_MODEL_STATUSES
             and bool(dataset)
             and (
-                dataset.visibility in (DATASET_VISIBILITY_PLATFORM, "company")
+                dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
                 or (
-                    dataset.visibility == "personal"
+                    dataset.visibility == DATASET_VISIBILITY_PERSONAL
                     and dataset.uploaded_by == getattr(current_user, "id", None)
                 )
             )
@@ -540,7 +594,7 @@ class ModelVersionService(ServiceBase):
         model = self._get(model_id)
         if not self._can_view_model(current_user, model):
             raise ServiceError(403, "无权限操作")
-        return ok(data=self._to_dict(model))
+        return ok(data=self._to_dict(model, current_user, include_model_attributes=True))
 
     @service_call
     def get_default(
@@ -559,7 +613,7 @@ class ModelVersionService(ServiceBase):
             return ok(data=None, message="当前范围暂无默认推荐模型")
         if not self._can_view_model(current_user, model):
             return ok(data=None, message="当前范围暂无可用默认推荐模型")
-        return ok(data=self._to_dict(model))
+        return ok(data=self._to_dict(model, current_user))
 
     @service_call
     def compare(self, current_user, model_ids: List[int]):
@@ -581,7 +635,7 @@ class ModelVersionService(ServiceBase):
                     "scenario_id": model.scenario_id,
                     "dataset_id": model.dataset_id,
                     "algorithm_id": model.algorithm_id,
-                    "evaluation_metrics": model.evaluation_metrics,
+                    "evaluation_metrics": self._visible_metrics(model, current_user),
                     "status": model.status,
                     "is_default": model.is_default,
                 }
@@ -599,8 +653,7 @@ class ModelVersionService(ServiceBase):
         （需求 6.7.3.5 / 5.2.4）。
         """
         model = self._get(model_id)
-        self.require_scenario_admin_of(current_user, model.scenario_id)
-        self._require_manageable_model(current_user, model)
+        self._authorize_lifecycle(current_user, model)
         if model.status != MODEL_STATUS_DISABLED:
             raise ServiceError(400, "只有禁用中的模型才能删除")
         ir_count = self.db.scalar(

@@ -55,7 +55,7 @@ def service_call(method: Callable[..., T]) -> Callable[..., T]:
             logger.exception(
                 "数据库操作失败: %s.%s", type(self).__name__, method.__name__
             )
-            return fail(code=500, message="数据库操作失败")
+            return fail(code=500, message="数据服务暂时不可用，请稍后重试")
         except Exception:
             logger.exception(
                 "Service 未预期异常: %s.%s", type(self).__name__, method.__name__

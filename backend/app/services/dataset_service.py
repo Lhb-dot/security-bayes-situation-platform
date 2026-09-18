@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from sqlalchemy import func, select
-
+from app.paths import PROJECT_ROOT
 from app.models.dataset import Dataset
 from app.models.model_version import ModelVersion
 from app.models.scenario import Scenario
@@ -38,6 +38,7 @@ from app.services.constants import (
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
     DATASET_VISIBILITIES,
+    dataset_display_name_of,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
@@ -53,6 +54,17 @@ from app.utils.common import (
 )
 
 logger = get_logger("dataset")
+
+
+def _invalidate_dashboard_cache() -> None:
+    """数据集登记 / 修改 / 删除后清掉首页聚合的进程级缓存。
+
+    首页与场景中心的数据集统计（有效样本量、风险占比等）在 dashboard_service 里
+    按 dataset_id 做了进程级缓存，数据集元数据变更后必须清掉，否则页面会显示旧值。
+    """
+    from app.services.dashboard_service import clear_dataset_caches
+
+    clear_dataset_caches()
 
 
 class DatasetService(ServiceBase):
@@ -113,11 +125,14 @@ class DatasetService(ServiceBase):
     def _to_dict(self, dataset: Dataset) -> dict:
         """序列化数据集，并补充前端列表/详情常用展示字段。"""
         data = row_to_dict(dataset)
-        data["name"] = dataset.logical_id
+        data["name"] = dataset_display_name_of(dataset)
         data["field_count"] = len(dataset.fields_schema or [])
         normalized = dataset.file_path.replace("\\", "/")
         suffix = Path(normalized).suffix.lstrip(".").lower()
         data["data_format"] = suffix if suffix in ("csv", "arff", "json") else "arff"
+        # 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列用它展示，
+        # 与自动映射出来的中文展示名（name）区分开，两者用途不同。
+        data["file_name"] = Path(normalized).name
         data["record_count"] = self._count_records(dataset.file_path)
         data["referenced"] = self._is_referenced(dataset.id)
         data["enabled"] = dataset.status == DATASET_STATUS_ACTIVE
@@ -230,6 +245,7 @@ class DatasetService(ServiceBase):
         file_path: str,
         fields_schema: List[Dict],
         label_field: str,
+        name: Optional[str] = None,
         visibility: Optional[str] = None,
     ):
         """上传数据集，版本号自动取最大值 + 1。可见性分级（数据所有权）：
@@ -286,6 +302,7 @@ class DatasetService(ServiceBase):
         now = datetime.now(timezone.utc)
         dataset = Dataset(
             logical_id=logical_id,
+            name=(name or None),
             version=self._next_version(logical_id),
             scenario_id=scenario_id,
             file_path=file_path,
@@ -299,6 +316,7 @@ class DatasetService(ServiceBase):
         )
         self.db.add(dataset)
         self.commit()
+        _invalidate_dashboard_cache()
         return ok(data=self._to_dict(dataset), message="数据集上传成功")
 
     @service_call
@@ -310,6 +328,7 @@ class DatasetService(ServiceBase):
         label_field: str,
         filename: str,
         file_bytes: bytes,
+        name: Optional[str] = None,
         visibility: Optional[str] = None,
     ):
         """上传数据集文件（multipart）：保存到 data/<场景编码>/<文件名>，自动识别
@@ -318,7 +337,6 @@ class DatasetService(ServiceBase):
         - 自动推断字段类型与枚举值域、样本数；
         - label_field 必须存在于文件字段中（否则报错，前端可据此提示修正）。
         """
-        from app.services.model_sim import PROJECT_ROOT
         from app.utils.dataset_file_reader import (
             build_fields_schema,
             detect_format,
@@ -335,8 +353,8 @@ class DatasetService(ServiceBase):
 
         # 保存到 data/<场景编码>/<安全文件名>（basename 防路径穿越）
         safe_name = os.path.basename(filename)
-        target_dir = os.path.join(PROJECT_ROOT, "data", scenario.code, safe_name)
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        target_dir = PROJECT_ROOT / "data" / scenario.code / safe_name
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
         with open(target_dir, "wb") as f:
             f.write(file_bytes)
         relative_path = f"data/{scenario.code}/{safe_name}"
@@ -361,6 +379,7 @@ class DatasetService(ServiceBase):
         return self.create(
             current_user,
             logical_id=logical_id,
+            name=name,
             scenario_id=scenario_id,
             file_path=relative_path,
             fields_schema=fields_schema,
@@ -413,6 +432,7 @@ class DatasetService(ServiceBase):
                 raise ServiceError(400, err)
             self.db.add(new_dataset)
             self.commit()
+            _invalidate_dashboard_cache()
             return ok(
                 data=self._to_dict(new_dataset),
                 message="原数据集已被模型引用，已创建新版本（旧版本保留）",
@@ -436,6 +456,7 @@ class DatasetService(ServiceBase):
             dataset.label_field = new_label
             dataset.fields_schema = new_schema
         self.commit()
+        _invalidate_dashboard_cache()
         return ok(data=self._to_dict(dataset), message="数据集修改成功")
 
     @service_call
@@ -474,6 +495,7 @@ class DatasetService(ServiceBase):
             raise ServiceError(400, "数据集已被模型版本引用，禁止物理删除，只能停用")
         self.db.delete(dataset)
         self.commit()
+        _invalidate_dashboard_cache()
         return ok(message="数据集已删除")
 
     @service_call

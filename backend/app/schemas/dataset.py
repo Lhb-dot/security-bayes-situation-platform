@@ -12,6 +12,11 @@ class DatasetCreate(BaseModel):
     """上传数据集；场景用户只能上传本人场景的 personal 数据。"""
 
     logical_id: str = Field(..., min_length=1, max_length=64, description="数据集逻辑 ID")
+    name: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="数据集展示名（面向用户的中文名）。缺省时由逻辑 ID 映射兜底",
+    )
     scenario_id: int = Field(..., gt=0, description="所属场景 ID")
     file_path: str = Field(..., min_length=1, max_length=255, description="文件路径")
     fields_schema: List[Dict[str, Any]] = Field(

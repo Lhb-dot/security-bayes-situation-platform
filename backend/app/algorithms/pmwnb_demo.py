@@ -7,6 +7,7 @@ import pandas as pd
 from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score, recall_score
+from app.paths import BACKEND_ROOT as BACKEND_ROOT_PATH, DATA_ROOT, MODEL_STORAGE_ROOT
 
 # 保留原有前端联动全局变量：阈值、实验记录列表
 global_threshold = {"high": 0.75, "mid": 0.45, "low": 0.2}
@@ -16,17 +17,16 @@ record_id = 1
 # 线程锁：保护 exp_records / record_id 的并发读写安全
 _exp_lock = threading.Lock()
 
-# 定位项目根目录与后端根目录
-BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))      # backend/
-PROJECT_ROOT = os.path.dirname(BACKEND_ROOT)                                     # security-bayes-platform/
-MODEL_SAVE_DIR = os.path.join(BACKEND_ROOT, "storage", "models")
-os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+# 保留字符串常量供旧调用方使用，路径本身由 app.paths 统一维护。
+BACKEND_ROOT = str(BACKEND_ROOT_PATH)
+PROJECT_ROOT = str(DATA_ROOT.parent)
+MODEL_SAVE_DIR = str(MODEL_STORAGE_ROOT)
 
 # 精准匹配根目录 data/ 下三个子文件夹路径
 DATASET_PATH_MAP = {
-    "net_attack_2024": os.path.join(PROJECT_ROOT, "data", "nf_unsw", "sample_demo.csv"),
-    "power_outage":    os.path.join(PROJECT_ROOT, "data", "power_data", "sample_demo.csv"),
-    "carrier_deck":    os.path.join(PROJECT_ROOT, "data", "carrier_sim", "sample_demo.csv"),
+    "net_attack_2024": str(DATA_ROOT / "nf_unsw" / "sample_demo.csv"),
+    "power_outage":    str(DATA_ROOT / "power_data" / "sample_demo.csv"),
+    "carrier_deck":    str(DATA_ROOT / "carrier_sim" / "sample_demo.csv"),
 }
 
 # 记录本次训练的模型路径，给推理调用

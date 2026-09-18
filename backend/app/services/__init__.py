@@ -1,58 +1,39 @@
-"""Service 层统一导出。
+"""Lazy public exports for the service layer.
 
-覆盖 ORM 全部 12 张表（backend/app/models/）：
-- 用户 AppUser（含 Role 常量）       → UserService
-- 场景 Scenario                       → ScenarioService
-- 数据集 Dataset（含版本管理）        → DatasetService
-- 算法 Algorithm                      → AlgorithmService
-- 模型版本 ModelVersion（状态机）     → ModelVersionService
-- 推理记录 InferenceRecord            → InferenceRecordService
-- 风险事件 RiskEvent                  → RiskEventService
-- 处置记录 HandlingRecord             → HandlingRecordService
-- 态势快照 SituationSnapshot          → SituationSnapshotService
-- 报告 Report（实验记录/报表）        → ReportService
-- 风险阈值 RiskThreshold              → RiskThresholdService
-- 阈值变更日志 ThresholdAuditLog      → ThresholdAuditLogService
-
-公共设施：ServiceBase / ServiceError / service_call（app.services.base）、
-ok / fail（app.schemas.common）、分页与校验（app.utils.common）。
-
-用法（FastAPI 依赖注入）：
-    from app.db import get_db
-    from app.services import UserService
-
-    @router.get("/users")
-    def list_users(db: Session = Depends(get_db)):
-        return UserService(db).get_list(current_user=...)
+Keeping imports lazy avoids loading every service when a module only needs one
+small shared helper such as ``risk_view``. The old package-level imports remain
+available through ``__getattr__`` for callers that use the public exports.
 """
-from app.services.base import ServiceBase, ServiceError, service_call
-from app.services.algorithm_service import AlgorithmService
-from app.services.dataset_service import DatasetService
-from app.services.handling_record_service import HandlingRecordService
-from app.services.inference_record_service import InferenceRecordService
-from app.services.model_version_service import ModelVersionService
-from app.services.report_service import ReportService
-from app.services.risk_event_service import RiskEventService
-from app.services.risk_threshold_service import RiskThresholdService
-from app.services.scenario_service import ScenarioService
-from app.services.situation_snapshot_service import SituationSnapshotService
-from app.services.threshold_audit_log_service import ThresholdAuditLogService
-from app.services.user_service import UserService
 
-__all__ = [
-    "ServiceBase",
-    "ServiceError",
-    "service_call",
-    "UserService",
-    "ScenarioService",
-    "DatasetService",
-    "AlgorithmService",
-    "ModelVersionService",
-    "InferenceRecordService",
-    "RiskEventService",
-    "HandlingRecordService",
-    "SituationSnapshotService",
-    "ReportService",
-    "RiskThresholdService",
-    "ThresholdAuditLogService",
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+    "ServiceBase": ("base", "ServiceBase"),
+    "ServiceError": ("base", "ServiceError"),
+    "service_call": ("base", "service_call"),
+    "UserService": ("user_service", "UserService"),
+    "ScenarioService": ("scenario_service", "ScenarioService"),
+    "DatasetService": ("dataset_service", "DatasetService"),
+    "AlgorithmService": ("algorithm_service", "AlgorithmService"),
+    "ModelVersionService": ("model_version_service", "ModelVersionService"),
+    "InferenceRecordService": ("inference_record_service", "InferenceRecordService"),
+    "RiskEventService": ("risk_event_service", "RiskEventService"),
+    "HandlingRecordService": ("handling_record_service", "HandlingRecordService"),
+    "SituationSnapshotService": ("situation_snapshot_service", "SituationSnapshotService"),
+    "ReportService": ("report_service", "ReportService"),
+    "RiskThresholdService": ("risk_threshold_service", "RiskThresholdService"),
+    "ThresholdAuditLogService": ("threshold_audit_log_service", "ThresholdAuditLogService"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    value = getattr(import_module(f"{__name__}.{module_name}"), attribute_name)
+    globals()[name] = value
+    return value

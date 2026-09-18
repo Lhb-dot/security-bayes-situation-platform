@@ -27,16 +27,12 @@ from app.models.risk_event import RiskEvent
 from app.models.risk_threshold import RiskThreshold
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
+from app.services import risk_view
 from app.services.constants import (
     DATASET_RISK_TYPES,
     DATASET_VISIBILITY_PLATFORM,
-    DEFAULT_HIGH_THRESHOLD,
-    DEFAULT_MEDIUM_THRESHOLD,
     RISK_EVENT_STATUS_PENDING,
     RISK_EVENT_STATUS_TRANSITIONS,
-    RISK_LEVEL_HIGH,
-    RISK_LEVEL_LOW,
-    RISK_LEVEL_MEDIUM,
     RISK_TYPE_FLIGHT_DECK,
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
@@ -87,18 +83,13 @@ class RiskEventService(ServiceBase):
 
     @staticmethod
     def _calc_risk_level(risk_score: float, medium: float, high: float) -> str:
-        """需求 5.4 风险等级生成规则：
+        """需求 5.4 风险等级生成规则（实现统一收敛到 risk_view.classify）：
         risk_score >= high → HIGH；medium <= risk_score < high → MEDIUM；risk_score < medium → LOW。
         """
-        score = float(risk_score)
-        if score >= float(high):
-            return RISK_LEVEL_HIGH
-        if score >= float(medium):
-            return RISK_LEVEL_MEDIUM
-        return RISK_LEVEL_LOW
+        return risk_view.classify(risk_score, medium, high)
 
     def _get_thresholds(self, user_id: int, scenario_id: int):
-        """获取当前推理账号在场景下的阈值。
+        """获取指定账号在场景下的阈值。
 
         需求 5.4.1.6：本文不把未经验证的具体数值写成正式默认阈值；阈值应通过
         risk_threshold 配置提供。此处缺失时仅用兜底值并记录 warning，提示尽快配置。
@@ -110,11 +101,12 @@ class RiskEventService(ServiceBase):
             )
         )
         if threshold is None:
+            medium, high = risk_view.thresholds_for({}, scenario_id)
             logger.warning(
                 "账号 %s 在场景 %s 未配置风险阈值，使用兜底值 medium=%s high=%s",
-                user_id, scenario_id, DEFAULT_MEDIUM_THRESHOLD, DEFAULT_HIGH_THRESHOLD,
+                user_id, scenario_id, medium, high,
             )
-            return float(DEFAULT_MEDIUM_THRESHOLD), float(DEFAULT_HIGH_THRESHOLD)
+            return medium, high
         return float(threshold.medium_threshold), float(threshold.high_threshold)
 
     @staticmethod
@@ -154,7 +146,6 @@ class RiskEventService(ServiceBase):
         prediction_label: str,
         input_features: Dict,
         risk_score: float,
-        risk_level: str,
     ) -> str:
         """生成风险事件解释文本（需求 V3.0 §5.7.2：结合场景特征生成有信息量的说明）。
 
@@ -169,7 +160,9 @@ class RiskEventService(ServiceBase):
             v = feats.get(name)
             return None if v in (None, "", "?") else v
 
-        head = f"（风险评分：{risk_score}，风险等级：{risk_level}）"
+        # 只记分数，不记等级：等级是**视角相关**的（按查看者阈值重算），
+        # 写进历史正文会与查看者当前看到的等级自相矛盾。
+        head = f"（风险评分：{risk_score}）"
 
         if risk_type == RISK_TYPE_POWER:
             # §5.7.2 电力：受影响设备/所属系统/问题现象(IssueType)/当前电压
@@ -321,7 +314,6 @@ class RiskEventService(ServiceBase):
                 record.prediction_label,
                 record.input_features,
                 float(risk_score),
-                risk_level,
             ),
             fault_position_x=pos_x,
             fault_position_y=pos_y,
@@ -374,15 +366,21 @@ class RiskEventService(ServiceBase):
             stmt = stmt.where(RiskEvent.status == status)
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [row_to_dict(e) for e in result["items"]]
+        # risk_level 按**查看者**的阈值重算：落库值是创建者视角，不能直接透传。
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        result["items"] = risk_view.view_events(result["items"], thresholds)
         return ok(data=result)
 
     @service_call
     def get(self, current_user, event_id: int):
-        """风险事件详情（按角色与数据边界校验）。"""
+        """风险事件详情（按角色与数据边界校验）。
+
+        risk_level 按**查看者**的阈值重算（同 list）。
+        """
         event = self._get(event_id)
         self._require_event_access(current_user, event)
-        return ok(data=row_to_dict(event))
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        return ok(data=risk_view.view_of(event, thresholds))
 
     # ------------------------------------------------------------------
     # 处置状态流转（需求 5.2：新事件默认"待处置"，可变为"处理中"或"已处置"）

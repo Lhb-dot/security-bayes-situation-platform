@@ -219,7 +219,7 @@ onMounted(loadData);
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">可解释性文本</h3>
         <p class="event-detail__explain">{{ event.description }}</p>
-        <p class="event-detail__hint">解释文本在事件生成时固化存储（需求 5.7.3.1），不随阈值修改重算（需求 5.7.3.4）。</p>
+        <p class="event-detail__hint">解释文本在事件生成时固化存储，不随阈值修改重算。</p>
       </section>
 
       <!-- 处置操作 -->
@@ -230,7 +230,7 @@ onMounted(loadData);
           <el-button v-if="nextStatus" type="primary" @click="handleStatusChange">
             流转至「{{ nextStatus }}」
           </el-button>
-          <el-tag v-else type="success" effect="dark">已处置（终态）</el-tag>
+          <el-tag v-else type="success" effect="dark">已处置</el-tag>
         </div>
       </section>
     </template>

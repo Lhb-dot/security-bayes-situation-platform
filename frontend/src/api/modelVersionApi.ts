@@ -5,7 +5,7 @@
  * 权限边界由后端强制（需求 6.7/6.5.2）：训练/发布/禁用/删除/默认推荐仅管理员。
  */
 import request, { unwrapData } from '@/utils/request';
-import type { ModelStatus, ScenarioId } from '@/types/security';
+import type { EvaluationMetrics, ModelStatus, ScenarioId } from '@/types/security';
 
 /** /api/v1/model-versions 返回的数据库模型行。 */
 export interface BackendModelVersion {
@@ -16,12 +16,14 @@ export interface BackendModelVersion {
   scenario_name?: string | null;
   dataset_id: number;
   dataset_logical_id?: string | null;
+  /** 面向用户的中文展示名，展示优先用它 */
+  dataset_name?: string | null;
   dataset_version?: number | null;
   algorithm_id: number;
   algorithm_code?: string | null;
   algorithm_name?: string | null;
   training_parameters: Record<string, unknown>;
-  evaluation_metrics: Record<string, number | string>;
+  evaluation_metrics: EvaluationMetrics;
   trained_by: number;
   trained_by_name?: string | null;
   trained_at: string;
@@ -30,6 +32,8 @@ export interface BackendModelVersion {
   published_by_name?: string | null;
   published_at?: string | null;
   is_default: boolean;
+  model_evaluation_available?: boolean;
+  model_attributes?: Record<string, unknown>;
 }
 
 /** 模型版本列表（GET /model-versions，普通用户仅见 PUBLISHED） */

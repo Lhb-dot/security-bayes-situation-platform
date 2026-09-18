@@ -6,6 +6,8 @@
  * 操作：查看、下载、重新生成
  */
 import { computed, onMounted, ref } from 'vue';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import type { Report, ReportData, ScenarioId, UserAccount } from '@/types/security';
 import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
@@ -243,6 +245,9 @@ const viewReportData = computed<ReportData | undefined>(() => {
 
 const pctText = (v: number | null | undefined): string => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
 
+const safeReportMarkdown = (value: string | null | undefined) =>
+  value ? DOMPurify.sanitize(marked.parse(value, { async: false }) as string) : '';
+
 /** 态势核心指标卡 */
 const overviewMetrics = computed(() => {
   const o = viewReportData.value?.overview;
@@ -315,11 +320,6 @@ const trendRows = computed(() => viewReportData.value?.trend ?? []);
 
 /** 重点风险事件 */
 const keyEvents = computed(() => viewReportData.value?.key_events ?? []);
-
-const riskLevelLabel = (level: string | null | undefined): string => {
-  if (!level) return '';
-  return ({ HIGH: '高危', MEDIUM: '中危', LOW: '低危' } as Record<string, string>)[level] ?? level;
-};
 
 onMounted(async () => {
   if (!userStore.initialized) await userStore.bootstrap();
@@ -558,7 +558,7 @@ onMounted(async () => {
           <h3 class="report-section__title">不同视图预测结果与概率</h3>
           <div v-for="m in multiViewModels" :key="m.model_version_id" class="model-block">
             <p class="report-section__hint">
-              <b>{{ m.algorithm_name ?? m.algorithm_code }}</b>（模型 {{ m.model_version_id }}）
+              <b>{{ m.algorithm_name ?? m.algorithm_code }}</b>
               · 推理 {{ m.inference_count }} 条 / 风险 {{ m.risk_count }} 条
               <template v-if="m.view_weights.length">
                 · 视图权重：{{ m.view_weights.map((w) => w.toFixed(2)).join(' / ') }}
@@ -566,6 +566,7 @@ onMounted(async () => {
             </p>
             <div v-if="viewChartFor(m)" class="chart-box">
               <BarChart
+                :data="(viewChartFor(m)?.categories ?? []).map((name) => ({ name, score: 0 }))"
                 :categories="viewChartFor(m)?.categories ?? []"
                 :series="viewChartFor(m)?.series ?? []"
                 height="220px"
@@ -587,11 +588,31 @@ onMounted(async () => {
           </p>
         </section>
 
+        <!-- 模型评价来自报告生成时保存的模型快照，不重新调用 AI。 -->
+        <section v-if="viewReportData.model_evaluations?.length" class="report-section">
+          <h3 class="report-section__title">模型版本评价</h3>
+          <div
+            v-for="evaluation in viewReportData.model_evaluations"
+            :key="evaluation.model_version_id"
+            class="model-evaluation-report-block"
+          >
+            <p class="report-section__hint">
+              <b>{{ evaluation.algorithm_name ?? evaluation.algorithm_code ?? '模型' }}</b>
+              · {{ evaluation.available ? (evaluation.source === 'ai' ? 'AI 评价' : '规则回退') : '暂无已保存评价' }}
+            </p>
+            <div
+              v-if="evaluation.markdown"
+              class="report-nl model-evaluation-report-markdown"
+              v-html="safeReportMarkdown(evaluation.markdown)"
+            ></div>
+          </div>
+        </section>
+
         <!-- 五、特征加权条件概率 -->
         <section v-if="topFeatures.length" class="report-section">
-          <h3 class="report-section__title">特征加权条件概率（Top {{ topFeatures.length }}）</h3>
+          <h3 class="report-section__title">特征加权条件概率（前 {{ topFeatures.length }} 项）</h3>
           <p v-if="viewReportData.feature_analysis.calculation_method" class="report-section__hint">
-            口径：{{ viewReportData.feature_analysis.calculation_method }}
+            计算方式：{{ viewReportData.feature_analysis.calculation_method }}
           </p>
           <table class="mini-table">
             <thead><tr><th>#</th><th>特征值</th><th>所属视图</th><th>权重</th><th>支持方向</th></tr></thead>
@@ -1102,6 +1123,20 @@ onMounted(async () => {
 
 .report-nl--guidance {
   color: #cfe2ff;
+}
+
+.model-evaluation-report-block {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-left: 2px solid rgba(83, 229, 200, 0.35);
+  background: rgba(8, 17, 31, 0.28);
+}
+
+.model-evaluation-report-markdown :deep(h1),
+.model-evaluation-report-markdown :deep(h2),
+.model-evaluation-report-markdown :deep(h3) {
+  margin: 10px 0 6px;
+  font-size: 0.95rem;
 }
 
 /* 6.10.3 报告可视化补充样式 */

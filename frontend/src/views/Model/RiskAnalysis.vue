@@ -43,6 +43,7 @@ const selectedScenario = ref<number | ''>('');
 interface DbDataset {
   id: number;
   logical_id: string;
+  name: string;
   version: number;
   status: string;
   file_path: string;
@@ -145,7 +146,6 @@ const stopTrainingTimer = () => {
 
 const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
 const isRealTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('java_'));
-const isMockTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('mock'));
 
 /** 百分比指标展示：缺字段（如 PMWNB 无 specificity/g_mean）显示 — */
 const metricText = (key: string) => {
@@ -158,7 +158,7 @@ const trainTimeText = () => {
 };
 const datasetText = () => {
   const ds = datasetList.value.find((d) => d.id === trainResult.value?.dataset_id);
-  return ds ? `${ds.logical_id}（v${ds.version}）` : String(trainResult.value?.dataset_id);
+  return ds ? `${ds.name}（v${ds.version}）` : String(trainResult.value?.dataset_id);
 };
 
 // ===================== 场景切换 → 加载数据集 =====================
@@ -227,7 +227,7 @@ const handleTrain = async () => {
       training_parameters: row.training_parameters ?? {},
     };
     const done = row.status === 'DRAFT';
-    ElMessage.success(done ? '训练完成，已生成 DRAFT 模型版本，请在模型中心审核发布' : `训练状态：${row.status}`);
+    ElMessage.success(done ? '训练完成，已生成待发布模型版本，请在模型中心审核发布' : `训练状态：${row.status}`);
   } catch (err) {
     const e = err as { response?: { data?: { message?: string } }; message?: string };
     ElMessage.error(e.response?.data?.message || e.message || '模型训练失败');
@@ -265,7 +265,7 @@ onMounted(async () => {
     }));
   } catch (err) {
     const e = err as { response?: { data?: { message?: string } }; message?: string };
-    ElMessage.warning(`加载算法/场景数据失败：${e.response?.data?.message || e.message || '请确认后端已启动'}`);
+    ElMessage.warning(`加载算法/场景数据失败：${e.response?.data?.message || e.message || '请稍后重试'}`);
   }
   // 默认选中第一个 ACTUAL 场景与第一个可用算法
   if (scenarioOptions.value.length) {
@@ -288,7 +288,7 @@ onBeforeUnmount(() => {
         <p class="eyebrow">Model Training</p>
         <h2>模型训练</h2>
         <p class="page-header__desc">
-          选择场景、数据集版本和算法 → 配置训练参数 → 启动训练生成 DRAFT 模型
+          选择业务场景、数据集与算法，配置训练参数后启动训练
         </p>
       </div>
     </div>
@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
 
         <!-- 业务场景（数据库注册）：系统管理员可选全部；管理员场景已固定（账号绑定），直接选数据集 -->
         <div v-if="currentUser?.role !== 'SCENARIO_ADMIN'" class="form-group">
-          <label class="form-label">业务场景（需求 1.1.2：训练前必须先确定场景）</label>
+          <label class="form-label">业务场景</label>
           <!-- 系统管理员（或用户信息未加载时兜底）：显示全部场景可选 -->
           <div class="scenario-tabs">
             <button
@@ -327,13 +327,13 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <p v-if="!scenarioOptions.length" class="form-hint form-hint--muted">
-            暂无可训练场景（请确认后端已启动且数据库已初始化）
+            暂无可训练场景
           </p>
         </div>
 
         <!-- 数据集版本（数据库） -->
         <div class="form-group">
-          <label class="form-label">数据集（版本）</label>
+          <label class="form-label">数据集</label>
           <select
             v-model="selectedDatasetId"
             class="form-select"
@@ -346,10 +346,9 @@ onBeforeUnmount(() => {
               :key="ds.id"
               :value="ds.id"
             >
-              {{ ds.logical_id }}（v{{ ds.version }} · {{ ds.fields_schema?.length ?? 0 }} 字段）{{ ds.status === 'ACTIVE' ? '' : '【已停用】' }}
+              {{ ds.name }}（v{{ ds.version }} · {{ ds.fields_schema?.length ?? 0 }} 字段）{{ ds.status === 'ACTIVE' ? '' : '【已停用】' }}
             </option>
           </select>
-          <p class="form-hint form-hint--muted">仅展示当前场景下已注册的数据集版本；已停用版本不能用于训练</p>
         </div>
 
         <!-- 算法（需求 6.6.1 五种算法注册） -->
@@ -365,12 +364,11 @@ onBeforeUnmount(() => {
               {{ a.display_name }}
             </option>
           </select>
-          <p v-if="currentAlgo" class="form-hint">{{ currentAlgo.description }}</p>
         </div>
 
         <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成） -->
         <div v-if="currentAlgo" class="form-group">
-          <label class="form-label">训练参数（提供默认值，可修改，须通过类型与范围校验）</label>
+          <label class="form-label">训练参数</label>
           <div v-if="currentAlgo.params.length" class="param-list">
             <div
               v-for="p in currentAlgo.params"
@@ -378,8 +376,7 @@ onBeforeUnmount(() => {
               class="param-item"
             >
               <div class="param-item__head">
-                <span class="param-item__label">{{ p.label }}（{{ p.param_name }}）</span>
-                <span class="param-item__desc">{{ p.description }}</span>
+                <span class="param-item__label">{{ p.label }}</span>
               </div>
               <select
                 v-if="p.type === 'select'"
@@ -409,7 +406,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <p v-else class="form-hint">
-            当前算法没有注册可公开调整的训练参数，使用 Java/Weka 实现的内置默认配置训练。
+            当前算法没有可调整的训练参数，将使用内置默认配置训练。
           </p>
         </div>
 
@@ -439,8 +436,8 @@ onBeforeUnmount(() => {
           <p>
             {{
               training
-              ? '正在执行真实 Java/Weka 算法训练，大样本数据集可能需要数十秒。'
-                : '完成左侧配置后启动训练。训练成功的模型将进入 DRAFT 状态，可在模型中心审核发布。'
+              ? '正在执行模型训练，大样本数据集可能需要数十秒。'
+                : '完成左侧配置后启动训练。训练成功的模型将进入待发布状态，可在模型中心审核发布。'
             }}
           </p>
         </div>
@@ -449,11 +446,7 @@ onBeforeUnmount(() => {
           <div class="result-model-id">
             <span class="result-model-id__label">模型版本</span>
             <span class="result-model-id__value">{{ trainResult.model_version_id }}</span>
-            <span class="result-model-id__status">
-            <template v-if="isRealTrain">真实训练（Java/Weka）</template>
-              <template v-else-if="isMockTrain">占位训练（模拟数据）</template>
-              <template v-else>DRAFT（待发布）</template>
-            </span>
+            <span class="result-model-id__status">待发布</span>
           </div>
 
           <div class="train-metrics">
@@ -496,19 +489,9 @@ onBeforeUnmount(() => {
             <div class="result-detail__row">
               <span>训练耗时</span><strong>{{ trainTimeText() }}</strong>
             </div>
-            <template v-if="isRealTrain">
-              <div class="result-detail__row">
-                <span>训练样本 / 特征 / 类别</span><strong>{{ trainMetrics.num_instances }} / {{ trainMetrics.num_attributes }} / {{ trainMetrics.num_classes }}</strong>
-              </div>
-              <div class="result-detail__row">
-                <span>模型文件</span><strong class="result-detail__mono">{{ trainMetrics.model_saved_to }}</strong>
-              </div>
-            </template>
-            <template v-else-if="isMockTrain">
-              <div class="result-detail__row">
-                <span>提示</span><strong>算法实现待算法组交付，当前为模拟占位指标</strong>
-              </div>
-            </template>
+            <div v-if="isRealTrain" class="result-detail__row">
+              <span>训练样本 / 特征 / 类别</span><strong>{{ trainMetrics.num_instances }} / {{ trainMetrics.num_attributes }} / {{ trainMetrics.num_classes }}</strong>
+            </div>
           </div>
 
           <button class="train-btn train-btn--ghost" @click="goModelCenter">前往模型中心发布</button>
@@ -687,12 +670,6 @@ onBeforeUnmount(() => {
   font-size: 0.85rem;
   color: #d9e8ff;
   font-weight: 600;
-}
-
-.param-item__desc {
-  font-size: 0.74rem;
-  color: rgba(220, 234, 255, 0.45);
-  text-align: right;
 }
 
 .param-item__range {

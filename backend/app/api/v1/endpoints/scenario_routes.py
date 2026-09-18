@@ -12,9 +12,12 @@ from app.api.deps import get_current_user, require_admin, require_bound_scenario
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
-from app.schemas.common import ResponseModel
+from app.models.scenario import Scenario
+from app.schemas.common import ResponseModel, ok
 from app.schemas.scenario import ScenarioCreate, ScenarioUpdate
 from app.services.scenario_service import ScenarioService
+from app.services.explanation_service import get_scenario_config
+from app.services.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/scenarios", tags=["场景管理"])
 
@@ -30,6 +33,23 @@ def list_scenarios(
 
 
 @router.get(
+    "/overview",
+    response_model=ResponseModel,
+    summary="场景中心卡片（真实数据集 / 已发布模型 / 有效样本量）",
+)
+def scenario_overview(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """场景中心列表页卡片数据。
+
+    ⚠️ 必须声明在 `/{scenario_id}` 之前：FastAPI 按声明顺序匹配，
+    否则字面量 "overview" 会先命中 `/{scenario_id}` 并被解析为 int 而报 422。
+    """
+    return unwrap(DashboardService(db).get_scenario_overview(current_user))
+
+
+@router.get(
     "/{scenario_id}", response_model=ResponseModel, summary="场景详情（绑定场景校验）"
 )
 def get_scenario(
@@ -40,6 +60,24 @@ def get_scenario(
     return unwrap(
         ScenarioService(db).get(current_user=current_user, scenario_id=scenario_id)
     )
+
+
+@router.get(
+    "/{scenario_id}/explanation-config",
+    response_model=ResponseModel,
+    summary="读取场景化模型解释配置",
+)
+def get_explanation_config(
+    scenario_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_bound_scenario),
+):
+    scenario = db.get(Scenario, scenario_id)
+    if scenario is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="场景不存在")
+    return ok(data=get_scenario_config(scenario.code))
 
 
 @router.get(

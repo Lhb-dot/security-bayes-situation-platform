@@ -25,68 +25,6 @@ export interface RankingItem {
   score: number;
 }
 
-export interface MapPoint {
-  id: string;
-  label: string;
-  value: string;
-  x: number;
-  y: number;
-  delay: number;
-  dx?: number;
-  dy?: number;
-}
-
-export interface AttackFlow {
-  id: string;
-  source: string;
-  sourceIp: string;
-  target: string;
-  attackType: string;
-  severity: AlertRecord['riskLevel'];
-  count: number;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-export interface ThreatMapData {
-  scope: 'china' | 'world';
-  title: string;
-  subtitle: string;
-  focusLabel: string;
-  focusX: number;
-  focusY: number;
-  points: MapPoint[];
-  flows: AttackFlow[];
-}
-
-export interface TimelineEvent {
-  stage: string;
-  time: string;
-  description: string;
-}
-
-export interface AlertRecord {
-  id: string;
-  title: string;
-  attackType: string;
-  sourceIp: string;
-  targetHost: string;
-  riskLevel: 'CRITICAL' | 'HIGH' | 'MEDIUM';
-  status: '待研判' | '处理中' | '已隔离';
-  confidence: number;
-  timestamp: string;
-  aiAnalysis: string;
-  rawLog: string;
-  recommendations: string[];
-  timeline: TimelineEvent[];
-  // ========== 新增：贝叶斯模型输入流量特征字段 ==========
-  flowLength: number; // 流量总长度，采集后端生成
-  duration: number; // 流量持续时长
-  accessFreq: number; // 单位时间访问频次
-}
-
 export interface MetricItem {
   id: string;
   label: string;
@@ -94,30 +32,7 @@ export interface MetricItem {
   trend: number;
 }
 
-export interface MetricHistory {
-  id: string;
-  label: string;
-  unit: string;
-  insight: string;
-  points: HistoryPoint[];
-}
-
-export interface DashboardSnapshot {
-  metrics: MetricItem[];
-  metricHistories: MetricHistory[];
-  attackTrend: TrendPoint[];
-  attackTypes: TypeDistribution[];
-  topSourceIps: RankingItem[];
-  topTargetHosts: RankingItem[];
-  protocolDistribution: TypeDistribution[];
-  responseActions: RankingItem[];
-  sourceMap: {
-    china: ThreatMapData;
-    world: ThreatMapData;
-  };
-}
-
-// ===================== 多场景架构新增类型（不修改以上已有类型） =====================
+// ===================== 多场景架构类型 =====================
 
 /** 四场景标识（V3.0：新增地质风险场景） */
 export type ScenarioId = 'network_security' | 'power_system' | 'geological_risk' | 'flightdeck_operation';
@@ -133,16 +48,11 @@ export interface Scenario {
   high_risk_count: number;
   dataset_count: number;
   model_count: number;
+  /** 去重口径有效样本量（GET /scenarios/overview 提供） */
+  sample_count?: number;
+  /** 已发布（status=PUBLISHED）模型版本数（GET /scenarios/overview 提供） */
+  published_model_count?: number;
   status: 'active' | 'inactive';
-}
-
-/** 场景详情（含态势指标） */
-export interface ScenarioDetail {
-  scenario: Scenario;
-  metrics: MetricItem[];
-  trend_data: TrendPoint[];
-  risk_distribution: TypeDistribution[];
-  recent_events: RiskEvent[];
 }
 
 /** 全局态势总览 */
@@ -172,6 +82,8 @@ export interface DatasetField {
 export interface Dataset {
   dataset_id: string;
   name: string;
+  /** 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列展示它。 */
+  file_name?: string;
   description: string;
   scenario_id: ScenarioId;
   record_count: number;
@@ -205,50 +117,22 @@ export interface DatasetVersion {
   referenced: boolean;          // 是否被模型版本引用
 }
 
-/** 模型版本记录（需求 6.7.1 最小信息） */
-export interface ModelVersion {
-  model_id: string;
-  scenario_id: ScenarioId;
-  dataset_name: string;
-  algo_type: string;
-  discrete_method: string;
-  accuracy: number;
-  f1: number;
-  recall: number;
-  g_mean: number;
-  train_time_s: number;
-  created_at: string;
-}
-
 /** 模型生命周期状态（需求 6.7.2） */
 export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {
-  accuracy: number;
-  recall: number;
-  precision: number;
-  specificity: number;
-  f1: number;
-  g_mean: number;
-}
-
-/** 模型版本（v2.0 生命周期模型，需求 6.7.1） */
-export interface ModelVersionRecord {
-  model_version_id: string;
-  scenario_id: ScenarioId;
-  dataset_id: string;
-  dataset_version: string;
-  algorithm_id: string;
-  training_parameters: Record<string, unknown>;
-  evaluation_metrics: EvaluationMetrics;
-  train_time_s: number;
-  trained_by: string;          // 发起训练的管理员账号
-  trained_at: string;
-  status: ModelStatus;
-  published_by?: string;       // 发布操作管理员
-  published_at?: string;
-  is_default: boolean;         // 是否为"场景＋数据集"默认推荐模型
+  accuracy?: number | null;
+  recall?: number | null;
+  precision?: number | null;
+  specificity?: number | null;
+  f1?: number | null;
+  g_mean?: number | null;
+  risk_recall?: number | null;
+  risk_f1?: number | null;
+  cv_mean?: number | null;
+  cv_std?: number | null;
+  quality_availability?: Record<string, { available: boolean; reason: string | null }>;
 }
 
 /** 风险等级（大写枚举：风险事件/推理记录使用；历史大小写双轨，统一走 toRiskLevel 转换） */
@@ -332,12 +216,43 @@ export interface FeatureEvidence {
 
 /** 算法可解释性信息（Java /predict 返回，落库 explain_data） */
 export interface InferenceExplain {
-  prediction_label: string;
-  probability: number | null;
-  class_distribution: ClassProb[];
-  views: ViewDistribution[];
-  view_weights: number[];
-  feature_evidence: FeatureEvidence[];
+  contract_version?: string;
+  prediction?: string;
+  prediction_is_risk?: boolean;
+  risk_probability?: number | null;
+  risk_threshold?: number | null;
+  confidence?: string;
+  top_features?: Array<{
+    feature_name: string;
+    display_name?: string;
+    raw_value: unknown;
+    processed_value?: unknown;
+    contribution?: number;
+    direction: string;
+    rank: number;
+    meaning?: string;
+    risk_description?: string;
+    recommended_action?: string;
+  }>;
+  conflict?: { has_conflict: boolean; description: string };
+  scenario?: Record<string, unknown>;
+  recommended_actions?: string[];
+  algorithm_details?: Record<string, unknown>;
+  input_snapshot?: Record<string, unknown>;
+  model_quality?: {
+    risk_recall?: number | null;
+    risk_f1?: number | null;
+    cv_mean?: number | null;
+    cv_std?: number | null;
+    availability?: Record<string, { available: boolean; reason: string | null }>;
+  };
+  /** Legacy fields retained for report compatibility. */
+  prediction_label?: string;
+  probability?: number | null;
+  class_distribution?: ClassProb[];
+  views?: ViewDistribution[];
+  view_weights?: number[];
+  feature_evidence?: FeatureEvidence[];
 }
 
 /** 报告单个特征的加权条件概率信息 */
@@ -403,6 +318,15 @@ export interface ReportData {
     view_weights: number[];
     calculation_method: string | null;
     has_views: boolean;
+  }>;
+  model_evaluations?: Array<{
+    model_version_id: number;
+    algorithm_code: string | null;
+    algorithm_name: string | null;
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
   }>;
   feature_analysis: {
     calculation_method: string | null;
@@ -474,20 +398,6 @@ export interface UserAccount {
   scenario_ids?: ScenarioId[];
 }
 
-/** Platform account statistics (SUPER_ADMIN overview) */
-export interface PlatformUserStats {
-  total: number;
-  super_admins: number;
-  scenario_admins: number;
-  scenario_users: number;
-  disabled: number;
-  by_scenario: {
-    scenario_id: ScenarioId;
-    name: string;
-    user_count: number;
-  }[];
-}
-
 // ===================== v2.0 算法注册（需求 6.6） =====================
 
 /** 算法公开训练参数定义 */
@@ -531,6 +441,12 @@ export interface InferenceRecord {
   risk_score: number;                                     // 模型对风险类的输出概率
   is_risk: boolean;                                       // 是否为风险类
   occurred_at: string;
+  model_evaluation?: {
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
+  };
 }
 
 // ===================== v2.0 风险阈值配置（需求 5.4.1） =====================
@@ -620,4 +536,3 @@ export interface ScenarioDashboardData {
   recent_events: RiskEvent[];             // 风险事件列表/时间线
   charts: ScenarioDashboardCharts;        // 场景特有图表数据
 }
-

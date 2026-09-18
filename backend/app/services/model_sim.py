@@ -6,24 +6,20 @@ Java PMWNB 服务默认运行在 http://127.0.0.1:12313
 """
 import os
 import requests
+from app.paths import BACKEND_ROOT as BACKEND_ROOT_PATH, DATA_ROOT, PROJECT_ROOT as PROJECT_ROOT_PATH
 from app.algorithms.pmwnb_demo import global_threshold
+from app.services.algorithm_config import PMWNB_SERVICE_URL, TRAINED_MODEL_DIR
 
-# Java PMWNB 服务地址
-PMWNB_SERVICE_URL = os.getenv("PMWNB_SERVICE_URL", "http://127.0.0.1:12313")
-
-# 项目根目录与后端根目录
-BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # backend/
-PROJECT_ROOT = os.path.dirname(BACKEND_ROOT)                                 # security-bayes-platform/
+# 保留字符串导出，旧兼容接口和脚本可继续使用。
+BACKEND_ROOT = str(BACKEND_ROOT_PATH)
+PROJECT_ROOT = str(PROJECT_ROOT_PATH)
 
 # 数据集路径映射（指向根目录 data/，与 pmwnb_demo.py 一致）
 DATASET_PATH_MAP = {
-    "net_attack_2024": os.path.join(PROJECT_ROOT, "data", "nf_unsw", "sample_demo.csv"),
-    "power_outage":    os.path.join(PROJECT_ROOT, "data", "power_data", "sample_demo.csv"),
-    "carrier_deck":    os.path.join(PROJECT_ROOT, "data", "carrier_sim", "sample_demo.csv"),
+    "net_attack_2024": str(DATA_ROOT / "nf_unsw" / "sample_demo.csv"),
+    "power_outage":    str(DATA_ROOT / "power_data" / "sample_demo.csv"),
+    "carrier_deck":    str(DATA_ROOT / "carrier_sim" / "sample_demo.csv"),
 }
-
-# 模型保存目录
-TRAINED_MODEL_DIR = os.path.join(BACKEND_ROOT, "storage", "models")
 os.makedirs(TRAINED_MODEL_DIR, exist_ok=True)
 
 # ===================== 接口函数（供 server.py 调用） =====================

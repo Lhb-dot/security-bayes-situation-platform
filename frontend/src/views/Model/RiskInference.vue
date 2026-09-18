@@ -6,18 +6,20 @@
  * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
  * （carrier 279 字段按字段族分组折叠）→ 执行单条样本推理 → 风险类结果可跳风险事件详情
  *
- * 数据链路：页面 → scenarioStore / datasetStore / modelStore / inferenceStore（不直连 mockApi）。
+ * 数据链路：页面 → scenarioStore / datasetStore / inferenceStore（不直连服务实现）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
+import { marked } from 'marked';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
 import { getScenarioList } from '@/api/scenarioApi';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
-import type { PredictResult } from '@/api/inferenceRecordApi';
+import { streamInferenceExplanation, type PredictResult } from '@/api/inferenceRecordApi';
 
 const router = useRouter();
 const route = useRoute();
@@ -33,6 +35,7 @@ const modelVersions = ref<BackendModelVersion[]>([]);
 
 /** 需求 6.5.2/6.2：系统管理员用 tabs 切场景；管理员/用户场景固定（账号绑定，自动确定） */
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
+const isManager = computed(() => ['SUPER_ADMIN', 'SCENARIO_ADMIN'].includes(userStore.currentUser?.role ?? ''));
 
 /** 场景选项：普通用户=感兴趣的场景（设置页自选），管理员=全部场景 */
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
@@ -64,6 +67,27 @@ const inputData = ref<Record<string, string | number>>({});
 const inferResult = ref<PredictResult | null>(null);
 const hasInferred = ref(false);
 const inferring = ref(false);
+const explanationMarkdown = ref('');
+const explanationLoading = ref(false);
+const explanationError = ref('');
+const explanationFallback = ref(false);
+const explanationStatus = ref<'idle' | 'generating' | 'completed' | 'failed' | 'fallback' | 'stopped'>('idle');
+let explanationController: AbortController | null = null;
+
+const safeExplanationHtml = computed(() => {
+  if (!explanationMarkdown.value) return '';
+  return DOMPurify.sanitize(marked.parse(explanationMarkdown.value, { async: false }) as string);
+});
+
+const adminExplanationJson = computed(() => {
+  const explanation = inferResult.value?.explain_data;
+  if (!explanation) return '';
+  return JSON.stringify({
+    model_quality: explanation.model_quality,
+    algorithm_details: explanation.algorithm_details,
+    input_snapshot: explanation.input_snapshot,
+  }, null, 2);
+});
 
 const selectedModel = computed(() => publishedModels.value.find((m) => String(m.model_version_id) === String(selectedModelId.value)));
 
@@ -243,6 +267,7 @@ const handleInfer = async () => {
     });
     inferResult.value = result;
     hasInferred.value = true;
+    void generateExplanation(result);
     if (result.is_risk_event) {
       ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}，可在「推理记录 / 告警中心」查看`);
     }
@@ -251,6 +276,64 @@ const handleInfer = async () => {
   } finally {
     inferring.value = false;
   }
+};
+
+const generateExplanation = async (result: PredictResult) => {
+  explanationController?.abort();
+  explanationController = new AbortController();
+  explanationMarkdown.value = '';
+  explanationError.value = '';
+  explanationFallback.value = false;
+  explanationLoading.value = true;
+  explanationStatus.value = 'generating';
+  const explanation = result.explain_data ?? {};
+  const scenario = scenarios.value.find((item) => item.code === selectedScenario.value);
+  try {
+    await streamInferenceExplanation(
+      {
+        scenario: {
+          code: selectedScenario.value,
+          scenario_code: selectedScenario.value,
+          name: scenario?.name,
+        },
+        sample: { ...inputData.value },
+        model_result: { ...explanation, prediction_label: result.prediction_label },
+        algorithm_details: explanation.algorithm_details ?? {},
+        recommended_actions: explanation.recommended_actions ?? [],
+        inference_record_id: result.id,
+        model_version_id: result.model_version_id,
+      },
+      {
+        onStart: () => { explanationStatus.value = 'generating'; },
+        onDelta: (content) => { explanationMarkdown.value += content; },
+        onError: (message) => {
+          explanationError.value = message;
+          explanationFallback.value = true;
+          explanationStatus.value = 'fallback';
+        },
+        onDone: (data) => {
+          explanationLoading.value = false;
+          explanationStatus.value = data.source === 'fallback' ? 'fallback' : 'completed';
+        },
+      },
+      explanationController.signal,
+    );
+  } catch (err) {
+    if ((err as Error)?.name !== 'AbortError') {
+      explanationError.value = err instanceof Error ? err.message : 'AI 分析请求失败';
+      explanationFallback.value = true;
+      explanationStatus.value = 'failed';
+    }
+  } finally {
+    explanationLoading.value = false;
+  }
+};
+
+const stopExplanation = () => {
+  explanationController?.abort();
+  explanationController = null;
+  explanationLoading.value = false;
+  explanationStatus.value = 'stopped';
 };
 
 /** 推理结果 → 风险事件详情（Task 012 /events/:id） */
@@ -465,10 +548,22 @@ onMounted(async () => {
               {{ inferResult.risk_level === 'HIGH' ? '高' : inferResult.risk_level === 'MEDIUM' ? '中' : '低' }}
             </span>
           </div>
-          <div v-if="inferResult.is_risk_event" class="result-item">
+          <div v-if="inferResult.explain_data?.risk_probability != null || inferResult.risk_score != null" class="result-item">
             <span class="result-item__label">风险概率</span>
             <span class="result-item__value result-item__value--num">
-              {{ ((inferResult.risk_score ?? 0) * 100).toFixed(1) }}%
+              {{ ((inferResult.explain_data?.risk_probability ?? inferResult.risk_score ?? 0) * 100).toFixed(1) }}%
+            </span>
+          </div>
+          <div v-if="inferResult.explain_data?.confidence" class="result-item">
+            <span class="result-item__label">判断置信度</span>
+            <span class="result-item__value">{{ inferResult.explain_data.confidence }}</span>
+          </div>
+          <div v-if="inferResult.explain_data?.top_features?.length" class="result-item result-item--features">
+            <span class="result-item__label">主要影响字段</span>
+            <span class="result-item__value result-item__value--features">
+              <span v-for="feature in inferResult.explain_data.top_features.slice(0, 3)" :key="feature.feature_name">
+                {{ feature.display_name || feature.feature_name }}={{ feature.raw_value }}（{{ feature.direction }}）
+              </span>
             </span>
           </div>
           <div v-if="inferResult.is_risk_event" class="result-item">
@@ -497,6 +592,30 @@ onMounted(async () => {
             </el-button>
           </div>
         </div>
+
+        <div v-if="hasInferred" class="ai-explanation">
+          <div class="ai-explanation__head">
+            <div>
+              <p class="eyebrow">AI Explanation</p>
+              <h3>场景化分析</h3>
+            </div>
+            <div class="ai-explanation__actions">
+              <button v-if="explanationLoading" class="settings-btn" type="button" @click="stopExplanation">停止生成</button>
+              <button v-else class="settings-btn" type="button" @click="inferResult && generateExplanation(inferResult)">重新生成</button>
+            </div>
+          </div>
+          <p v-if="explanationLoading && !explanationMarkdown" class="ai-explanation__status">正在根据模型结果生成说明...</p>
+          <p v-else-if="explanationStatus === 'stopped'" class="ai-explanation__status">用户已停止生成，可点击“重新生成”继续。</p>
+          <p v-else-if="explanationStatus === 'failed'" class="ai-explanation__status">生成失败，可点击“重新生成”重试。</p>
+          <p v-if="explanationError" class="ai-explanation__error">{{ explanationError }}</p>
+          <div v-if="explanationMarkdown" class="ai-explanation__markdown" v-html="safeExplanationHtml"></div>
+          <p v-if="explanationFallback" class="ai-explanation__note">当前显示平台规则模板，模型预测结果未受影响。</p>
+        </div>
+
+        <details v-if="isManager && adminExplanationJson" class="admin-explanation">
+          <summary>管理员中间数据</summary>
+          <pre>{{ adminExplanationJson }}</pre>
+        </details>
       </section>
     </div>
   </div>
@@ -847,6 +966,111 @@ select.form-input option {
 
 .event-tip__btn {
   margin-left: auto;
+}
+
+.result-item--features {
+  align-items: flex-start;
+}
+
+.result-item__value--features {
+  display: grid;
+  gap: 4px;
+  max-width: 70%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.ai-explanation {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+.ai-explanation__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.ai-explanation__head h3 {
+  margin: 0;
+}
+
+.ai-explanation__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-explanation__status,
+.ai-explanation__note,
+.ai-explanation__error {
+  margin: 8px 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.ai-explanation__status,
+.ai-explanation__note {
+  color: rgba(220, 234, 255, 0.58);
+}
+
+.ai-explanation__error {
+  color: #ffd166;
+}
+
+.ai-explanation__markdown {
+  color: rgba(232, 241, 255, 0.9);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.ai-explanation__markdown :deep(h3) {
+  margin: 16px 0 6px;
+  color: #e8f1ff;
+  font-size: 1rem;
+}
+
+.ai-explanation__markdown :deep(p),
+.ai-explanation__markdown :deep(ol),
+.ai-explanation__markdown :deep(ul) {
+  margin: 6px 0;
+}
+
+.ai-explanation__markdown :deep(code) {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+}
+
+.admin-explanation {
+  margin-top: 16px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
+  padding-top: 12px;
+}
+
+.admin-explanation summary {
+  color: rgba(154, 214, 255, 0.8);
+  cursor: pointer;
+  font-size: 0.84rem;
+}
+
+.admin-explanation pre {
+  max-height: 360px;
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid rgba(125, 201, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(8, 17, 31, 0.65);
+  color: rgba(220, 234, 255, 0.72);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .inference-placeholder {

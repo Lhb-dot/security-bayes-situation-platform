@@ -2,14 +2,16 @@
 /**
  * ScenarioCard - 场景卡片组件
  *
- * 展示场景名称、描述、风险等级、数据集/模型/高危事件数量
- * 点击后跳转至对应场景大屏
+ * 展示场景名称、描述、风险等级，以及后端真实聚合指标：
+ * 有效数据集数（去重口径）/ 已发布模型数 / 有效样本量。
+ * 点击后跳转至对应场景大屏。
  */
+import { computed } from 'vue';
 import type { Scenario } from '@/types/security';
 import RiskLevelTag from './RiskLevelTag.vue';
 
 const props = defineProps<{
-  /** 场景对象 */
+  /** 场景对象（统计字段来自 GET /scenarios/overview） */
   scenario: Scenario;
 }>();
 
@@ -25,10 +27,22 @@ const scenarioNameMap: Record<string, string> = {
   flightdeck_operation: '航母甲板保障作业态势感知',
 };
 
+/** 已发布模型数（新数据源带该字段；缺省回退到 model_count） */
+const publishedModelCount = computed(
+  () => props.scenario.published_model_count ?? props.scenario.model_count ?? 0
+);
+
+/** 有效样本量（千分位展示，便于阅读 31453 → 31,453） */
+const sampleCountText = computed(() => {
+  const value = props.scenario.sample_count;
+  if (value == null) return '—';
+  return value.toLocaleString('zh-CN');
+});
+
 /** 数据集类型图标 */
 const datasetIcon = '📊';
 const modelIcon = '🧠';
-const eventIcon = '⚡';
+const sampleIcon = '📈';
 </script>
 
 <template>
@@ -48,7 +62,7 @@ const eventIcon = '⚡';
       <p class="scenario-card__desc">{{ scenario.description }}</p>
     </div>
 
-    <!-- 数据统计行 -->
+    <!-- 数据统计行（真实聚合值） -->
     <div class="scenario-card__stats">
       <div class="scenario-card__stat">
         <span class="scenario-card__stat-icon">{{ datasetIcon }}</span>
@@ -61,16 +75,16 @@ const eventIcon = '⚡';
       <div class="scenario-card__stat">
         <span class="scenario-card__stat-icon">{{ modelIcon }}</span>
         <div>
-          <span class="scenario-card__stat-value">{{ scenario.model_count }}</span>
-          <span class="scenario-card__stat-label">模型</span>
+          <span class="scenario-card__stat-value">{{ publishedModelCount }}</span>
+          <span class="scenario-card__stat-label">已发布模型</span>
         </div>
       </div>
       <div class="scenario-card__divider"></div>
       <div class="scenario-card__stat">
-        <span class="scenario-card__stat-icon">{{ eventIcon }}</span>
+        <span class="scenario-card__stat-icon">{{ sampleIcon }}</span>
         <div>
-          <span class="scenario-card__stat-value scenario-card__stat-value--danger">{{ scenario.high_risk_count }}</span>
-          <span class="scenario-card__stat-label">高危事件</span>
+          <span class="scenario-card__stat-value">{{ sampleCountText }}</span>
+          <span class="scenario-card__stat-label">有效样本量</span>
         </div>
       </div>
     </div>
@@ -78,9 +92,6 @@ const eventIcon = '⚡';
     <!-- 底部按钮 -->
     <div class="scenario-card__footer">
       <div class="scenario-card__meta">
-        <span class="scenario-card__risk-score">
-          风险评分：<strong>{{ scenario.risk_score }}</strong>
-        </span>
         <span class="scenario-card__status" :class="`scenario-card__status--${scenario.status}`">
           {{ scenario.status === 'active' ? '已接入' : '暂未接入' }}
         </span>
@@ -107,6 +118,7 @@ const eventIcon = '⚡';
   transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
   display: flex;
   flex-direction: column;
+  font-family: var(--font-ui);
 }
 
 .scenario-card:hover {
@@ -191,10 +203,6 @@ const eventIcon = '⚡';
   line-height: 1.2;
 }
 
-.scenario-card__stat-value--danger {
-  color: #ff8c84;
-}
-
 .scenario-card__stat-label {
   font-size: 0.75rem;
   color: rgba(220, 234, 255, 0.56);
@@ -220,15 +228,6 @@ const eventIcon = '⚡';
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.scenario-card__risk-score {
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.6);
-}
-
-.scenario-card__risk-score strong {
-  color: #e8f1ff;
 }
 
 .scenario-card__status {

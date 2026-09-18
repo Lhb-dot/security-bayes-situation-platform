@@ -2,38 +2,94 @@
 /**
  * Settings — 设置（普通用户）/ 系统设置（管理员）
  *
- * V3.0 调整：
- * - 普通用户"设置"：第一个区块 = 选择感兴趣的场景（可多选，用户自选，非管理员分配），
- *   后面是当前用户可修改的个人设置（修改密码 / 主题 / 自动刷新）。
- *   不含任何管理员专属项（风险阈值等不出现）。
- * - 管理员"系统设置"：风险阈值（需求 5.4.1，按场景隔离、[0,1]、high>medium、变更日志）、
- *   场景启停、自动刷新、主题。
+ * 布局对齐 settings-demo/index.html：
+ * - 顶部横向页签：账号与安全 / 基础设置 / 风险阈值（按角色过滤可见性）
+ * - 每个页签内容为左右两栏卡片；需要横向空间的卡片用 .settings-section--span 占满整行
+ *
+ * 功能口径保持不变：
+ * - 普通用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + 模型解释服务）
+ * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）
+ *
+ * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { syncThreshold } from '@/services/mockApi';
 import {
+  DEFAULT_HIGH_THRESHOLD,
+  DEFAULT_MEDIUM_THRESHOLD,
   getRiskThresholdAuditLogs,
   getRiskThresholds,
   updateRiskThreshold,
 } from '@/api/riskThresholdApi';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
+import { getAISetting, testAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
 
 const userStore = useUserStore();
 const settingsStore = useSettingsStore();
 const router = useRouter();
 const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
-const canConfigureThresholds = computed(() =>
-  currentUser.value?.role === 'SUPER_ADMIN' || !!currentUser.value?.scenario_code,
-);
+const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
+const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
+const isAdmin = computed(() => isSuperAdmin.value || isScenarioAdmin.value);
+/** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
+const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
 
-// ===================== 普通用户：个人设置（场景由管理员分配，用户不可自选） =====================
+const SCENARIO_LABEL: Record<string, string> = {
+  network_security: '网络安全',
+  power_system: '电力系统',
+  flightdeck_operation: '航母甲板作业',
+  geological_risk: '地质风险',
+};
+const ROLE_LABEL: Record<string, string> = {
+  SUPER_ADMIN: '系统管理员',
+  SCENARIO_ADMIN: '场景管理员',
+  SCENARIO_USER: '场景用户',
+};
+
+// ===================== 页签 =====================
+type TabKey = 'account' | 'general' | 'threshold';
+const activeTab = ref<TabKey>('account');
+const tabs = computed<{ key: TabKey; label: string }[]>(() => {
+  const list: { key: TabKey; label: string }[] = [
+    { key: 'account', label: '账号与安全' },
+    { key: 'general', label: '基础设置' },
+  ];
+  if (canConfigureThresholds.value) list.push({ key: 'threshold', label: '风险阈值' });
+  return list;
+});
+// 当前页签被角色隐藏时，自动落到第一个可见页签
+watch(tabs, list => {
+  if (!list.some(t => t.key === activeTab.value)) activeTab.value = list[0]?.key ?? 'account';
+});
+
+// ===================== 账号信息 =====================
+const accountRoleLabel = computed(() => ROLE_LABEL[currentUser.value?.role ?? ''] ?? '-');
+const accountRoleBadge = computed(() => {
+  const role = currentUser.value?.role;
+  if (role === 'SUPER_ADMIN') return 'role-badge--super';
+  if (role === 'SCENARIO_USER') return 'role-badge--user';
+  return 'role-badge--admin';
+});
+const accountScenarioLabel = computed(() => {
+  if (isSuperAdmin.value) return '全部场景';
+  const code = currentUser.value?.scenario_code;
+  return code ? (SCENARIO_LABEL[code] ?? code) : '未绑定场景';
+});
+const accountEnabled = computed(() => currentUser.value?.status !== 'disabled');
+
+// ===================== 修改密码（弹窗） =====================
+const pwdDialogVisible = ref(false);
 const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
 const changingPwd = ref(false);
+
+const openPwdDialog = () => {
+  pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+  pwdDialogVisible.value = true;
+};
+
 const changePwd = async () => {
   if (!pwdForm.value.oldPassword || !pwdForm.value.newPassword) {
     ElMessage.warning('请填写原密码与新密码');
@@ -47,6 +103,7 @@ const changePwd = async () => {
   try {
     await userStore.changePassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
     ElMessage.success('密码修改成功，请重新登录');
+    pwdDialogVisible.value = false;
     pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
     await userStore.logout();
     router.push('/login');
@@ -57,21 +114,126 @@ const changePwd = async () => {
   }
 };
 
+// ===================== 自动刷新（个人设置） =====================
 const savePersonalSettings = () => {
   settingsStore.saveRefreshSettings();
   ElMessage.success('个人设置已保存');
 };
 
-// ===================== 管理员：系统设置（风险阈值等 admin-only） =====================
-const SCENARIO_LABEL: Record<string, string> = {
-  network_security: '网络安全',
-  power_system: '电力系统',
-  flightdeck_operation: '航母甲板作业',
-  geological_risk: '地质风险',
+// ===================== 模型解释服务 =====================
+const aiSetting = ref<AISetting | null>(null);
+const savingAI = ref(false);
+const testingAI = ref(false);
+const togglingAI = ref(false);
+const aiDialogVisible = ref(false);
+/** 编辑弹窗临时表单：取消不影响已保存配置；api_key 留空表示保留服务端已保存的 key。 */
+const aiEditForm = ref({
+  provider: 'openai-compatible',
+  base_url: '',
+  model: '',
+  api_key: '',
+});
+
+/** 只读展示行：未配置的字段统一显示「未填入」，key 只显示服务端下发的掩码。 */
+const aiReadonlyRows = computed(() => [
+  { label: '接口地址', value: aiSetting.value?.base_url?.trim() ?? '' },
+  { label: '模型名称', value: aiSetting.value?.model?.trim() ?? '' },
+  { label: 'API key', value: aiSetting.value?.api_key_masked?.trim() ?? '' },
+]);
+
+const loadAISetting = async () => {
+  try {
+    aiSetting.value = await getAISetting();
+  } catch {
+    aiSetting.value = null;
+  }
 };
-/** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景 */
-const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
-const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
+
+const openAIEdit = () => {
+  aiEditForm.value = {
+    provider: aiSetting.value?.provider ?? 'openai-compatible',
+    base_url: aiSetting.value?.base_url ?? '',
+    model: aiSetting.value?.model ?? '',
+    api_key: '',
+  };
+  aiDialogVisible.value = true;
+};
+
+/** 卡片上的「启用 AI 解释」开关：直接落库，失败保持原状态。 */
+const toggleAI = async () => {
+  const s = aiSetting.value;
+  if (!s?.configured || togglingAI.value) return;
+  togglingAI.value = true;
+  try {
+    const next = await updateAISetting({
+      provider: s.provider ?? 'openai-compatible',
+      base_url: s.base_url ?? '',
+      model: s.model ?? '',
+      enabled: !s.enabled,
+    });
+    aiSetting.value = next;
+    ElMessage.success(next.enabled ? '已开启 AI 解释' : '已关闭 AI 解释');
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'AI 解释开关保存失败');
+  } finally {
+    togglingAI.value = false;
+  }
+};
+
+const saveAI = async () => {
+  const { base_url, model, api_key } = aiEditForm.value;
+  if (!base_url.trim() || !model.trim()) {
+    ElMessage.warning('请填写 AI 服务地址和模型名称');
+    return;
+  }
+  if (!api_key.trim() && !aiSetting.value?.configured) {
+    ElMessage.warning('首次配置需填写 API key');
+    return;
+  }
+  savingAI.value = true;
+  try {
+    const payload: {
+      provider: string;
+      base_url: string;
+      model: string;
+      enabled: boolean;
+      api_key?: string;
+    } = {
+      provider: aiEditForm.value.provider,
+      base_url: base_url.trim(),
+      model: model.trim(),
+      enabled: aiSetting.value?.enabled ?? true,
+    };
+    // key 留空 = 不修改服务端已保存的 key
+    if (api_key.trim()) payload.api_key = api_key.trim();
+    aiSetting.value = await updateAISetting(payload);
+    aiDialogVisible.value = false;
+    ElMessage.success(
+      api_key.trim()
+        ? 'AI 设置已保存，API key 仅在服务端保存'
+        : 'AI 设置已保存，API key 保持不变',
+    );
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'AI 设置保存失败');
+  } finally {
+    savingAI.value = false;
+  }
+};
+
+const testAI = async () => {
+  testingAI.value = true;
+  try {
+    const result = await testAISetting();
+    if (result.connected) ElMessage.success(result.message);
+    else ElMessage.warning(result.message);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'AI 连通性测试失败');
+  } finally {
+    testingAI.value = false;
+  }
+};
+
+// ===================== 风险阈值 =====================
 const activeScenarios = computed<ScenarioId[]>(() =>
   currentUser.value?.role === 'SUPER_ADMIN'
     ? ['network_security', 'power_system', 'flightdeck_operation', 'geological_risk']
@@ -82,6 +244,7 @@ const activeScenarios = computed<ScenarioId[]>(() =>
 const thresholds = ref<ThresholdConfig[]>([]);
 const changeLogs = ref<ThresholdChangeLog[]>([]);
 const showChangeLogs = ref(false);
+const logsLoading = ref(false);
 const saving = ref(false);
 /** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
 const thresholdScenario = ref<ScenarioId>('network_security');
@@ -91,11 +254,8 @@ const editing = ref<Record<string, { medium: number | null; high: number | null 
   flightdeck_operation: { medium: null, high: null },
   geological_risk: { medium: null, high: null },
 });
-const scenarioSwitches = ref([
-  { id: 'network_security', label: '网络安全态势感知', enabled: true },
-  { id: 'power_system', label: '电力系统风险态势感知', enabled: true },
-  { id: 'geological_risk', label: '地质风险态势感知', enabled: true },
-]);
+/** 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。 */
+const thresholdUnconfigured = ref<Record<string, boolean>>({});
 
 const loadThresholds = async () => {
   const ths = await getRiskThresholds();
@@ -105,32 +265,100 @@ const loadThresholds = async () => {
     high_threshold: Number(t.high_threshold ?? 0),
   }));
   const nextEditing: Record<string, { medium: number | null; high: number | null }> = {};
+  const nextUnconfigured: Record<string, boolean> = {};
   for (const scenarioId of activeScenarios.value) {
-    nextEditing[scenarioId] = { medium: null, high: null };
+    // 未配置的场景也回填兜底值，让输入框显示**系统当前实际生效**的阈值（0.5 / 0.8）。
+    // 留空会让人以为「没有阈值、不做风险判定」，而实际上后端一直在用兜底值判级。
+    nextEditing[scenarioId] = {
+      medium: DEFAULT_MEDIUM_THRESHOLD,
+      high: DEFAULT_HIGH_THRESHOLD,
+    };
+    nextUnconfigured[scenarioId] = true;
   }
   for (const t of thresholds.value) {
     nextEditing[t.scenario_id] = {
       medium: Number(t.medium_threshold),
       high: Number(t.high_threshold),
     };
+    nextUnconfigured[t.scenario_id] = false;
   }
   editing.value = nextEditing;
-  const firstScenario = activeScenarios.value[0];
-  if (firstScenario) thresholdScenario.value = firstScenario; else thresholdScenario.value = 'network_security';
+  thresholdUnconfigured.value = nextUnconfigured;
+  // 只在当前选中场景已不可见时才回落到第一个场景。
+  // 保存成功后也会走这里刷新，若无条件重置，管理员刚改完「电力系统」就会被弹回「网络安全」。
+  if (!activeScenarios.value.includes(thresholdScenario.value)) {
+    thresholdScenario.value = activeScenarios.value[0] ?? 'network_security';
+  }
 };
 
 const loadChangeLogs = async () => {
+  logsLoading.value = true;
   try {
     changeLogs.value = await getRiskThresholdAuditLogs();
   } catch (err) {
+    changeLogs.value = [];
     ElMessage.error(err instanceof Error ? err.message : '阈值修改记录加载失败');
+  } finally {
+    logsLoading.value = false;
   }
 };
 
 const toFixed2 = (v: number | string | null | undefined): string => {
-  if (v === null || v === undefined || v === '') return '-';
-  return Number(v).toFixed(2);
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '—';
 };
+
+/** 记录唯一标识：后端用自增 id，历史 mock 用 log_id，再兜底用「场景 + 时间」。 */
+const logKey = (log: ThresholdChangeLog): string =>
+  String(log.id ?? log.log_id ?? `${log.scenario_id}@${log.operated_at ?? log.changed_at ?? ''}`);
+
+/**
+ * 首次配置的行：该场景在列表里最早的一条记录，且旧值等于新值。
+ * 后端在「该账号该场景还没有阈值行」时把 old 记成 new（语义是"从无到有"），
+ * 所以这些行的旧值不该当成数字展示，统一渲染成「—」。
+ */
+const initialLogKeys = computed(() => {
+  const earliest = new Map<string, ThresholdChangeLog>();
+  for (const log of changeLogs.value) {
+    const key = String(log.scenario_id);
+    const prev = earliest.get(key);
+    const at = log.operated_at ?? log.changed_at ?? '';
+    const prevAt = prev ? prev.operated_at ?? prev.changed_at ?? '' : '';
+    if (!prev || at < prevAt) earliest.set(key, log);
+  }
+  const keys = new Set<string>();
+  for (const log of earliest.values()) {
+    const sameMedium =
+      Number(log.old_medium ?? log.old_medium_threshold) === Number(log.new_medium ?? log.new_medium_threshold);
+    const sameHigh =
+      Number(log.old_high ?? log.old_high_threshold) === Number(log.new_high ?? log.new_high_threshold);
+    if (sameMedium && sameHigh) keys.add(logKey(log));
+  }
+  return keys;
+});
+
+/**
+ * 修改记录表的高度。
+ * 直接用 vh 做 max-height 会把最后一行切掉一半（露出半截胶囊），
+ * 所以按「表头 + 整数行」算一个像素值，配合下面 style 块里固定的行高。
+ */
+const LOG_TABLE_HEADER_HEIGHT = 40;
+const LOG_TABLE_ROW_HEIGHT = 42;
+const logTableMaxHeight = ref('64vh');
+const syncLogTableMaxHeight = () => {
+  const available = Math.round(window.innerHeight * 0.64);
+  const rows = Math.max(4, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
+  logTableMaxHeight.value = `${LOG_TABLE_HEADER_HEIGHT + rows * LOG_TABLE_ROW_HEIGHT}px`;
+};
+
+const oldValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
+  initialLogKeys.value.has(logKey(log))
+    ? '—'
+    : toFixed2(kind === 'medium' ? log.old_medium ?? log.old_medium_threshold : log.old_high ?? log.old_high_threshold);
+
+const newValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
+  toFixed2(kind === 'medium' ? log.new_medium ?? log.new_medium_threshold : log.new_high ?? log.new_high_threshold);
 
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
@@ -146,6 +374,14 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('阈值最多只能有两位小数');
     return;
   }
+  // 值没变就不提交：后端每次 PUT 都会写一条审计日志，重复点「保存」会把记录刷成噪声。
+  const stored = thresholds.value.find(t => t.scenario_id === scenarioId);
+  if (stored
+    && Number(stored.medium_threshold) === e.medium
+    && Number(stored.high_threshold) === e.high) {
+    ElMessage.info('阈值未发生变化，无需保存');
+    return;
+  }
   saving.value = true;
   try {
     const medium = Math.round(e.medium * 100) / 100;
@@ -155,7 +391,6 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
       medium: Number(Number(saved.medium_threshold).toFixed(2)),
       high: Number(Number(saved.high_threshold).toFixed(2)),
     };
-    syncThreshold(saved);
     ElMessage.success(`「${SCENARIO_LABEL[scenarioId]}」阈值已保存并实时生效`);
     await loadThresholds();
   } catch (err) {
@@ -165,15 +400,17 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   }
 };
 
-const saveAdminSettings = () => {
-  settingsStore.saveRefreshSettings();
-  ElMessage.success('系统设置已保存');
-};
-
 onMounted(async () => {
   currentUser.value = userStore.currentUser;
   settingsStore.loadForUser(currentUser.value?.user_id);
+  syncLogTableMaxHeight();
+  window.addEventListener('resize', syncLogTableMaxHeight);
+  await loadAISetting();
   if (canConfigureThresholds.value) await loadThresholds();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncLogTableMaxHeight);
 });
 </script>
 
@@ -188,33 +425,111 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- ==================== 普通用户：选场景（第一个区块） ==================== -->
-    <!-- ==================== 普通用户：个人设置（场景由管理员分配，不可自选） ==================== -->
-    <template v-if="!isAdmin">
-      <section class="card settings-section settings-section--span">
+    <!-- ==================== 横向页签 ==================== -->
+    <nav class="settings-tabs">
+      <button
+        v-for="tab in tabs"
+        :key="tab.key"
+        type="button"
+        class="settings-tab"
+        :class="{ 'is-active': activeTab === tab.key }"
+        @click="activeTab = tab.key"
+      >
+        {{ tab.label }}
+      </button>
+    </nav>
+
+    <!-- ==================== 账号与安全 ==================== -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'account' }">
+      <section class="card settings-section">
         <div class="section-heading">
           <div>
             <p class="eyebrow">Account</p>
-            <h3>修改密码</h3>
+            <h3>账号信息</h3>
           </div>
         </div>
-        <div class="settings-form settings-form--row3">
-          <div class="settings-form__item">
-            <label class="settings-form__label">原密码</label>
-            <input v-model="pwdForm.oldPassword" type="password" class="settings-form__input" placeholder="请输入原密码" />
+        <div class="detail-info">
+          <div>
+            <span>用户名</span>
+            <strong>{{ currentUser?.username ?? '-' }}</strong>
           </div>
-          <div class="settings-form__item">
-            <label class="settings-form__label">新密码</label>
-            <input v-model="pwdForm.newPassword" type="password" class="settings-form__input" placeholder="至少 6 位" />
+          <div>
+            <span>绑定场景</span>
+            <strong>
+              <span v-if="isSuperAdmin">{{ accountScenarioLabel }}</span>
+              <span v-else class="scenario-tag">{{ accountScenarioLabel }}</span>
+            </strong>
           </div>
-          <div class="settings-form__item">
-            <label class="settings-form__label">确认新密码</label>
-            <input v-model="pwdForm.confirm" type="password" class="settings-form__input" placeholder="再次输入新密码" />
+          <div>
+            <span>角色</span>
+            <strong><span class="role-badge" :class="accountRoleBadge">{{ accountRoleLabel }}</span></strong>
+          </div>
+          <div>
+            <span>账号状态</span>
+            <strong>
+              <span class="status-badge" :class="accountEnabled ? 'status-badge--on' : 'status-badge--off'">
+                {{ accountEnabled ? '启用' : '停用' }}
+              </span>
+            </strong>
           </div>
         </div>
-        <button class="settings-btn settings-btn--primary" :disabled="changingPwd" @click="changePwd">
-          {{ changingPwd ? '提交中...' : '修改密码' }}
-        </button>
+      </section>
+
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Security</p>
+            <h3>安全设置</h3>
+          </div>
+        </div>
+        <div class="settings-form">
+          <div class="settings-form__item settings-form__item--row">
+            <span class="settings-form__label">登录密码</span>
+            <button class="settings-btn settings-btn--primary" @click="openPwdDialog">修改密码</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== 基础设置 ==================== -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'general' }">
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">AI Provider</p>
+            <h3>模型解释服务</h3>
+          </div>
+          <span
+            class="ai-badge"
+            :class="aiSetting?.configured ? 'ai-badge--on' : 'ai-badge--off'"
+          >{{ aiSetting?.configured ? '已配置' : '未配置' }}</span>
+        </div>
+
+        <div class="detail-info ai-readonly">
+          <div v-for="row in aiReadonlyRows" :key="row.label">
+            <span>{{ row.label }}</span>
+            <strong :class="{ 'detail-info__empty': !row.value }">{{ row.value || '未填入' }}</strong>
+          </div>
+        </div>
+
+        <div class="settings-switches">
+          <div class="settings-switches__item">
+            <span class="settings-switches__label">启用 AI 解释</span>
+            <button
+              class="settings-switches__toggle"
+              :class="{ 'is-on': !!aiSetting?.enabled }"
+              :disabled="!aiSetting?.configured || togglingAI"
+              @click="toggleAI"
+            >
+              <span class="settings-switches__knob"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="settings-btn" :disabled="testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
+          <button class="settings-btn settings-btn--primary" @click="openAIEdit">编辑</button>
+        </div>
       </section>
 
       <section class="card settings-section">
@@ -242,59 +557,91 @@ onMounted(async () => {
             </select>
           </div>
         </div>
-        <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
+        <div class="settings-actions">
+          <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
+        </div>
       </section>
-    </template>
+    </div>
 
-    <!-- ==================== 当前账号阈值 ==================== -->
-    <section v-if="canConfigureThresholds" class="card settings-section settings-section--span">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Threshold</p>
-          <h3>我的风险阈值</h3>
-          <p class="settings-section__hint">告警按当前账号在对应场景的阈值判定，修改后立即生效。</p>
-        </div>
-        <button class="settings-btn" type="button" @click="showChangeLogs = true; loadChangeLogs()">
-          查看阈值修改记录
-        </button>
-      </div>
-
-      <div v-if="isSuperAdmin" class="threshold-scenario-pick">
-        <label class="settings-form__label">选择场景</label>
-        <select v-model="thresholdScenario" class="settings-form__input threshold-scenario-pick__select">
-          <option v-for="sc in activeScenarios" :key="sc" :value="sc">{{ SCENARIO_LABEL[sc] ?? sc }}</option>
-        </select>
-      </div>
-
-      <!-- 阈值长条框：系统管理员可切换场景，其余账号固定为绑定场景 -->
-      <div class="threshold-bar">
-        <div class="threshold-bar__head">
-          <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
-          <span class="threshold-bar__scene">{{ thresholdScenario }}</span>
-        </div>
-        <div class="threshold-bar__form">
-          <div class="threshold-field">
-            <label>中风险阈值（0~1）</label>
-            <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-            <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold !== undefined" class="threshold-bar__current">
-              当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.medium_threshold) }}
-            </span>
+    <!-- ==================== 风险阈值 ==================== -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'threshold' }">
+      <section class="card settings-section settings-section--span">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Threshold</p>
+            <h3>我的风险阈值</h3>
           </div>
-          <div class="threshold-field">
-            <label>高风险阈值（0~1）</label>
-            <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-            <span v-if="thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold !== undefined" class="threshold-bar__current">
-              当前值：{{ toFixed2(thresholds.find(t => t.scenario_id === thresholdScenario)?.high_threshold) }}
-            </span>
-          </div>
-          <p class="threshold-bar__rule">要求：0 ≤ 中风险 &lt; 高风险 ≤ 1</p>
-          <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
-            {{ saving ? '保存中...' : '保存并生效' }}
+          <button class="settings-btn" type="button" @click="showChangeLogs = true; loadChangeLogs()">
+            查看阈值修改记录
           </button>
         </div>
-      </div>
-    </section>
 
+        <div v-if="isSuperAdmin" class="threshold-scenario-pick">
+          <label class="settings-form__label">选择场景</label>
+          <select v-model="thresholdScenario" class="settings-form__input threshold-scenario-pick__select">
+            <option v-for="sc in activeScenarios" :key="sc" :value="sc">{{ SCENARIO_LABEL[sc] ?? sc }}</option>
+          </select>
+        </div>
+
+        <!-- 阈值长条框：系统管理员可切换场景，其余账号固定为绑定场景 -->
+        <div class="threshold-bar">
+          <div class="threshold-bar__head">
+            <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
+          </div>
+          <div class="threshold-bar__form">
+            <div class="threshold-field">
+              <label>中风险阈值（0~1）</label>
+              <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <div class="threshold-field">
+              <label>高风险阈值（0~1）</label>
+              <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
+              {{ saving ? '保存中...' : '保存并生效' }}
+            </button>
+          </div>
+          <p v-if="thresholdUnconfigured[thresholdScenario]" class="threshold-bar__hint">
+            该场景尚未配置，输入框内是系统当前生效的兜底值（中风险 {{ DEFAULT_MEDIUM_THRESHOLD.toFixed(2) }} /
+            高风险 {{ DEFAULT_HIGH_THRESHOLD.toFixed(2) }}）。保存后即成为本账号在该场景的正式阈值。
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== 修改密码弹窗 ==================== -->
+    <el-dialog
+      v-model="pwdDialogVisible"
+      title="修改密码"
+      class="pwd-setting-dialog"
+      width="480px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="ai-dialog-form">
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">原密码</label>
+          <input v-model="pwdForm.oldPassword" type="password" class="ai-dialog-input" autocomplete="current-password" placeholder="请输入原密码" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">新密码</label>
+          <input v-model="pwdForm.newPassword" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="至少 6 位" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">确认新密码</label>
+          <input v-model="pwdForm.confirm" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="再次输入新密码" />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="pwdDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="changingPwd" @click="changePwd">
+          {{ changingPwd ? '提交中...' : '确认修改' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ==================== 阈值修改记录弹窗 ==================== -->
     <el-dialog
       v-model="showChangeLogs"
       title="本账号阈值修改记录"
@@ -307,88 +654,78 @@ onMounted(async () => {
       <el-table
         :data="changeLogs"
         stripe
-        max-height="62vh"
+        :max-height="logTableMaxHeight"
         style="width: 100%"
-        empty-text="暂无阈值修改记录"
+        :empty-text="logsLoading ? '加载中…' : '暂无阈值修改记录'"
       >
-        <el-table-column label="变更时间" min-width="170">
+        <el-table-column label="变更时间" min-width="170" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.operated_at ?? row.changed_at ?? '-' }}
+            {{ row.operated_at ?? row.changed_at ?? '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="场景" width="150">
+        <el-table-column label="场景" width="130" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
             {{ SCENARIO_LABEL[row.scenario_id] ?? row.scenario_id }}
           </template>
         </el-table-column>
-        <el-table-column label="中风险阈值" width="120" align="center">
+        <el-table-column label="中风险阈值" min-width="150" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ toFixed2(row.old_medium ?? row.old_medium_threshold) }} →
-            <el-tag type="success" effect="plain">{{ toFixed2(row.new_medium ?? row.new_medium_threshold) }}</el-tag>
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'medium') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--medium">{{ newValueText(row, 'medium') }}</span>
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="高风险阈值" width="120" align="center">
+        <el-table-column label="高风险阈值" min-width="150" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ toFixed2(row.old_high ?? row.old_high_threshold) }} →
-            <el-tag type="success" effect="plain">{{ toFixed2(row.new_high ?? row.new_high_threshold) }}</el-tag>
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'high') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--high">{{ newValueText(row, 'high') }}</span>
+            </span>
           </template>
         </el-table-column>
       </el-table>
     </el-dialog>
 
-    <!-- ==================== 管理员：系统设置 ==================== -->
-    <template v-if="isAdmin">
-      <div class="settings-grid">
-        <section v-if="!isScenarioAdmin" class="card settings-section">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Scenarios</p>
-              <h3>场景启停控制</h3>
-            </div>
-          </div>
-          <div class="settings-switches">
-            <div v-for="sc in scenarioSwitches" :key="sc.id" class="settings-switches__item">
-              <span class="settings-switches__label">{{ sc.label }}</span>
-              <button class="settings-switches__toggle" :class="{ 'is-on': sc.enabled }" @click="sc.enabled = !sc.enabled">
-                <span class="settings-switches__knob"></span>
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section class="card settings-section">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Refresh</p>
-              <h3>自动刷新设置</h3>
-            </div>
-          </div>
-          <div class="settings-form">
-            <div class="settings-form__item settings-form__item--row">
-              <label class="settings-form__label">启用自动刷新</label>
-              <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
-                <span class="settings-switches__knob"></span>
-              </button>
-            </div>
-            <div class="settings-form__item">
-              <label class="settings-form__label">刷新间隔（秒）</label>
-              <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
-                <option :value="10">10 秒</option>
-                <option :value="30">30 秒</option>
-                <option :value="60">60 秒</option>
-                <option :value="120">120 秒</option>
-                <option :value="300">300 秒</option>
-              </select>
-            </div>
-          </div>
-        </section>
-
+    <!-- ==================== 编辑 AI 设置弹窗 ==================== -->
+    <el-dialog
+      v-model="aiDialogVisible"
+      title="编辑 AI 设置"
+      class="ai-setting-dialog"
+      width="520px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="ai-dialog-form">
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">接口地址</label>
+          <input v-model="aiEditForm.base_url" class="ai-dialog-input" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">模型名称</label>
+          <input v-model="aiEditForm.model" class="ai-dialog-input" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">API key</label>
+          <input
+            v-model="aiEditForm.api_key"
+            type="password"
+            class="ai-dialog-input"
+            autocomplete="new-password"
+            placeholder="留空则保留已保存的 key"
+          />
+        </div>
       </div>
-
-      <div class="settings-actions">
-        <button class="settings-btn settings-btn--primary" @click="saveAdminSettings">保存全部系统设置</button>
-      </div>
-    </template>
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="savingAI" @click="saveAI">
+          {{ savingAI ? '保存中...' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -396,6 +733,7 @@ onMounted(async () => {
 .settings-page {
   position: relative;
   z-index: 1;
+  font-family: var(--font-ui);
 }
 
 .settings-page__header {
@@ -417,86 +755,175 @@ onMounted(async () => {
   font-size: 0.95rem;
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+/* ===================== 横向页签 ===================== */
+.settings-tabs {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  padding: 0 4px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.14);
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: 22px;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tab {
+  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 2px 2px 14px;
+  color: rgba(220, 234, 255, 0.7);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.settings-tab:hover {
+  color: #fff;
+}
+
+.settings-tab.is-active {
+  color: #fff;
+  font-weight: 600;
+}
+
+.settings-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+}
+
+/* ===================== 页签内容：左右两栏 ===================== */
+.settings-panel {
+  display: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 18px;
-  margin-bottom: 24px;
+}
+
+.settings-panel.is-active {
+  display: grid;
+}
+
+.settings-panel > * {
+  min-width: 0;
 }
 
 .settings-section {
   padding: 20px 24px;
 }
 
-.settings-section__hint {
-  margin: 6px 0 0;
-  color: rgba(220, 234, 255, 0.55);
-  font-size: 0.82rem;
-}
-
 .settings-section--span {
   grid-column: 1 / -1;
 }
 
-.perm-tip {
+/* 账号信息 / AI 只读行：左右对齐 + 细分隔线 */
+.detail-info {
+  gap: 0;
+}
+
+.detail-info > div {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.06);
+}
+
+.detail-info > div:last-child {
+  border-bottom: none;
+}
+
+.detail-info .detail-info__empty {
+  color: rgba(220, 234, 255, 0.36);
+  font-weight: 400;
+}
+
+.ai-readonly strong {
+  min-width: 0;
+  word-break: break-all;
+}
+
+/* 徽标：与 UserManagement 同一套色板 */
+.role-badge,
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.role-badge--super {
+  background: rgba(255, 183, 77, 0.16);
+  color: #ffc37d;
+  border: 1px solid rgba(255, 183, 77, 0.3);
+}
+
+.role-badge--admin {
+  background: rgba(167, 139, 250, 0.18);
+  color: #c4b5fd;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+}
+
+.role-badge--user {
+  background: rgba(91, 166, 255, 0.16);
+  color: #9ad6ff;
+  border: 1px solid rgba(91, 166, 255, 0.28);
+}
+
+.status-badge--on {
+  background: rgba(14, 99, 76, 0.62);
+  color: #6ef0c4;
+  border: 1px solid rgba(83, 229, 200, 0.36);
+}
+
+.status-badge--off {
+  background: rgba(112, 32, 30, 0.55);
+  color: #ff9a92;
+  border: 1px solid rgba(255, 123, 114, 0.34);
+}
+
+.scenario-tag {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
+/* AI 配置状态徽标：与 .status-badge 同一套色板，深底亮字保证对比度 */
+.ai-badge {
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(255, 209, 102, 0.12);
-  color: rgba(255, 209, 102, 0.85);
   font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-/* 普通用户：选场景卡片 */
-.scenario-pick-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+.ai-badge--on {
+  background: rgba(14, 99, 76, 0.62);
+  color: #6ef0c4;
+  border: 1px solid rgba(83, 229, 200, 0.36);
 }
 
-.scenario-pick {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 16px 18px;
-  border-radius: 12px;
-  border: 1px solid rgba(125, 201, 255, 0.16);
-  background: rgba(255, 255, 255, 0.02);
-  color: #d9e8ff;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s, transform 0.15s;
-}
-
-.scenario-pick:hover {
-  border-color: rgba(91, 166, 255, 0.4);
-  transform: translateY(-1px);
-}
-
-.scenario-pick.is-picked {
-  border-color: rgba(83, 229, 200, 0.55);
-  background: rgba(83, 229, 200, 0.08);
-}
-
-.scenario-pick__name {
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.scenario-pick__desc {
-  font-size: 0.78rem;
-  color: rgba(220, 234, 255, 0.55);
-}
-
-.scenario-pick__actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-/* 普通用户：改密三列 */
-.settings-form--row3 {
-  grid-template-columns: repeat(3, 1fr);
-  margin-bottom: 16px;
+.ai-badge--off {
+  background: rgba(112, 32, 30, 0.55);
+  color: #ff9a92;
+  border: 1px solid rgba(255, 123, 114, 0.34);
 }
 
 /* 阈值 */
@@ -538,17 +965,28 @@ onMounted(async () => {
   color: #e8f1ff;
 }
 
-.threshold-bar__scene {
-  font-size: 0.78rem;
-  color: rgba(154, 214, 255, 0.55);
-}
-
 .threshold-bar__form {
   display: flex;
   align-items: flex-end;
   gap: 18px;
   flex-wrap: wrap;
   flex: 1;
+}
+
+/* 未配置提示：说明输入框里显示的是后端兜底值，而不是已保存的阈值。
+   .threshold-bar 是 flex + wrap 容器，这里用 flex-basis:100% 让它独占一行，
+   否则会作为第三个横向子项被挤到输入框右边。 */
+.threshold-bar__hint {
+  flex: 1 0 100%;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
 
 .threshold-field {
@@ -566,90 +1004,7 @@ onMounted(async () => {
   width: 150px;
 }
 
-.threshold-bar__current {
-  font-size: 0.74rem;
-  color: rgba(154, 214, 255, 0.6);
-}
-
-.threshold-bar__rule {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 0.76rem;
-  color: rgba(255, 209, 102, 0.7);
-}
-
-.change-logs {
-  padding-top: 16px;
-  border-top: 1px solid rgba(125, 201, 255, 0.1);
-}
-
-.change-logs__title {
-  margin: 0 0 12px;
-  font-size: 0.95rem;
-  color: #d9e8ff;
-}
-
-.change-logs__wrap {
-  overflow-x: auto;
-}
-
-.change-logs__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.84rem;
-}
-
-.change-logs__table th {
-  text-align: left;
-  padding: 10px 12px;
-  color: rgba(154, 214, 255, 0.8);
-  font-weight: 600;
-  border-bottom: 1px solid rgba(125, 201, 255, 0.15);
-  white-space: nowrap;
-}
-
-.change-logs__table td {
-  padding: 10px 12px;
-  color: rgba(217, 232, 255, 0.9);
-  border-bottom: 1px solid rgba(125, 201, 255, 0.06);
-  white-space: nowrap;
-}
-
-.change-logs__new {
-  color: #53e5c8;
-  font-weight: 600;
-}
-
-.change-logs__empty {
-  text-align: center;
-  color: rgba(220, 234, 255, 0.45);
-}
-
-.threshold-log-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.threshold-log-modal__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(2, 8, 18, 0.72);
-}
-
-.threshold-log-modal__panel {
-  position: relative;
-  z-index: 1;
-  width: min(960px, 100%);
-  max-height: min(680px, 90vh);
-  overflow: auto;
-  padding: 22px 24px;
-}
-
+/* ===================== 表单 ===================== */
 .settings-form {
   display: grid;
   gap: 16px;
@@ -691,6 +1046,7 @@ select.settings-form__input option {
   color: #e8f1ff;
 }
 
+/* ===================== 开关 ===================== */
 .settings-switches {
   display: grid;
   gap: 14px;
@@ -723,10 +1079,16 @@ select.settings-form__input option {
   position: relative;
   transition: background 0.25s;
   padding: 0;
+  flex-shrink: 0;
 }
 
 .settings-switches__toggle.is-on {
   background: linear-gradient(135deg, #5ba6ff, #407acc);
+}
+
+.settings-switches__toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-switches__knob {
@@ -744,20 +1106,23 @@ select.settings-form__input option {
   transform: translateX(20px);
 }
 
+/* ===================== 按钮：与全站 .el-button 同一套描边样式 ===================== */
 .settings-btn {
   padding: 10px 20px;
-  border: 1px solid rgba(125, 201, 255, 0.25);
+  border: 1px solid rgba(125, 201, 255, 0.35);
   border-radius: 10px;
   background: rgba(91, 166, 255, 0.1);
   color: #9ad6ff;
   font-size: 0.9rem;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
   width: fit-content;
 }
 
 .settings-btn:hover {
-  background: rgba(91, 166, 255, 0.2);
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
 }
 
 .settings-btn:disabled {
@@ -766,24 +1131,19 @@ select.settings-form__input option {
 }
 
 .settings-btn--primary {
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
-  border: none;
   padding: 12px 32px;
   font-weight: 600;
-}
-
-.settings-btn--primary:hover {
-  opacity: 0.9;
 }
 
 .settings-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 @media (max-width: 768px) {
-  .settings-grid {
+  .settings-panel {
     grid-template-columns: 1fr;
   }
   .threshold-bar {
@@ -800,35 +1160,42 @@ select.settings-form__input option {
   .threshold-scenario-pick__select {
     flex: 1;
   }
-  .scenario-pick-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .settings-form--row3 {
-    grid-template-columns: 1fr;
-  }
 }
 </style>
 
 <style>
-/* Keep the audit dialog consistent with DatasetCenter's field preview dialog. */
-.threshold-log-dialog {
+/* 弹窗 append-to-body 后挂到 body，scoped 样式不生效，故在此补齐。 */
+.pwd-setting-dialog,
+.threshold-log-dialog,
+.ai-setting-dialog {
   background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
   border: 1px solid rgba(125, 201, 255, 0.18) !important;
   border-radius: 20px !important;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
 }
 
-.threshold-log-dialog .el-dialog__title {
+.pwd-setting-dialog .el-dialog__title,
+.threshold-log-dialog .el-dialog__title,
+.ai-setting-dialog .el-dialog__title {
   color: #e8f1ff !important;
   font-size: 1.15rem !important;
 }
 
-.threshold-log-dialog .el-dialog__headerbtn .el-dialog__close {
+.pwd-setting-dialog .el-dialog__headerbtn .el-dialog__close,
+.threshold-log-dialog .el-dialog__headerbtn .el-dialog__close,
+.ai-setting-dialog .el-dialog__headerbtn .el-dialog__close {
   color: rgba(220, 234, 255, 0.5) !important;
 }
 
-.threshold-log-dialog .el-dialog__body {
+.pwd-setting-dialog .el-dialog__body,
+.threshold-log-dialog .el-dialog__body,
+.ai-setting-dialog .el-dialog__body {
   padding: 20px 24px !important;
+}
+
+.pwd-setting-dialog .el-dialog__footer,
+.ai-setting-dialog .el-dialog__footer {
+  padding: 12px 24px 18px !important;
 }
 
 .threshold-log-dialog .el-table,
@@ -838,16 +1205,20 @@ select.settings-form__input option {
   background-color: transparent !important;
 }
 
+/* 行高固定成整数，配合 Settings.vue 的 logTableMaxHeight 把表体高度对齐到整行，
+   否则最后一行会被 max-height 切掉一半。两个常量要一起改。 */
 .threshold-log-dialog .el-table th.el-table__cell {
   background-color: rgba(16, 34, 60, 0.9) !important;
   color: rgba(155, 195, 240, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
+  height: 40px;
 }
 
 .threshold-log-dialog .el-table td.el-table__cell {
   background-color: rgba(6, 15, 28, 0.85) !important;
   color: rgba(175, 198, 230, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
+  height: 42px;
 }
 
 .threshold-log-dialog .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
@@ -860,5 +1231,133 @@ select.settings-form__input option {
 
 .threshold-log-dialog .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
+}
+
+/* 阈值变更单元格：旧值 → 新值。
+   新值沿用 RiskLevelTag 的深色胶囊（中风险蓝 / 高风险橙），
+   不用 Element Plus 的 el-tag——它在深色弹窗里会渲染成白底绿字，
+   而且不管阈值升还是降都是同一个绿色。 */
+.threshold-log-dialog .thr-change {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.threshold-log-dialog .thr-change__old {
+  min-width: 34px;
+  text-align: right;
+  color: rgba(175, 198, 230, 0.45) !important;
+}
+
+.threshold-log-dialog .thr-change__arrow {
+  color: rgba(125, 201, 255, 0.38);
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.threshold-log-dialog .thr-change__new {
+  min-width: 52px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.threshold-log-dialog .thr-change__new--medium {
+  background: rgba(91, 166, 255, 0.18);
+  border: 1px solid rgba(91, 166, 255, 0.25);
+  color: #9ad6ff;
+}
+
+.threshold-log-dialog .thr-change__new--high {
+  background: rgba(255, 177, 107, 0.18);
+  border: 1px solid rgba(255, 177, 107, 0.25);
+  color: #ffc37d;
+}
+
+/* 表体超出一屏时 EP 的滚动条只在 hover 时出现（且是灰色细条），
+   而 max-height 会把最后一行切一半 —— 把滚动条做粗一点、染成主题蓝，提示还能往下滚。 */
+.threshold-log-dialog .el-scrollbar__bar.is-vertical {
+  width: 7px;
+}
+
+.threshold-log-dialog .el-scrollbar__bar.is-vertical > div,
+.threshold-log-dialog .el-scrollbar__bar.is-horizontal > div {
+  background-color: rgba(125, 201, 255, 0.3) !important;
+  border-radius: 4px;
+}
+
+.threshold-log-dialog .el-table__body-wrapper {
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08);
+}
+
+/* style.css 里的 .el-button 暗色覆盖与 Element Plus 自身样式同权重、且 EP 在后，
+   实际不生效（实测取消按钮渲染成白底）。此处用 !important 兜住。 */
+.pwd-setting-dialog .el-button,
+.ai-setting-dialog .el-button {
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.3) !important;
+  color: #9ad6ff !important;
+}
+
+.pwd-setting-dialog .el-button:hover,
+.ai-setting-dialog .el-button:hover {
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
+}
+
+.pwd-setting-dialog .el-button--primary,
+.ai-setting-dialog .el-button--primary {
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
+  font-weight: 600 !important;
+}
+
+.pwd-setting-dialog .el-button--primary:hover,
+.ai-setting-dialog .el-button--primary:hover {
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
+}
+
+.ai-dialog-form {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-dialog-field__label {
+  font-size: 0.88rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.ai-dialog-input {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.ai-dialog-input:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.ai-dialog-input::placeholder {
+  color: rgba(220, 234, 255, 0.32);
 }
 </style>

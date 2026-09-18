@@ -44,6 +44,10 @@ backend/java/algorithm-src/PMWNB/PMWNB.zip
 *.swo
 *~
 
+# ==================== Codex local workspace ====================
+/.workbuddy/
+/.workbuddy-ai/
+
 # ==================== OS ====================
 .DS_Store
 Thumbs.db

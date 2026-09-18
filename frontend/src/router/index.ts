@@ -2,9 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';
 import { setupRouterGuards } from './guards';
 
-// AI模型训练与风险预测
-import RiskAnalysis from '@/views/Model/RiskAnalysis.vue';
-
 const routes = [
   {
     path: '/login',
@@ -13,21 +10,15 @@ const routes = [
     meta: { title: '用户登录' },
   },
   {
-    path: '/home',
-    name: '首页',
-    component: () => import('@/views/Home/HomeView.vue'),
-    meta: { title: '首页', userOnly: true },
-  },
-  {
     path: '/',
-    // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；其余 → /home
+    // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；异常无场景账号 → 场景中心
     redirect: () => {
       const user = useUserStore().currentUser;
       const role = user?.role;
       if (role === 'SUPER_ADMIN') return '/overview';
       const bound = user?.scenario_code;
       if (bound) return `/scenarios/${bound}/dashboard`;
-      return '/home';
+      return '/scenarios';
     },
     meta: { title: '首页' },
   },
@@ -40,7 +31,9 @@ const routes = [
   {
     path: '/risk',
     name: 'AI模型训练预测',
-    component: RiskAnalysis,
+    // 懒加载：此前是唯一一个静态 import 的路由，会把整个训练预测页打进入口 chunk，
+    // 拖慢首屏（首页 / 场景中心）的加载。
+    component: () => import('@/views/Model/RiskAnalysis.vue'),
     // 管理级角色（最外层 + 场景管理员）可训练；场景管理员由后端校验仅自己场景
     meta: { title: 'AI模型训练预测' },
   },
@@ -48,8 +41,8 @@ const routes = [
   {
     path: '/overview',
     name: '管理员首页',
-    component: () => import('@/views/Admin/AdminOverviewView.vue'),
-    // 管理员首页（原全局总览）：全平台跨用户态势，仅管理员可访问；普通用户的首页是 /home
+    component: () => import('@/views/Home/dashboard/DashboardHomeView.vue'),
+    // 首页按角色分发：最外层管理员=平台总览；场景管理员=数据画像；场景用户=我的工作台
     meta: { title: '平台运行总览', requiresAdmin: true, hiddenForUser: true },
   },
   {
@@ -61,8 +54,8 @@ const routes = [
   {
     path: '/scenarios/:scenarioId/dashboard',
     name: '场景大屏',
-    // Task 009：场景看板容器（四场景动态分发）；旧 views/Model/ScenarioDashboard.vue 保留未使用
-    component: () => import('@/views/Scenario/ScenarioDashboardView.vue'),
+    // 角色化场景首页：场景管理员显示数据画像，场景用户显示我的工作台
+    component: () => import('@/views/Home/dashboard/DashboardHomeView.vue'),
     meta: { title: '场景大屏' },
   },
   {

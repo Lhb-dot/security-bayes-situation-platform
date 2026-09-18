@@ -29,6 +29,7 @@ interface ApiDataset {
   uploaded_at: string;
   status: string;
   name?: string;
+  file_name?: string;
   field_count?: number;
   data_format?: string;
   record_count?: number;
@@ -171,12 +172,18 @@ const formatUploadedAt = (value: string): string => {
 export const mapApiDataset = (item: ApiDataset): Dataset => {
   const fields = mapFields(item.fields_schema, item.label_field);
   const scenarioId = resolveScenarioCode(item);
+  // 展示名统一取后端下发的 name（中文），logical_id 仅作兜底
+  const displayName = item.name || item.logical_id;
+  // 原始文件名：优先用后端下发的 file_name，缺失时从 file_path 取 basename 兜底
+  const fileName =
+    item.file_name || item.file_path?.replace(/\\/g, '/').split('/').pop() || item.logical_id;
   return {
     dataset_id: String(item.id),
-    name: item.name || item.logical_id,
+    name: displayName,
+    file_name: fileName,
     description: item.scenario_name
-      ? `${item.scenario_name} · ${item.logical_id}`
-      : `${item.logical_id}（v${item.version}）`,
+      ? `${item.scenario_name} · ${displayName}`
+      : `${displayName}（v${item.version}）`,
     scenario_id: scenarioId,
     record_count: item.record_count ?? 0,
     field_count: item.field_count ?? fields.length,
@@ -386,6 +393,7 @@ export const uploadDataset = async (params: {
   const item = (await unwrapData(
     await request.post('/api/v1/datasets', {
       logical_id: logicalId,
+      name: params.name?.trim() || undefined,
       scenario_id: scenarioId,
       file_path: params.file_path,
       fields_schema: fieldsSchema,
@@ -400,6 +408,7 @@ export const uploadDataset = async (params: {
 export const uploadDatasetFile = async (params: {
   file: File;
   logical_id: string;
+  name?: string;
   scenario_id: number | string;
   label_field: string;
   visibility?: string;
@@ -416,6 +425,7 @@ export const uploadDatasetFile = async (params: {
   form.append('logical_id', params.logical_id);
   form.append('scenario_id', String(scenarioNumeric));
   form.append('label_field', params.label_field);
+  if (params.name?.trim()) form.append('name', params.name.trim());
   if (params.visibility) form.append('visibility', params.visibility);
   const item = (await unwrapData(
     await request.post('/api/v1/datasets/upload', form)

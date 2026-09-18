@@ -17,6 +17,9 @@ import weka.filters.unsupervised.attribute.Discretize;
 
 public class EMAWNB extends AbstractClassifier {
 
+	/** Keep model files trained before the explanation reporting additions readable. */
+	private static final long serialVersionUID = 1116225415764013468L;
+
 	private Instances m_Instances;
 	private int numInstances;
 	private int numAtts;

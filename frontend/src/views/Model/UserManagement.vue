@@ -2,7 +2,8 @@
 /**
  * UserManagement - 用户管理（真实后端接口）
  *
- * - 登录态 / 列表 / 创建 / 重置密码 / 启停 / 改密：全部走 /api/v1
+ * - 登录态 / 列表 / 创建 / 重置密码 / 启停：全部走 /api/v1
+ *   （本人改密已统一到设置页，此处只保留「重置他人密码」）
  * - SUPER_ADMIN：可看全部用户与场景管理员，可创建 SCENARIO_ADMIN / SCENARIO_USER 并绑定场景
  * - SCENARIO_ADMIN：仅管理本场景用户，只能创建 SCENARIO_USER
  */
@@ -213,35 +214,6 @@ const submitBind = async () => {
   }
 };
 
-// ========== 修改本人密码 ==========
-const pwdForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' });
-const pwdSubmitting = ref(false);
-
-const submitChangePwd = async () => {
-  if (!pwdForm.value.oldPassword) {
-    ElMessage.warning('请输入原密码');
-    return;
-  }
-  if (!pwdForm.value.newPassword || pwdForm.value.newPassword.length < 6) {
-    ElMessage.warning('新密码至少 6 位');
-    return;
-  }
-  if (pwdForm.value.newPassword !== pwdForm.value.confirmPassword) {
-    ElMessage.warning('两次输入的新密码不一致');
-    return;
-  }
-  pwdSubmitting.value = true;
-  try {
-    await userStore.changePassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
-    ElMessage.success('密码修改成功');
-    pwdForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '修改失败');
-  } finally {
-    pwdSubmitting.value = false;
-  }
-};
-
 onMounted(async () => {
   try {
     await loadScenarios();
@@ -296,7 +268,7 @@ onMounted(async () => {
         <table class="users-table">
           <thead>
             <tr>
-              <th>ID</th>
+              <th>用户ID</th>
               <th>用户名</th>
               <th>角色</th>
               <th>状态</th>
@@ -358,50 +330,10 @@ onMounted(async () => {
       </div>
     </section>
 
-    <section class="card users-section">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">My Password</p>
-          <h3>修改本人密码</h3>
-        </div>
-      </div>
-      <div class="pwd-form">
-        <div class="pwd-form__field">
-          <label class="pwd-form__label">原密码</label>
-          <input
-            v-model="pwdForm.oldPassword"
-            type="password"
-            class="pwd-form__input"
-            placeholder="请输入原密码"
-          />
-        </div>
-        <div class="pwd-form__field">
-          <label class="pwd-form__label">新密码</label>
-          <input
-            v-model="pwdForm.newPassword"
-            type="password"
-            class="pwd-form__input"
-            placeholder="至少 6 位"
-          />
-        </div>
-        <div class="pwd-form__field">
-          <label class="pwd-form__label">确认新密码</label>
-          <input
-            v-model="pwdForm.confirmPassword"
-            type="password"
-            class="pwd-form__input"
-            placeholder="再次输入新密码"
-          />
-        </div>
-        <button class="users-btn users-btn--primary" :disabled="pwdSubmitting" @click="submitChangePwd">
-          {{ pwdSubmitting ? '保存中...' : '保存新密码' }}
-        </button>
-      </div>
-    </section>
-
     <el-dialog
       v-model="createOpen"
       :title="isSuperAdmin ? '创建账号并绑定场景' : '创建本场景用户'"
+      class="users-create-dialog"
       width="480px"
       align-center
       append-to-body
@@ -689,13 +621,15 @@ onMounted(async () => {
 }
 
 .status-badge--on {
-  background: rgba(83, 229, 200, 0.14);
-  color: #53e5c8;
+  background: rgba(14, 99, 76, 0.62);
+  color: #6ef0c4;
+  border: 1px solid rgba(83, 229, 200, 0.36);
 }
 
 .status-badge--off {
-  background: rgba(255, 123, 114, 0.14);
-  color: #ff7b72;
+  background: rgba(112, 32, 30, 0.55);
+  color: #ff9a92;
+  border: 1px solid rgba(255, 123, 114, 0.34);
 }
 
 .pwd-form {
@@ -736,29 +670,33 @@ select.pwd-form__input option {
 
 .users-btn {
   padding: 10px 20px;
-  border: 1px solid rgba(125, 201, 255, 0.25);
+  border: 1px solid rgba(125, 201, 255, 0.35);
   border-radius: 10px;
   background: rgba(91, 166, 255, 0.1);
   color: #9ad6ff;
   font-size: 0.9rem;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
   width: fit-content;
 }
 
 .users-btn:hover {
-  background: rgba(91, 166, 255, 0.2);
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
 }
 
 .users-btn--primary {
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
-  border: none;
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
+  border: 1px solid rgba(125, 201, 255, 0.35);
   font-weight: 600;
 }
 
 .users-btn--primary:hover {
-  opacity: 0.9;
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.5);
+  color: #fff;
 }
 
 .modal-mask {
@@ -814,5 +752,26 @@ select.pwd-form__input option {
   gap: 10px;
   padding: 14px 20px;
   border-top: 1px solid rgba(125, 201, 255, 0.1);
+}
+</style>
+
+<style>
+/* 创建账号弹窗 append-to-body 后挂到 body，scoped 样式不生效；
+   且 style.css 的 .el-button 暗色覆盖与 Element Plus 同权重、EP 在后，实际不生效
+   （实测渲染成白底 / EP 默认蓝），故此处用 !important 兜住。 */
+.users-create-dialog .el-button {
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
+}
+
+.users-create-dialog .el-button:hover {
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
+}
+
+.users-create-dialog .el-button--primary {
+  font-weight: 600 !important;
 }
 </style>

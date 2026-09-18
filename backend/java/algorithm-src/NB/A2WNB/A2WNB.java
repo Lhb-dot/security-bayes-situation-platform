@@ -61,11 +61,8 @@ public class A2WNB extends AbstractClassifier implements OptionHandler, Weighted
 	
 
 	public double[] distributionForInstance(Instance instance) throws Exception {
-		
 		Instances insts2 = new Instances(insts);
-		
 		rode = (RODE)m_Classifier;
-		
 		int index = 0;
 		for(int j=0; j<numAtt; j++) {
 			insts2.instance(0).setValue(j, instance.value(j));
@@ -78,8 +75,43 @@ public class A2WNB extends AbstractClassifier implements OptionHandler, Weighted
 			insts2.instance(0).setValue(j, tmp[index]);
 			index++;
 		}
-		
 		return m_Classifier2.distributionForInstance(insts2.instance(0));
+	}
+
+	/** Original RODE distribution, exposed only for post-prediction explanation. */
+	public double[] getOriginalDistributionForReport(Instance instance) throws Exception {
+		return m_Classifier.distributionForInstance(instance);
+	}
+
+	/** Enhanced-stage distribution, exposed only for post-prediction explanation. */
+	public double[] getEnhancedDistributionForReport(Instance instance) throws Exception {
+		return m_Classifier2.distributionForInstance(buildAugmentedInstance(instance));
+	}
+
+	/** RODE-generated attribute values, one value for each original attribute. */
+	public String[] getEnhancedAttributeValuesForReport(Instance instance) throws Exception {
+		String value = ((RODE) m_Classifier).distributionForInstance2(instance);
+		return value.split(",");
+	}
+
+	public int getRodeModelCountForReport() {
+		return rode == null ? 0 : rode.getM_numRODANB();
+	}
+
+	public int getRodeTaskForReport() {
+		return rode == null ? -1 : rode.getTask();
+	}
+
+	private Instance buildAugmentedInstance(Instance instance) throws Exception {
+		Instances augmented = new Instances(insts);
+		for (int j = 0; j < numAtt; j++) {
+			augmented.instance(0).setValue(j, instance.value(j));
+		}
+		String[] values = getEnhancedAttributeValuesForReport(instance);
+		for (int j = 0; j < numAtt; j++) {
+			augmented.instance(0).setValue(numAtt + j, values[j]);
+		}
+		return augmented.instance(0);
 	}
 
 	/**

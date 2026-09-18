@@ -1,0 +1,684 @@
+{
+  "network_security": {
+    "scenario_name": "网络安全",
+    "analysis_goal": "识别网络异常和入侵风险",
+    "risk_expression_template": "风险概率 {risk_probability}，重点关注 {top_features}；若存在视图冲突，建议人工复核。",
+    "required_feature_names": ["duration","src_bytes","dst_bytes","protocol_type","service","flag","land","wrong_fragment","urgent","hot","num_failed_logins","logged_in","num_compromised","root_shell","su_attempted","num_root","num_file_creations","num_shells","num_access_files","is_host_login","is_guest_login","count","srv_count","serror_rate","srv_serror_rate","rerror_rate","srv_rerror_rate","same_srv_rate","diff_srv_rate","srv_diff_host_rate","dst_host_count","dst_host_srv_count","dst_host_same_srv_rate","dst_host_diff_srv_rate","dst_host_same_src_port_rate","dst_host_srv_diff_host_rate","dst_host_serror_rate","dst_host_srv_serror_rate","dst_host_rerror_rate","dst_host_srv_rerror_rate","L4_SRC_PORT","L4_DST_PORT","PROTOCOL","L7_PROTO","IN_BYTES","IN_PKTS","OUT_BYTES","OUT_PKTS","TCP_FLAGS","CLIENT_TCP_FLAGS","SERVER_TCP_FLAGS","FLOW_DURATION_MILLISECONDS","DURATION_IN","DURATION_OUT","MIN_TTL","MAX_TTL","LONGEST_FLOW_PKT","SHORTEST_FLOW_PKT","MIN_IP_PKT_LEN","MAX_IP_PKT_LEN","SRC_TO_DST_SECOND_BYTES","DST_TO_SRC_SECOND_BYTES","RETRANSMITTED_IN_BYTES","RETRANSMITTED_IN_PKTS","RETRANSMITTED_OUT_BYTES","RETRANSMITTED_OUT_PKTS","SRC_TO_DST_AVG_THROUGHPUT","DST_TO_SRC_AVG_THROUGHPUT","NUM_PKTS_UP_TO_128_BYTES","NUM_PKTS_128_TO_256_BYTES","NUM_PKTS_256_TO_512_BYTES","NUM_PKTS_512_TO_1024_BYTES","NUM_PKTS_1024_TO_1514_BYTES","TCP_WIN_MAX_IN","TCP_WIN_MAX_OUT","ICMP_TYPE","ICMP_IPV4_TYPE","DNS_QUERY_TYPE","DNS_TTL_ANSWER","FTP_COMMAND_RET_CODE"],
+    "risk_types": ["异常流量", "入侵行为", "数据外传"],
+    "manual_review_advice": "结合原始流量、连接日志和主机侧证据进行人工复核。",
+    "recommended_actions": [
+      "检查源主机、目标地址和相关连接日志",
+      "核对异常端口、协议和流量方向",
+      "必要时对相关主机进行进一步核查"
+    ],
+    "feature_dictionary": {
+      "protocol_type": {
+        "display_name": "protocol_type",
+        "meaning": "传输层或网络层协议类型（tcp/udp/icmp）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "service": {
+        "display_name": "service",
+        "meaning": "目标端口对应的网络服务类型",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "flag": {
+        "display_name": "flag",
+        "meaning": "连接状态标志",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "land": {
+        "display_name": "land",
+        "meaning": "源地址与目标地址、端口是否相同（1=相同）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "wrong_fragment": {
+        "display_name": "wrong_fragment",
+        "meaning": "错误分片数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "urgent": {
+        "display_name": "urgent",
+        "meaning": "紧急数据包数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "hot": {
+        "display_name": "hot",
+        "meaning": "敏感或高风险操作特征数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_failed_logins": {
+        "display_name": "num_failed_logins",
+        "meaning": "登录失败次数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "logged_in": {
+        "display_name": "logged_in",
+        "meaning": "是否成功登录（1=成功登录）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_compromised": {
+        "display_name": "num_compromised",
+        "meaning": "检测到的系统受损或越权特征数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "root_shell": {
+        "display_name": "root_shell",
+        "meaning": "是否获得root shell（1=是）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "su_attempted": {
+        "display_name": "su_attempted",
+        "meaning": "是否尝试执行su提权操作",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_root": {
+        "display_name": "num_root",
+        "meaning": "root权限相关操作数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_file_creations": {
+        "display_name": "num_file_creations",
+        "meaning": "文件创建操作数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_shells": {
+        "display_name": "num_shells",
+        "meaning": "启动shell的数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "num_access_files": {
+        "display_name": "num_access_files",
+        "meaning": "访问敏感文件的数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "is_host_login": {
+        "display_name": "is_host_login",
+        "meaning": "是否属于主机级登录（1=是）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "is_guest_login": {
+        "display_name": "is_guest_login",
+        "meaning": "是否使用访客账户登录（1=是）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "count": {
+        "display_name": "count",
+        "meaning": "统计窗口内连接到同一目标主机的连接数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "srv_count": {
+        "display_name": "srv_count",
+        "meaning": "统计窗口内访问同一服务的连接数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "serror_rate": {
+        "display_name": "serror_rate",
+        "meaning": "同一目标连接中SYN错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "srv_serror_rate": {
+        "display_name": "srv_serror_rate",
+        "meaning": "同一服务连接中SYN错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "rerror_rate": {
+        "display_name": "rerror_rate",
+        "meaning": "同一目标连接中REJ错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "srv_rerror_rate": {
+        "display_name": "srv_rerror_rate",
+        "meaning": "同一服务连接中REJ错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "same_srv_rate": {
+        "display_name": "same_srv_rate",
+        "meaning": "同一目标连接中使用相同服务的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "diff_srv_rate": {
+        "display_name": "diff_srv_rate",
+        "meaning": "同一目标连接中使用不同服务的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "srv_diff_host_rate": {
+        "display_name": "srv_diff_host_rate",
+        "meaning": "同一服务连接中访问不同目标主机的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_count": {
+        "display_name": "dst_host_count",
+        "meaning": "目标主机统计窗口内的连接数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_srv_count": {
+        "display_name": "dst_host_srv_count",
+        "meaning": "目标主机统计窗口内使用同一服务的连接数量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_same_srv_rate": {
+        "display_name": "dst_host_same_srv_rate",
+        "meaning": "目标主机连接中使用相同服务的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_diff_srv_rate": {
+        "display_name": "dst_host_diff_srv_rate",
+        "meaning": "目标主机连接中使用不同服务的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_same_src_port_rate": {
+        "display_name": "dst_host_same_src_port_rate",
+        "meaning": "目标主机连接中使用相同源端口的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_srv_diff_host_rate": {
+        "display_name": "dst_host_srv_diff_host_rate",
+        "meaning": "目标主机同一服务连接中访问不同主机的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_serror_rate": {
+        "display_name": "dst_host_serror_rate",
+        "meaning": "目标主机连接中SYN错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_srv_serror_rate": {
+        "display_name": "dst_host_srv_serror_rate",
+        "meaning": "目标主机同一服务连接中SYN错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_rerror_rate": {
+        "display_name": "dst_host_rerror_rate",
+        "meaning": "目标主机连接中REJ错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "dst_host_srv_rerror_rate": {
+        "display_name": "dst_host_srv_rerror_rate",
+        "meaning": "目标主机同一服务连接中REJ错误连接的比例",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "L4_SRC_PORT": {
+        "display_name": "L4_SRC_PORT",
+        "meaning": "四层源端口",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "PROTOCOL": {
+        "display_name": "PROTOCOL",
+        "meaning": "IP协议编号",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "L7_PROTO": {
+        "display_name": "L7_PROTO",
+        "meaning": "应用层协议编号",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "IN_BYTES": {
+        "display_name": "IN_BYTES",
+        "meaning": "流入方向字节数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "IN_PKTS": {
+        "display_name": "IN_PKTS",
+        "meaning": "流入方向数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "OUT_BYTES": {
+        "display_name": "OUT_BYTES",
+        "meaning": "流出方向字节数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "OUT_PKTS": {
+        "display_name": "OUT_PKTS",
+        "meaning": "流出方向数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "TCP_FLAGS": {
+        "display_name": "TCP_FLAGS",
+        "meaning": "连接级TCP标志位汇总值",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "CLIENT_TCP_FLAGS": {
+        "display_name": "CLIENT_TCP_FLAGS",
+        "meaning": "客户端方向TCP标志位汇总值",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "SERVER_TCP_FLAGS": {
+        "display_name": "SERVER_TCP_FLAGS",
+        "meaning": "服务器方向TCP标志位汇总值",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "FLOW_DURATION_MILLISECONDS": {
+        "display_name": "FLOW_DURATION_MILLISECONDS",
+        "meaning": "流持续时间（毫秒）",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DURATION_IN": {
+        "display_name": "DURATION_IN",
+        "meaning": "流入方向持续时间",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DURATION_OUT": {
+        "display_name": "DURATION_OUT",
+        "meaning": "流出方向持续时间",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "MIN_TTL": {
+        "display_name": "MIN_TTL",
+        "meaning": "观测到的最小TTL",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "MAX_TTL": {
+        "display_name": "MAX_TTL",
+        "meaning": "观测到的最大TTL",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "LONGEST_FLOW_PKT": {
+        "display_name": "LONGEST_FLOW_PKT",
+        "meaning": "流中最长数据包长度",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "SHORTEST_FLOW_PKT": {
+        "display_name": "SHORTEST_FLOW_PKT",
+        "meaning": "流中最短数据包长度",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "MIN_IP_PKT_LEN": {
+        "display_name": "MIN_IP_PKT_LEN",
+        "meaning": "最小IP数据包长度",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "MAX_IP_PKT_LEN": {
+        "display_name": "MAX_IP_PKT_LEN",
+        "meaning": "最大IP数据包长度",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "SRC_TO_DST_SECOND_BYTES": {
+        "display_name": "SRC_TO_DST_SECOND_BYTES",
+        "meaning": "源到目标方向的每秒字节量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DST_TO_SRC_SECOND_BYTES": {
+        "display_name": "DST_TO_SRC_SECOND_BYTES",
+        "meaning": "目标到源方向的每秒字节量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "RETRANSMITTED_IN_BYTES": {
+        "display_name": "RETRANSMITTED_IN_BYTES",
+        "meaning": "流入方向重传字节数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "RETRANSMITTED_IN_PKTS": {
+        "display_name": "RETRANSMITTED_IN_PKTS",
+        "meaning": "流入方向重传数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "RETRANSMITTED_OUT_BYTES": {
+        "display_name": "RETRANSMITTED_OUT_BYTES",
+        "meaning": "流出方向重传字节数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "RETRANSMITTED_OUT_PKTS": {
+        "display_name": "RETRANSMITTED_OUT_PKTS",
+        "meaning": "流出方向重传数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "SRC_TO_DST_AVG_THROUGHPUT": {
+        "display_name": "SRC_TO_DST_AVG_THROUGHPUT",
+        "meaning": "源到目标方向平均吞吐量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DST_TO_SRC_AVG_THROUGHPUT": {
+        "display_name": "DST_TO_SRC_AVG_THROUGHPUT",
+        "meaning": "目标到源方向平均吞吐量",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "NUM_PKTS_UP_TO_128_BYTES": {
+        "display_name": "NUM_PKTS_UP_TO_128_BYTES",
+        "meaning": "长度不超过128字节的数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "NUM_PKTS_128_TO_256_BYTES": {
+        "display_name": "NUM_PKTS_128_TO_256_BYTES",
+        "meaning": "长度在128至256字节的数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "NUM_PKTS_256_TO_512_BYTES": {
+        "display_name": "NUM_PKTS_256_TO_512_BYTES",
+        "meaning": "长度在256至512字节的数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "NUM_PKTS_512_TO_1024_BYTES": {
+        "display_name": "NUM_PKTS_512_TO_1024_BYTES",
+        "meaning": "长度在512至1024字节的数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "NUM_PKTS_1024_TO_1514_BYTES": {
+        "display_name": "NUM_PKTS_1024_TO_1514_BYTES",
+        "meaning": "长度在1024至1514字节的数据包数",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "TCP_WIN_MAX_IN": {
+        "display_name": "TCP_WIN_MAX_IN",
+        "meaning": "流入方向最大TCP窗口值",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "TCP_WIN_MAX_OUT": {
+        "display_name": "TCP_WIN_MAX_OUT",
+        "meaning": "流出方向最大TCP窗口值",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "ICMP_TYPE": {
+        "display_name": "ICMP_TYPE",
+        "meaning": "ICMP类型编码",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "ICMP_IPV4_TYPE": {
+        "display_name": "ICMP_IPV4_TYPE",
+        "meaning": "IPv4 ICMP类型编码",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DNS_QUERY_TYPE": {
+        "display_name": "DNS_QUERY_TYPE",
+        "meaning": "DNS查询类型编码",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "DNS_TTL_ANSWER": {
+        "display_name": "DNS_TTL_ANSWER",
+        "meaning": "DNS应答记录TTL",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "FTP_COMMAND_RET_CODE": {
+        "display_name": "FTP_COMMAND_RET_CODE",
+        "meaning": "FTP命令返回码",
+        "high_value_meaning": "取值偏高或出现高风险类别时，应结合网络基线和业务用途核查",
+        "low_value_meaning": "取值偏低或出现低频类别时，不能单独排除扫描、探测或短连接风险",
+        "abnormal_value_meaning": "与同类连接、协议服务或历史基线明显偏离时需要核查",
+        "recommended_action": "核对相关主机、端口、协议和连接日志"
+      },
+      "src_bytes": {
+        "display_name": "源端字节数",
+        "meaning": "连接过程中源端发送的数据量",
+        "high_value_meaning": "数值异常升高可能表示异常流量或数据外传",
+        "low_value_meaning": "数值较低本身不能排除短连接或小流量攻击",
+        "abnormal_value_meaning": "与历史基线或同类连接明显偏离时需要核查",
+        "recommended_action": "检查源主机、目标地址和相关连接日志"
+      },
+      "dst_bytes": {
+        "display_name": "目标端字节数",
+        "meaning": "连接过程中目标端接收或发送的数据量",
+        "high_value_meaning": "异常升高可能表示大流量传输或响应异常",
+        "low_value_meaning": "数值较低可能对应探测、握手或短连接行为",
+        "abnormal_value_meaning": "与同类服务连接相比明显偏离时需要核查",
+        "recommended_action": "核对目标地址、会话方向和近期流量记录"
+      },
+      "duration": {
+        "display_name": "连接持续时间",
+        "meaning": "一次网络连接从建立到结束的持续时长",
+        "high_value_meaning": "持续时间异常偏长可能表示长连接、控制通道或资源占用",
+        "low_value_meaning": "极短连接可能对应探测、扫描或快速失败",
+        "abnormal_value_meaning": "明显偏离同类连接基线时需要核查",
+        "recommended_action": "结合连接状态、端口和主机进程日志复核"
+      },
+      "L4_DST_PORT": {
+        "display_name": "目标端口",
+        "meaning": "网络连接访问的传输层目标端口",
+        "high_value_meaning": "访问非常用或高风险服务端口时需要重点关注",
+        "low_value_meaning": "低端口通常对应系统或基础服务，仍需结合协议判断",
+        "abnormal_value_meaning": "端口与业务用途不匹配时可能存在异常访问",
+        "recommended_action": "核对端口对应服务、访问来源和主机白名单"
+      }
+    }
+  },
+  "power_system": {
+    "scenario_name": "电力系统",
+    "analysis_goal": "识别电力系统运行异常和设备风险",
+    "risk_expression_template": "当前电力系统样本的风险概率为 {risk_probability}，主要依据为 {top_features}。",
+    "risk_types": ["设备异常", "运行波动", "保护告警"],
+    "manual_review_advice": "结合 PMU、SCADA 和现场巡检结果进行人工复核。",
+    "recommended_actions": ["核对设备告警和测量数据", "安排现场巡检"],
+    "feature_dictionary": {}
+  },
+  "geological_risk": {
+    "scenario_name": "地质风险",
+    "analysis_goal": "识别滑坡及相关地质灾害风险",
+    "risk_expression_template": "当前区域地质风险概率为 {risk_probability}，需重点核查 {top_features}。",
+    "risk_types": ["滑坡风险", "地表位移", "降雨诱发风险"],
+    "manual_review_advice": "结合现场调查、降雨和位移监测结果进行人工复核。",
+    "recommended_actions": ["核对降雨和位移监测", "开展重点区域现场核查"],
+    "feature_dictionary": {}
+  },
+  "flightdeck_operation": {
+    "scenario_name": "航母甲板作业",
+    "analysis_goal": "识别舰载机甲板作业中的碰撞和调度风险",
+    "risk_expression_template": "当前甲板作业风险概率为 {risk_probability}，重点关注 {top_features}。",
+    "risk_types": ["碰撞风险", "间距异常", "调度冲突"],
+    "manual_review_advice": "结合甲板态势、航迹和现场调度记录进行人工复核。",
+    "recommended_actions": ["复核间距和接近率", "核对调度顺序与避让航线"],
+    "feature_dictionary": {}
+  }
+}

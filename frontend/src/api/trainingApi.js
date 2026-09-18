@@ -1,7 +1,7 @@
 /**
  * trainingApi.js — AI 模型训练页真实接口（/api/v1 数据库版）
  *
- * 替代 mockApi 的 getDatasetList / getAlgorithms / trainModel：
+ * 为训练页提供真实后端的 getDatasetList / getAlgorithms / trainModel：
  * - 场景 / 数据集 / 算法 全部从数据库渲染
  * - 训练走 POST /api/v1/model-versions/train，参数按 param_schema 传入真实 Java/Weka 服务
  *

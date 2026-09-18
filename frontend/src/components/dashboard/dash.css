@@ -1,0 +1,532 @@
+/* ==========================================================================
+   首页看板样式 —— 统一的设计令牌与组件样式
+   全部类名以 d- 前缀并挂在 .dash-page 下，避免与全局 .card/.row 等冲突。
+   ========================================================================== */
+
+.dash-page {
+  font-family: var(--font-ui);
+  color: #e8f1ff;
+  padding-bottom: 34px;
+}
+
+.dash-page .d-wrap {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+}
+
+/* ---------- 顶部标题 ---------- */
+.dash-page .d-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 16px;
+  border: 1px solid rgba(125, 201, 255, 0.16);
+  background: linear-gradient(160deg, rgba(17, 38, 66, 0.92), rgba(9, 19, 34, 0.94));
+}
+
+.dash-page .d-eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #53e5c8;
+  margin: 0 0 6px;
+}
+
+.dash-page .d-top h1 {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.dash-page .d-top p:last-child {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: rgba(220, 234, 255, 0.6);
+}
+
+.dash-page .d-badge {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  border: 1px solid rgba(83, 229, 200, 0.4);
+  background: rgba(83, 229, 200, 0.1);
+  color: #53e5c8;
+}
+
+.dash-page .d-badge--info {
+  border-color: rgba(91, 166, 255, 0.4);
+  background: rgba(91, 166, 255, 0.1);
+  color: #5ba6ff;
+}
+
+/* ---------- KPI ---------- */
+.dash-page .d-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dash-page .d-kpi {
+  position: relative;
+  overflow: hidden;
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  background: linear-gradient(160deg, rgba(15, 32, 54, 0.9), rgba(8, 17, 31, 0.92));
+}
+
+.dash-page .d-kpi::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+
+.dash-page .d-kpi--primary::before { background: #5ba6ff; }
+.dash-page .d-kpi--danger::before { background: #ff7b72; }
+.dash-page .d-kpi--warning::before { background: #ffd166; }
+.dash-page .d-kpi--success::before { background: #53e5c8; }
+.dash-page .d-kpi--purple::before { background: #a78bfa; }
+.dash-page .d-kpi--gray::before { background: #8a93a6; }
+
+.dash-page .d-kpi-v {
+  display: block;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #e8f1ff;
+}
+
+.dash-page .d-kpi--primary .d-kpi-v { color: #7dc9ff; }
+.dash-page .d-kpi--danger .d-kpi-v { color: #ff8c84; }
+.dash-page .d-kpi--warning .d-kpi-v { color: #ffd166; }
+.dash-page .d-kpi--success .d-kpi-v { color: #53e5c8; }
+.dash-page .d-kpi--purple .d-kpi-v { color: #bda4ff; }
+.dash-page .d-kpi--gray .d-kpi-v { color: #c3cbd8; }
+
+.dash-page .d-kpi-v em {
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 600;
+  margin-left: 4px;
+  opacity: 0.75;
+}
+
+.dash-page .d-kpi-l {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(220, 234, 255, 0.62);
+}
+
+.dash-page .d-kpi-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(220, 234, 255, 0.4);
+}
+
+/* ---------- 布局 ---------- */
+.dash-page .d-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 16px;
+}
+
+.dash-page .d-grid2e {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 16px;
+}
+
+.dash-page .d-grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* ---------- 卡片 ---------- */
+.dash-page .d-card {
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  background: linear-gradient(160deg, rgba(13, 26, 46, 0.85), rgba(8, 17, 31, 0.9));
+  min-width: 0;
+}
+
+.dash-page .d-card--wide {
+  grid-column: 1 / -1;
+}
+
+.dash-page .d-card h3 {
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.dash-page .d-src {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  color: rgba(220, 234, 255, 0.38);
+  line-height: 1.5;
+}
+
+.dash-page .d-empty {
+  margin: 0;
+  padding: 26px 0;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(220, 234, 255, 0.42);
+}
+
+/* ---------- 横向条形 ---------- */
+.dash-page .d-hbars {
+  display: grid;
+  gap: 9px;
+}
+
+.dash-page .d-hbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.dash-page .d-hbk {
+  width: 108px;
+  flex-shrink: 0;
+  color: rgba(220, 234, 255, 0.75);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-page .d-hbt {
+  flex: 1;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.dash-page .d-hbf {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.dash-page .d-hbv {
+  width: 88px;
+  text-align: right;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 环形图 ---------- */
+.dash-page .d-donut {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.dash-page .d-legend {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  min-width: 132px;
+  flex: 1;
+}
+
+.dash-page .d-lg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash-page .d-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.dash-page .d-lgk {
+  color: rgba(220, 234, 255, 0.72);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-page .d-lgv {
+  color: #cfe3ff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 行列表 ---------- */
+.dash-page .d-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.dash-page .d-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(125, 201, 255, 0.08);
+  font-size: 12.5px;
+}
+
+.dash-page .d-row span {
+  color: rgba(220, 234, 255, 0.62);
+}
+
+.dash-page .d-row b {
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ---------- 标签 ---------- */
+.dash-page .d-tag {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.dash-page .d-tag--high { background: rgba(255, 123, 114, 0.16); color: #ff8c84; border: 1px solid rgba(255, 123, 114, 0.32); }
+.dash-page .d-tag--medium { background: rgba(255, 209, 102, 0.14); color: #ffd166; border: 1px solid rgba(255, 209, 102, 0.3); }
+.dash-page .d-tag--low { background: rgba(83, 229, 200, 0.14); color: #53e5c8; border: 1px solid rgba(83, 229, 200, 0.3); }
+.dash-page .d-tag--pending { background: rgba(255, 123, 114, 0.12); color: #ff8c84; border: 1px solid rgba(255, 123, 114, 0.28); }
+.dash-page .d-tag--processing { background: rgba(255, 209, 102, 0.12); color: #ffd166; border: 1px solid rgba(255, 209, 102, 0.28); }
+.dash-page .d-tag--resolved { background: rgba(125, 201, 255, 0.12); color: #9ad6ff; border: 1px solid rgba(125, 201, 255, 0.28); }
+.dash-page .d-tag--ok { background: rgba(83, 229, 200, 0.14); color: #53e5c8; border: 1px solid rgba(83, 229, 200, 0.3); }
+
+/* ---------- 事件列表 ---------- */
+.dash-page .d-evs {
+  display: grid;
+  gap: 8px;
+}
+
+.dash-page .d-ev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(125, 201, 255, 0.08);
+}
+
+.dash-page .d-evb {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-page .d-evb strong {
+  display: block;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-page .d-evm {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: rgba(220, 234, 255, 0.45);
+}
+
+.dash-page .d-ev-score {
+  font-variant-numeric: tabular-nums;
+  color: #9ad6ff;
+  font-size: 12.5px;
+}
+
+/* ---------- 刻度条 ---------- */
+.dash-page .d-gauge {
+  margin-bottom: 14px;
+}
+
+.dash-page .d-gauge-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.dash-page .d-gauge-top b {
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-page .d-gauge-top b em {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.7;
+  margin-left: 3px;
+}
+
+.dash-page .d-gauge-track {
+  position: relative;
+  display: flex;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: visible;
+}
+
+.dash-page .d-gauge-track > span:first-child { border-radius: 999px 0 0 999px; }
+.dash-page .d-gauge-track > span:nth-child(3) { border-radius: 0 999px 999px 0; }
+
+.dash-page .d-gauge-pin {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 17px;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.7);
+}
+
+.dash-page .d-gauge-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: rgba(220, 234, 255, 0.4);
+  margin-top: 3px;
+}
+
+/* ---------- 漏斗 ---------- */
+.dash-page .d-funnel {
+  display: grid;
+  gap: 8px;
+}
+
+.dash-page .d-fn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.dash-page .d-fn-name {
+  width: 62px;
+  flex-shrink: 0;
+  color: rgba(220, 234, 255, 0.72);
+}
+
+.dash-page .d-fn-track {
+  flex: 1;
+}
+
+.dash-page .d-fn-bar {
+  height: 26px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(91, 166, 255, 0.33), rgba(91, 166, 255, 0.13));
+  border: 1px solid rgba(91, 166, 255, 0.3);
+  transition: width 0.4s ease;
+}
+
+.dash-page .d-fn-count {
+  width: 52px;
+  text-align: right;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 状态 ---------- */
+.dash-page .d-state {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  min-height: 320px;
+  padding: 40px;
+  border-radius: 16px;
+  border: 1px dashed rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 13px;
+}
+
+.dash-page .d-state--error {
+  color: #ff8c84;
+  border-color: rgba(255, 123, 114, 0.3);
+}
+
+.dash-page .d-btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(83, 229, 200, 0.4);
+  background: rgba(83, 229, 200, 0.1);
+  color: #53e5c8;
+  font-size: 12.5px;
+}
+
+.dash-page .d-btn:hover {
+  background: rgba(83, 229, 200, 0.18);
+}
+
+.dash-page .d-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: rgba(255, 209, 102, 0.8);
+  background: rgba(255, 209, 102, 0.06);
+  border: 1px dashed rgba(255, 209, 102, 0.3);
+  border-radius: 10px;
+  padding: 8px 12px;
+  line-height: 1.6;
+}
+
+/* ---------- 散点 ---------- */
+.dash-page .d-scatter {
+  position: relative;
+  height: 260px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  background:
+    linear-gradient(rgba(91, 166, 255, 0.06) 1px, transparent 1px) 0 0 / 10% 10%,
+    linear-gradient(90deg, rgba(91, 166, 255, 0.06) 1px, transparent 1px) 0 0 / 10% 10%,
+    rgba(6, 14, 26, 0.7);
+}
+
+.dash-page .d-point {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: #ff7b72;
+  box-shadow: 0 0 8px rgba(255, 123, 114, 0.8);
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1200px) {
+  .dash-page .d-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-page .d-grid2,
+  .dash-page .d-grid2e,
+  .dash-page .d-grid3 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .dash-page .d-kpis { grid-template-columns: 1fr; }
+  .dash-page .d-top { flex-direction: column; align-items: flex-start; }
+}

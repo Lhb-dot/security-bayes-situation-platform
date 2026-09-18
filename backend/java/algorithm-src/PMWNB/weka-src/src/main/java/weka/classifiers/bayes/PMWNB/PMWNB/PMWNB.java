@@ -10,6 +10,12 @@ import weka.filters.Filter;
 public class PMWNB extends AbstractClassifier {
 
 	/**
+	 * Preserve compatibility with model files written before the explanation
+	 * reporting methods were added to this class.
+	 */
+	private static final long serialVersionUID = 8778303151731641633L;
+
+	/**
 	 * The first row of the view matrix:
 	 * an ensemble of CAVWNB models built on the first base view and its four latent
 	 * views.
@@ -134,6 +140,20 @@ public class PMWNB extends AbstractClassifier {
 	public Instance toView1(Instance instance) throws Exception {
 		view1_Discretizor.input(instance);
 		return view1_Discretizor.output();
+	}
+
+	/** Read-only probabilities of all ten PMWNB submodels. */
+	public double[][] distributionForSubmodels(Instance instance) throws Exception {
+		view1_Discretizor.input(instance);
+		Instance d1 = view1_Discretizor.output();
+		view2_Discretizor.input(instance);
+		Instance d2 = view2_Discretizor.output();
+		double[][] first = view1.distributionForSubmodels(d1);
+		double[][] second = view2.distributionForSubmodels(d2);
+		double[][] result = new double[first.length + second.length][];
+		System.arraycopy(first, 0, result, 0, first.length);
+		System.arraycopy(second, 0, result, first.length, second.length);
+		return result;
 	}
 
 	public static void main(String[] args) {

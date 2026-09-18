@@ -8,7 +8,13 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { getInferenceRecordList } from '@/api/inferenceRecordApi';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+import {
+  getInferenceExplain,
+  getInferenceRecordList,
+  streamInferenceExplanation,
+} from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
 
 /** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
@@ -22,6 +28,7 @@ interface InferenceRecordItem {
   algorithm_name: string | null;
   dataset_id: number;
   dataset_logical_id: string | null;
+  dataset_name: string | null;
   dataset_version: number;
   risk_type: string | null;
   original_label: string;
@@ -32,6 +39,12 @@ interface InferenceRecordItem {
   executed_at: string;
   risk_event_id: number | null;
   input_features: Record<string, unknown>;
+  model_evaluation?: {
+    available: boolean;
+    source: 'ai' | 'fallback' | null;
+    markdown: string | null;
+    generated_at: string | null;
+  };
 }
 
 const records = ref<InferenceRecordItem[]>([]);
@@ -50,6 +63,16 @@ const SCENARIO_META: Record<number, { code: string; name: string }> = {
   4: { code: 'geological_risk', name: '地质风险' },
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
+
+/**
+ * 算法显示名统一为「中文名(英文缩写)」（见 alembic 20260822_000006），
+ * 例如「双视图示例加权朴素贝叶斯(DIWNB)」。列表列宽有限，只展示括号里的英文缩写，
+ * 完整名称通过 title 悬浮查看。格式不含括号时原样返回。
+ */
+const algorithmShortName = (name: string | null) => {
+  const matched = /\(([^()]+)\)\s*$/.exec(name ?? '');
+  return matched ? matched[1] : name || '—';
+};
 
 const loadRecords = async () => {
   loading.value = true;
@@ -83,6 +106,122 @@ const closeFeatures = () => {
   featureTarget.value = null;
 };
 
+const explanationTarget = ref<InferenceRecordItem | null>(null);
+const explanationDialogVisible = ref(false);
+const explanationLoading = ref(false);
+const explanationMarkdown = ref('');
+const explanationSource = ref<'ai' | 'fallback' | null>(null);
+const explanationGeneratedAt = ref<string | null>(null);
+const explanationError = ref('');
+const modelEvaluationMarkdown = ref('');
+const explanationWasAvailable = ref(false);
+const explanationGenerating = ref(false);
+let explanationController: AbortController | null = null;
+
+const safeExplanationHtml = computed(() =>
+  explanationMarkdown.value
+    ? DOMPurify.sanitize(marked.parse(explanationMarkdown.value, { async: false }) as string)
+    : '',
+);
+
+const safeModelEvaluationHtml = computed(() =>
+  modelEvaluationMarkdown.value
+    ? DOMPurify.sanitize(marked.parse(modelEvaluationMarkdown.value, { async: false }) as string)
+    : '',
+);
+
+const openExplanation = async (record: InferenceRecordItem) => {
+  explanationController?.abort();
+  explanationTarget.value = record;
+  explanationDialogVisible.value = true;
+  explanationLoading.value = true;
+  explanationMarkdown.value = '';
+  explanationSource.value = null;
+  explanationGeneratedAt.value = null;
+  explanationError.value = '';
+  modelEvaluationMarkdown.value = record.model_evaluation?.markdown ?? '';
+  explanationWasAvailable.value = false;
+  explanationGenerating.value = false;
+  try {
+    const result = await getInferenceExplain(String(record.id));
+    const saved = result.generated_explanation;
+    explanationWasAvailable.value = Boolean(saved?.available && saved.markdown);
+    if (!saved?.available || !saved.markdown) {
+      explanationError.value = '该记录尚未保存解释文本，请点击右上角生成AI评价。';
+      return;
+    }
+    explanationMarkdown.value = saved.markdown;
+    explanationSource.value = saved.source ?? null;
+    explanationGeneratedAt.value = saved.generated_at ?? null;
+  } catch (err) {
+    explanationError.value = err instanceof Error ? err.message : '解释文本读取失败';
+  } finally {
+    explanationLoading.value = false;
+  }
+};
+
+const generateExplanation = async () => {
+  const target = explanationTarget.value;
+  if (!target || explanationLoading.value) return;
+
+  explanationController?.abort();
+  explanationController = new AbortController();
+  explanationLoading.value = true;
+  explanationGenerating.value = true;
+  explanationError.value = '';
+  explanationMarkdown.value = '';
+  explanationSource.value = null;
+  explanationGeneratedAt.value = null;
+
+  try {
+    await streamInferenceExplanation(
+      {
+        scenario: {},
+        sample: {},
+        model_result: {},
+        algorithm_details: {},
+        recommended_actions: [],
+        inference_record_id: target.id,
+        model_version_id: target.model_version_id,
+      },
+      {
+        onDelta: (content) => { explanationMarkdown.value += content; },
+        onError: (message) => { explanationError.value = message; },
+      },
+      explanationController.signal,
+    );
+
+    const refreshed = await getInferenceExplain(String(target.id));
+    const saved = refreshed.generated_explanation;
+    if (!saved?.available || !saved.markdown) {
+      throw new Error('AI评价生成后未能保存，请稍后重试');
+    }
+    explanationMarkdown.value = saved.markdown;
+    explanationSource.value = saved.source ?? null;
+    explanationGeneratedAt.value = saved.generated_at ?? null;
+    explanationWasAvailable.value = true;
+  } catch (err) {
+    if ((err as Error)?.name !== 'AbortError') {
+      explanationError.value = err instanceof Error ? err.message : 'AI评价生成失败';
+    }
+  } finally {
+    explanationLoading.value = false;
+    explanationGenerating.value = false;
+    explanationController = null;
+  }
+};
+
+const closeExplanation = () => {
+  explanationController?.abort();
+  explanationController = null;
+  explanationDialogVisible.value = false;
+  explanationTarget.value = null;
+  explanationMarkdown.value = '';
+  modelEvaluationMarkdown.value = '';
+  explanationWasAvailable.value = false;
+  explanationGenerating.value = false;
+};
+
 /** 风险记录 → 跳转风险事件详情 */
 const goEventDetail = (r: InferenceRecordItem) => {
   if (r.risk_event_id == null) {
@@ -112,6 +251,24 @@ onMounted(() => {
     <section class="card records-section">
       <div class="records-table-wrap">
         <table class="records-table">
+          <!-- 13 列宽度合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
+               表格宽度恒等于容器宽度，因此不会出现横向滚动条；
+               固定内容的列按内容给足，数据集/算法两列吃掉剩余空间，窄窗口优先让它们省略号截断。 -->
+          <colgroup>
+            <col class="col-id" />
+            <col class="col-user" />
+            <col class="col-scenario" />
+            <col class="col-dataset" />
+            <col class="col-dataset-version" />
+            <col class="col-algorithm" />
+            <col class="col-model-version" />
+            <col class="col-original-label" />
+            <col class="col-risk-type" />
+            <col class="col-risk-level" />
+            <col class="col-risk-score" />
+            <col class="col-time" />
+            <col class="col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>推理记录ID</th>
@@ -134,9 +291,9 @@ onMounted(() => {
               <td>{{ r.id }}</td>
               <td>{{ r.user_id }}</td>
               <td>{{ scenarioName(r.scenario_id) }}</td>
-              <td>{{ r.dataset_logical_id }}</td>
+              <td :title="r.dataset_name || r.dataset_logical_id || ''">{{ r.dataset_name || r.dataset_logical_id }}</td>
               <td>{{ r.dataset_version }}</td>
-              <td>{{ r.algorithm_name }}</td>
+              <td :title="r.algorithm_name || ''">{{ algorithmShortName(r.algorithm_name) }}</td>
               <td>{{ r.model_version_id }}</td>
               <td>{{ r.original_label }}</td>
               <td>
@@ -152,6 +309,7 @@ onMounted(() => {
               <td>
                 <div class="op-group">
                   <button class="op-btn" @click="openFeatures(r)">输入特征</button>
+                  <button class="op-btn" @click="openExplanation(r)">查看解释</button>
                   <button v-if="r.is_risk_event" class="op-btn" @click="goEventDetail(r)">查看事件</button>
                 </div>
               </td>
@@ -184,6 +342,45 @@ onMounted(() => {
         <el-table-column prop="name" label="特征名" min-width="220" />
         <el-table-column prop="value" label="特征值" min-width="260" show-overflow-tooltip />
       </el-table>
+    </el-dialog>
+
+    <el-dialog
+      v-model="explanationDialogVisible"
+      class="inference-explanation-dialog"
+      width="820px"
+      top="5vh"
+      append-to-body
+      :close-on-click-modal="false"
+      @close="closeExplanation"
+    >
+      <template #header="{ titleId, titleClass }">
+        <div class="inference-explanation-dialog__header">
+          <span :id="titleId" :class="titleClass">模型解释 - 推理记录 {{ explanationTarget?.id ?? '' }}</span>
+          <button
+            class="inference-explanation-dialog__generate"
+            type="button"
+            :disabled="explanationLoading"
+            @click="generateExplanation"
+          >
+            {{ explanationWasAvailable ? '重新生成' : '生成AI评价' }}
+          </button>
+        </div>
+      </template>
+      <p v-if="explanationLoading" class="explanation-state">
+        {{ explanationGenerating ? '正在生成AI评价...' : '正在读取已保存解释...' }}
+      </p>
+      <template v-else>
+        <p v-if="explanationError" class="explanation-state explanation-state--error">{{ explanationError }}</p>
+        <section v-if="safeModelEvaluationHtml" class="linked-model-evaluation">
+          <div class="linked-model-evaluation__title">关联模型评价（已保存）</div>
+          <div class="saved-explanation-markdown" v-html="safeModelEvaluationHtml"></div>
+        </section>
+        <div class="explanation-meta">
+          <span>{{ explanationSource === 'ai' ? 'AI 生成' : '规则回退' }}</span>
+          <span v-if="explanationGeneratedAt">保存于 {{ explanationGeneratedAt }}</span>
+        </div>
+        <div class="saved-explanation-markdown" v-html="safeExplanationHtml"></div>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -252,9 +449,32 @@ onMounted(() => {
 
 .records-table {
   width: 100%;
+  /* 固定布局：列宽完全由下方 .col-* 决定，表格宽度恒等于容器宽度。
+     默认的 auto 布局下 13 列全部 nowrap，表格最小宽度会被内容撑到超过容器，
+     于是出现横向滚动条并把「操作」列挤到只够竖排按钮。 */
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
+
+/* 列宽：13 列合计 100%（与模板 colgroup 一一对应）。
+   取值按「容器约 1228px 时各列刚好容纳表头与内容」反推 —— 实测（13.6px 字体、24px 左右内边距）
+   各列所需：表头 92/65/52/65/52/52/79/79/79/52/79/52/52，内容最宽
+   算法 EMAWNB=82、时间=148、数据集 KDDTrain_20Percent=144、操作两按钮同行=184。
+   因此在 1366 及以上宽度的窗口里都不会截断；更窄时按比例缩小，由省略号兜底，但不会溢出容器。 */
+.col-id { width: 7.5%; }
+.col-user { width: 5.3%; }
+.col-scenario { width: 6.4%; }
+.col-dataset { width: 12.1%; }
+.col-dataset-version { width: 4.3%; }
+.col-algorithm { width: 6.7%; }
+.col-model-version { width: 6.5%; }
+.col-original-label { width: 6.5%; }
+.col-risk-type { width: 6.5%; }
+.col-risk-level { width: 4.3%; }
+.col-risk-score { width: 6.5%; }
+.col-time { width: 12.1%; }
+.col-actions { width: 15.3%; }
 
 .records-table th {
   text-align: left;
@@ -263,6 +483,8 @@ onMounted(() => {
   font-weight: 600;
   border-bottom: 1px solid rgba(125, 201, 255, 0.15);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .records-table td {
@@ -270,6 +492,8 @@ onMounted(() => {
   color: rgba(217, 232, 255, 0.9);
   border-bottom: 1px solid rgba(125, 201, 255, 0.07);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .records-table tbody tr:hover {
@@ -299,6 +523,7 @@ onMounted(() => {
 .op-group {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .risk-badge,
@@ -393,5 +618,104 @@ onMounted(() => {
 
 .inference-feature-dialog .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
+}
+
+.inference-explanation-dialog {
+  background: linear-gradient(180deg, rgba(11, 22, 40, 0.98), rgba(5, 12, 22, 0.98)) !important;
+  border: 1px solid rgba(125, 201, 255, 0.18) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.inference-explanation-dialog .el-dialog__title {
+  color: #e8f1ff !important;
+  font-size: 1.15rem !important;
+}
+
+.inference-explanation-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-right: 44px;
+}
+
+.inference-explanation-dialog__generate {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.32);
+  border-radius: 6px;
+  background: rgba(91, 166, 255, 0.12);
+  color: #9ad6ff;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.inference-explanation-dialog__generate:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.24);
+}
+
+.inference-explanation-dialog__generate:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.inference-explanation-dialog .el-dialog__body {
+  padding: 20px 24px !important;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.explanation-meta,
+.explanation-state {
+  color: rgba(220, 234, 255, 0.68);
+  font-size: 0.86rem;
+}
+
+.explanation-meta {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.linked-model-evaluation {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(83, 229, 200, 0.18);
+  border-radius: 8px;
+  background: rgba(83, 229, 200, 0.04);
+}
+
+.linked-model-evaluation__title {
+  margin-bottom: 8px;
+  color: #53e5c8;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.explanation-state--error {
+  color: #ff9a91;
+}
+
+.saved-explanation-markdown {
+  color: rgba(225, 237, 255, 0.9);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.saved-explanation-markdown :is(h1, h2, h3) {
+  color: #9ad6ff;
+  margin: 18px 0 8px;
+}
+
+.saved-explanation-markdown :is(p, ol, ul) {
+  margin: 8px 0;
+}
+
+.saved-explanation-markdown code {
+  color: #ffd166;
+  background: rgba(125, 201, 255, 0.1);
+  padding: 1px 4px;
+  border-radius: 4px;
 }
 </style>

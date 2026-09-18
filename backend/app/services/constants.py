@@ -14,6 +14,8 @@ DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的业务数据字
 与数据库种子数据。
 """
 
+from pathlib import PurePosixPath
+
 # ---------------------------------------------------------------------------
 # 用户与角色（数据库设计文档v2 2.1；需求文档 6.5.1）
 #
@@ -99,6 +101,66 @@ DATASET_LOGICAL_IDS = (
     "carrier_paired_trail",
 )
 
+# 数据集展示名兜底字典（仅在 Dataset 记录缺少 file_path 时使用）。
+#
+# 平台展示口径：数据集一律显示「上传文件名（去扩展名）」这一英文原名
+# （KDDTrain_20Percent / NF-UNSW-NB15-v2 / DIS_Landslides …），它是数据集的原始标识，
+# 比中文译名更适合作为数据集名。见 dataset_display_name_of()。
+# logical_id 是文件派生的稳定标识，供常量字典与去重逻辑做键值匹配，不得改写。
+# 只有手上没有 Dataset 记录、仅有 logical_id 时，才用 dataset_display_name()。
+DATASET_DISPLAY_NAMES = {
+    # 网络安全
+    "kdd_train_20_percent": "KDDTrain_20Percent",
+    "nf_unsw_nb15_v2": "NF-UNSW-NB15-v2",
+    # 电力系统
+    "powergrid_knowledgebase": "powergrid_knowledgebase_dataset",
+    # 地质灾害
+    "dis_raw_data": "DIS_raw_data",
+    "dis_landslides": "DIS_Landslides",
+    "dis_causative_factors": "DIS_Landslide_Causative_Factors",
+    "dis_global_catalog": "DIS_Global_Landslide_Catalog_Export",
+    "dis_guaruja_random": "DIS_guaruja_random",
+    # 舰面调度
+    "carrier_feature2_biaoqian": "Feature2_Cleaning_biaoqian",
+    "carrier_feature2_lisan": "Feature2_Cleaning_lisan",
+    "carrier_paired_trail": "paired_TrailData_feature2_biaoqian",
+}
+
+
+def dataset_display_name(logical_id: str | None) -> str | None:
+    """logical_id → 数据集展示名；未登记则原样返回 logical_id。"""
+    if logical_id is None:
+        return None
+    return DATASET_DISPLAY_NAMES.get(logical_id, logical_id)
+
+
+def dataset_display_name_of(dataset: object | None) -> str | None:
+    """按 Dataset 记录取展示名：上传文件名（去扩展名） > 自填名 > 内置字典 > logical_id。
+
+    展示口径为英文原名：数据集文件保存在 data/<场景编码>/ 下且保留上传时的原始文件名
+    （见 DatasetService._save_uploaded_file 的 basename 处理），所以文件名本身就是该数据集
+    的原始标识（KDDTrain_20Percent、NF-UNSW-NB15-v2、DIS_Landslides…）。
+
+    所有「需要展示数据集名称」的位置都应改用本函数，否则同一个数据集会在
+    数据集中心显示自填名、在场景大屏/模型/推理记录里显示成内置映射名或
+    原始 logical_id。用 getattr 取值，避免 constants 反向依赖 ORM 模型。
+    """
+    if dataset is None:
+        return None
+    file_path = getattr(dataset, "file_path", None)
+    if file_path:
+        # file_path 形如 "data\network\KDDTrain_20Percent.arff"；统一按 / 切分，
+        # 保证在 Windows（反斜杠）与 Linux（正斜杠）下取到同一个文件名。
+        file_name = PurePosixPath(str(file_path).replace("\\", "/")).name
+        if file_name:
+            stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+            if stem:
+                return stem
+    return getattr(dataset, "name", None) or dataset_display_name(
+        getattr(dataset, "logical_id", None)
+    )
+
+
 # ---------------------------------------------------------------------------
 # 算法（数据库设计文档v2 2.4；需求文档 6.6.1）
 # ---------------------------------------------------------------------------
@@ -132,12 +194,13 @@ MODEL_STATUSES = (
 )
 
 # 需求文档 §6.7.2 状态转换规则（Service 层强制校验）
-# TRAINING → FAILED / DRAFT；DRAFT → PUBLISHED；PUBLISHED → DISABLED；DISABLED → PUBLISHED。
+# TRAINING → FAILED / DRAFT；DRAFT → PUBLISHED / DISABLED；
+# PUBLISHED → DISABLED；DISABLED → PUBLISHED。
 # OFFLINE 仅为历史兼容状态，迁移后统一使用 DISABLED。
 MODEL_STATUS_TRANSITIONS = {
     MODEL_STATUS_TRAINING: (MODEL_STATUS_FAILED, MODEL_STATUS_DRAFT),
     MODEL_STATUS_FAILED: (),
-    MODEL_STATUS_DRAFT: (MODEL_STATUS_PUBLISHED,),
+    MODEL_STATUS_DRAFT: (MODEL_STATUS_PUBLISHED, MODEL_STATUS_DISABLED),
     MODEL_STATUS_PUBLISHED: (MODEL_STATUS_DISABLED,),
     MODEL_STATUS_OFFLINE: (),
     MODEL_STATUS_DISABLED: (MODEL_STATUS_PUBLISHED,),
