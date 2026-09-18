@@ -2,7 +2,7 @@
  * guards.ts — 角色化路由守卫（Task 005）
  *
  * 权限边界（需求 6.5.2 末段）：真正的鉴权在后端，前端守卫/隐藏仅为体验。
- * 登录态读取 Task 004 userStore（与 mockApi 会话同源），不复制 session 逻辑。
+ * 登录态统一读取 userStore，不在路由层复制 session 逻辑。
  */
 import type { Router } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';

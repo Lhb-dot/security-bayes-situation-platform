@@ -10,7 +10,7 @@ import type { UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
 
 // ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
-// 登录/登出统一走 userStore，避免页面直连 mockApi 导致 Pinia 状态与守卫判断不同步
+// 登录/登出统一走 userStore，避免页面复制认证状态
 const userStore = useUserStore();
 const currentUser = computed(() => userStore.currentUser);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
@@ -377,5 +377,4 @@ const handleNavClick = (item: NavItem): void => {
   border-color: rgba(255, 123, 114, 0.3);
 }
 </style>
-
 

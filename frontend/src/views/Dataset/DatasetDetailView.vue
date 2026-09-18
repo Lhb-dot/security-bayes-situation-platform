@@ -3,7 +3,7 @@
  * DatasetDetailView.vue — 数据集详情页（Task 011 / 需求 2.4）
  *
  * 两页签：字段结构 + 数据内容预览（只读分页、标签列高亮）。
- * 数据链路：页面 → datasetStore / scenarioStore（页面不直连 mockApi）。
+ * 数据链路：页面 → datasetStore / scenarioStore（页面不直连 API）。
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';

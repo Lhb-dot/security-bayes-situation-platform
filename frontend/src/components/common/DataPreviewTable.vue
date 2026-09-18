@@ -3,7 +3,7 @@
  * DataPreviewTable.vue — 数据集数据内容预览表（Task 011 / 需求 2.4）
  *
  * 只读分页表格：列用正式字段名动态生成，极宽表整表横向滚动（不冻结首列），
- * 标签列（labelField）高亮。数据经 datasetStore.fetchPreview（页面不直连 mockApi）。
+ * 标签列（labelField）高亮。数据经 datasetStore.fetchPreview（页面不直连 API）。
  *
  * 滚轮优先级：表格是定高（max-height）内滚容器，浏览器默认会先滚表格、页面不动。
  * 这里用 attachOuterFirstWheel 反转滚动链 —— 先把外层页面滚到顶/底，余量再滚表格。

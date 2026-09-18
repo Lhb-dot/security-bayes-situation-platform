@@ -525,20 +525,6 @@ export interface UserAccount {
   scenario_ids?: ScenarioId[];
 }
 
-/** Platform account statistics (SUPER_ADMIN overview) */
-export interface PlatformUserStats {
-  total: number;
-  super_admins: number;
-  scenario_admins: number;
-  scenario_users: number;
-  disabled: number;
-  by_scenario: {
-    scenario_id: ScenarioId;
-    name: string;
-    user_count: number;
-  }[];
-}
-
 // ===================== v2.0 算法注册（需求 6.6） =====================
 
 /** 算法公开训练参数定义 */
@@ -677,4 +663,3 @@ export interface ScenarioDashboardData {
   recent_events: RiskEvent[];             // 风险事件列表/时间线
   charts: ScenarioDashboardCharts;        // 场景特有图表数据
 }
-

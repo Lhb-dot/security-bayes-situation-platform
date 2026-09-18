@@ -6,7 +6,7 @@
  * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
  * （carrier 279 字段按字段族分组折叠）→ 执行单条样本推理 → 风险类结果可跳风险事件详情
  *
- * 数据链路：页面 → scenarioStore / datasetStore / modelStore / inferenceStore（不直连 mockApi）。
+ * 数据链路：页面 → scenarioStore / datasetStore / inferenceStore（不直连服务实现）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
