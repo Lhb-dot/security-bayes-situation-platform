@@ -47,6 +47,7 @@ from app.schemas.common import ok
 from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    ALGORITHM_STATUS_AVAILABLE,
     DATASET_RISK_TYPES,
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_COMPANY,
@@ -56,6 +57,9 @@ from app.services.constants import (
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
     RISK_LEVEL_MEDIUM,
+    RISK_EVENT_STATUS_PENDING,
+    RISK_EVENT_STATUS_PROCESSING,
+    RISK_EVENT_STATUS_RESOLVED,
     RISK_TYPE_FLIGHT_DECK,
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
@@ -676,7 +680,7 @@ def _daily_trend(events: list[RiskEvent], days: int = 7) -> list[dict[str, Any]]
         if key not in buckets:
             continue
         buckets[key]["total"] += 1
-        if event.status == "RESOLVED":
+        if event.status == RISK_EVENT_STATUS_RESOLVED:
             buckets[key]["resolved"] += 1
         else:
             buckets[key]["pending"] += 1
@@ -766,7 +770,7 @@ class DashboardService(ServiceBase):
             select(func.count()).select_from(ModelVersion).where(ModelVersion.status == MODEL_STATUS_PUBLISHED)
         ) or 0
         algorithm_count = self.db.scalar(
-            select(func.count()).select_from(Algorithm).where(Algorithm.status == "AVAILABLE")
+            select(func.count()).select_from(Algorithm).where(Algorithm.status == ALGORITHM_STATUS_AVAILABLE)
         ) or 0
         inference_count = self.db.scalar(select(func.count()).select_from(InferenceRecord)) or 0
         user_count = self.db.scalar(select(func.count()).select_from(AppUser)) or 0
@@ -819,7 +823,7 @@ class DashboardService(ServiceBase):
                     "model_count": model_count_by_scenario.get(scenario.id, 0),
                     "inference_count": inference_by_scenario.get(scenario.id, 0),
                     "event_count": len(scene_events),
-                    "pending_count": sum(1 for event in scene_events if event.status == "PENDING"),
+                    "pending_count": sum(1 for event in scene_events if event.status == RISK_EVENT_STATUS_PENDING),
                 }
             )
 
@@ -835,15 +839,15 @@ class DashboardService(ServiceBase):
                     "published_model_count": published_models,
                     "inference_count": inference_count,
                     "risk_event_count": len(events),
-                    "pending_event_count": sum(1 for event in events if event.status == "PENDING"),
+                    "pending_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_PENDING),
                     "user_count": user_count,
                 },
                 "scenarios": scenario_cards,
                 "runtime": {
                     "risk_event_count": len(events),
-                    "pending_event_count": sum(1 for event in events if event.status == "PENDING"),
-                    "processing_event_count": sum(1 for event in events if event.status == "PROCESSING"),
-                    "resolved_event_count": sum(1 for event in events if event.status == "RESOLVED"),
+                    "pending_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_PENDING),
+                    "processing_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_PROCESSING),
+                    "resolved_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_RESOLVED),
                     "inference_count": inference_count,
                     "user_count": user_count,
                     "published_model_count": published_models,
