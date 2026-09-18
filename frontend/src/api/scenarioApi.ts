@@ -98,10 +98,6 @@ export const toScenarioCard = (card: ApiScenarioOverviewCard): Scenario => ({
   status: card.access_status === 'ACTUAL' ? 'active' : 'inactive',
 });
 
-/** 场景详情（GET /scenarios/{scenario_id}，scenario_id 为数字 ID） */
-export const getScenarioDetail = async (scenarioId: number): Promise<ApiScenario> =>
-  unwrapData(await request.get(`/api/v1/scenarios/${scenarioId}`));
-
 // 场景编码 → 数字 ID 缓存（前端路由用编码，后端接口用数字 ID）
 let _idByCodeCache: Record<string, number> | null = null;
 

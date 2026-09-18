@@ -55,15 +55,6 @@ export interface Scenario {
   status: 'active' | 'inactive';
 }
 
-/** 场景详情（含态势指标） */
-export interface ScenarioDetail {
-  scenario: Scenario;
-  metrics: MetricItem[];
-  trend_data: TrendPoint[];
-  risk_distribution: TypeDistribution[];
-  recent_events: RiskEvent[];
-}
-
 /** 全局态势总览 */
 export interface GlobalOverview {
   global_risk_score: number;
