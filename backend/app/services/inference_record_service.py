@@ -23,6 +23,7 @@ from app.models.inference_record import InferenceRecord
 from app.models.model_version import ModelVersion
 from app.models.risk_event import RiskEvent
 from app.schemas.common import ok
+from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_RISK_TYPES,
@@ -33,7 +34,7 @@ from app.services.constants import (
     ROLE_SUPER_ADMIN,
     MODEL_STATUS_PUBLISHED,
     DATASET_POSITIVE_LABELS,
-    dataset_display_name,
+    dataset_display_name_of,
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
@@ -55,8 +56,15 @@ class InferenceRecordService(ServiceBase):
             raise ServiceError(404, "推理记录不存在")
         return record
 
-    def _to_dict(self, record: InferenceRecord, current_user=None) -> dict:
-        """序列化推理记录，并补全展示字段（场景/数据集/算法/风险类型/关联风险事件）。"""
+    def _to_dict(self, record: InferenceRecord, current_user=None, thresholds=None) -> dict:
+        """序列化推理记录，并补全展示字段（场景/数据集/算法/风险类型/关联风险事件）。
+
+        ``risk_level`` 按**查看者**的阈值重算（落库值是创建者视角，见 risk_view）。
+        仅对确实判为风险的记录（``risk_score`` 非空）重算，未判风险的记录保持 None，
+        不能把「无风险」写成 LOW。
+
+        ``thresholds`` 可由调用方预先加载后传入，避免列表逐条查询造成 N+1。
+        """
         data = row_to_dict(record)
         model = self.db.get(ModelVersion, record.model_version_id)
         if model is not None:
@@ -68,7 +76,7 @@ class InferenceRecordService(ServiceBase):
             if dataset is not None:
                 data["dataset_id"] = dataset.id
                 data["dataset_logical_id"] = dataset.logical_id
-                data["dataset_name"] = dataset_display_name(dataset.logical_id)
+                data["dataset_name"] = dataset_display_name_of(dataset)
                 data["dataset_version"] = dataset.version
                 data["risk_type"] = DATASET_RISK_TYPES.get(dataset.logical_id)
         data["original_label"] = record.prediction_label
@@ -76,6 +84,15 @@ class InferenceRecordService(ServiceBase):
             select(RiskEvent).where(RiskEvent.inference_record_id == record.id)
         )
         data["risk_event_id"] = event.id if event is not None else None
+        # 风险等级按查看者阈值重算（仅对判为风险的记录；未判风险保持 None）
+        if current_user is not None and record.risk_score is not None:
+            if thresholds is None:
+                thresholds = risk_view.load_thresholds(self.db, current_user)
+            scenario_id = (
+                event.scenario_id if event is not None else data.get("scenario_id")
+            )
+            medium, high = risk_view.thresholds_for(thresholds, scenario_id)
+            data["risk_level"] = risk_view.classify(float(record.risk_score), medium, high)
         data["generated_explanation"] = self._saved_explanation_for_role(
             record, getattr(current_user, "role", None)
         )
@@ -374,7 +391,9 @@ class InferenceRecordService(ServiceBase):
             stmt = stmt.where(InferenceRecord.model_version_id == model_version_id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._to_dict(r, current_user) for r in result["items"]]
+        # 阈值只查一次，逐条传下去，避免 N+1
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        result["items"] = [self._to_dict(r, current_user, thresholds) for r in result["items"]]
         return ok(data=result)
 
     @service_call

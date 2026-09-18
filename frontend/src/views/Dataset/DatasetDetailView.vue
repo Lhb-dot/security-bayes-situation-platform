@@ -81,7 +81,7 @@ onMounted(async () => {
       <section class="card dataset-detail__head">
         <div>
           <p class="eyebrow">Dataset Detail</p>
-          <h2>{{ dataset.name }}</h2>
+          <h2>{{ dataset.file_name || dataset.name }}</h2>
           <p class="dataset-detail__meta">
             {{ scenarioName }} · {{ dataset.data_format.toUpperCase() }} · 版本 {{ dataset.dataset_version }}
             · {{ dataset.record_count.toLocaleString() }} 样本 · {{ dataset.field_count }} 字段
@@ -105,7 +105,7 @@ onMounted(async () => {
               style="width: 100%"
               empty-text="该数据集暂无字段信息"
             >
-              <el-table-column prop="field_name" label="字段名" min-width="160" />
+              <el-table-column prop="field_name" label="字段名" width="170" show-overflow-tooltip />
               <el-table-column prop="field_type" label="数据类型" width="110" align="center" />
               <el-table-column prop="field_role" label="字段角色" width="110" align="center">
                 <template #default="{ row }: { row: { field_role: string } }">
@@ -114,11 +114,24 @@ onMounted(async () => {
                   </span>
                 </template>
               </el-table-column>
-              <el-table-column prop="description" label="字段说明" min-width="200" show-overflow-tooltip />
-              <el-table-column prop="sample_value" label="样例值" width="130" show-overflow-tooltip />
-              <el-table-column label="枚举值域" min-width="180" show-overflow-tooltip>
+              <el-table-column prop="sample_value" label="样例值" width="140" show-overflow-tooltip />
+              <el-table-column label="枚举值域" min-width="240" show-overflow-tooltip>
                 <template #default="{ row }: { row: { enum_values?: string[] } }">
                   <span class="dataset-detail__enum">{{ row.enum_values?.join(' / ') ?? '—' }}</span>
+                </template>
+              </el-table-column>
+              <!-- 字段说明放在最后一列：只用一个圆点表示有/无（无=灰、有=绿），有说明时悬停展示文本 -->
+              <el-table-column label="字段说明" width="88" align="center">
+                <template #default="{ row }: { row: { description?: string } }">
+                  <el-tooltip
+                    v-if="row.description"
+                    :content="row.description"
+                    placement="top"
+                    :show-after="120"
+                  >
+                    <span class="field-desc-dot field-desc-dot--on" />
+                  </el-tooltip>
+                  <span v-else class="field-desc-dot field-desc-dot--off" />
                 </template>
               </el-table-column>
             </el-table>
@@ -194,6 +207,25 @@ onMounted(async () => {
 .dataset-detail__enum {
   font-size: 0.8rem;
   color: rgba(220, 234, 255, 0.65);
+}
+
+/* 字段说明指示点：无说明=灰、有说明=绿（悬停展示说明文本） */
+.field-desc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.field-desc-dot--on {
+  background: #53e5c8;
+  box-shadow: 0 0 0 3px rgba(83, 229, 200, 0.14);
+  cursor: help;
+}
+
+.field-desc-dot--off {
+  background: rgba(180, 200, 235, 0.22);
 }
 
 @media (max-width: 768px) {

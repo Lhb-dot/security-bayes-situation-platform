@@ -63,7 +63,7 @@ class RiskThresholdService(ServiceBase):
 
         - 校验 0 <= medium < high <= 1（需求 5.4.1.2）；
         - 按 user_id + scenario_id upsert（无行则插入）；
-        - 写 threshold_audit_log 审计。
+        - 写 threshold_audit_log 审计（仅在值真正变化时；首次配置的旧值记为新值）。
         """
         self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
@@ -78,6 +78,15 @@ class RiskThresholdService(ServiceBase):
             raise ServiceError(400, "high_threshold 必须大于 medium_threshold")
 
         threshold = self._get_for_user(current_user.id, scenario_id)
+        # 值没变就不落库、也不写审计：否则重复点「保存并生效」会把
+        # threshold_audit_log 刷成一堆「0.09 → 0.09」的噪声行。
+        if (
+            threshold is not None
+            and float(threshold.medium_threshold) == medium
+            and float(threshold.high_threshold) == high
+        ):
+            return ok(data=row_to_dict(threshold), message="风险阈值未发生变化")
+
         old_medium = float(threshold.medium_threshold) if threshold else medium
         old_high = float(threshold.high_threshold) if threshold else high
 

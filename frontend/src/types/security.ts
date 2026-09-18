@@ -176,6 +176,8 @@ export interface DatasetField {
 export interface Dataset {
   dataset_id: string;
   name: string;
+  /** 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列展示它。 */
+  file_name?: string;
   description: string;
   scenario_id: ScenarioId;
   record_count: number;

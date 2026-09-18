@@ -372,7 +372,16 @@ select.settings-form__input option{background:#0b1628;color:#e8f1ff}
   color:rgba(175,198,230,.85);
   border-bottom:1px solid rgba(125,201,255,.04);white-space:nowrap;
 }
-.dtable__new{color:#53e5c8;font-weight:600}
+/* 四列统一居中，与 Settings.vue 的 el-table align="center" 对齐（必须放在上面两条之后） */
+.dtable th,.dtable td{text-align:center}
+/* 变更后的值：深色胶囊，沿用 RiskLevelTag 的配色（中风险蓝 / 高风险橙）。
+   不用 Element Plus 的 el-tag —— 它在深色弹窗里会渲染成白底绿字。 */
+.dtable__new{
+  display:inline-block;min-width:52px;padding:2px 8px;border-radius:999px;
+  font-size:.78rem;font-weight:600;text-align:center;line-height:1.5;
+}
+.dtable__new--medium{background:rgba(91,166,255,.18);border:1px solid rgba(91,166,255,.25);color:#9ad6ff}
+.dtable__new--high{background:rgba(255,177,107,.18);border:1px solid rgba(255,177,107,.25);color:#ffc37d}
 
 /* ==========================================================================
    提示浮层（对应 ElMessage）
@@ -686,18 +695,18 @@ body[data-role="SCENARIO_USER"] .only-admin{display:none!important}
           <tbody>
             <tr>
               <td>2026-09-12 15:20:41</td><td>网络安全</td>
-              <td>0.30 → <span class="dtable__new">0.35</span></td>
-              <td>0.65 → <span class="dtable__new">0.70</span></td>
+              <td>0.30 → <span class="dtable__new dtable__new--medium">0.35</span></td>
+              <td>0.65 → <span class="dtable__new dtable__new--high">0.70</span></td>
             </tr>
             <tr>
               <td>2026-08-28 10:04:12</td><td>网络安全</td>
-              <td>0.25 → <span class="dtable__new">0.30</span></td>
-              <td>0.60 → <span class="dtable__new">0.65</span></td>
+              <td>0.25 → <span class="dtable__new dtable__new--medium">0.30</span></td>
+              <td>0.60 → <span class="dtable__new dtable__new--high">0.65</span></td>
             </tr>
             <tr>
               <td>2026-08-15 16:47:03</td><td>网络安全</td>
-              <td>— → <span class="dtable__new">0.25</span></td>
-              <td>— → <span class="dtable__new">0.60</span></td>
+              <td>— → <span class="dtable__new dtable__new--medium">0.25</span></td>
+              <td>— → <span class="dtable__new dtable__new--high">0.60</span></td>
             </tr>
           </tbody>
         </table>

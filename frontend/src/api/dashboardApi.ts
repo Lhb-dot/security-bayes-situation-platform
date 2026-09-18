@@ -177,7 +177,12 @@ export interface EventSummary {
   processing: number;
   resolved: number;
   today: number;
+  /** 按当前账号在该场景的高风险阈值判定为高风险的事件数（不是写死的 0.8） */
   high_confidence: number;
+  /** 后端实际生效的高风险阈值（0~1），用于渲染「风险分 ≥ x」的说明文字 */
+  high_threshold: number;
+  /** 后端实际生效的中风险阈值（0~1） */
+  medium_threshold: number;
   avg_risk_score: number;
   max_risk_score: number;
   score_bins: Array<{ label: string; count: number }>;

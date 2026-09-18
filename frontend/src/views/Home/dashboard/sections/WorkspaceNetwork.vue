@@ -23,14 +23,10 @@ defineProps<{ data: NetworkWorkspace }>();
     :items="[
       { label: '我的待处置告警', value: data.summary.pending, unit: '条', tone: 'danger', sub: '待处置' },
       { label: '今日新增', value: data.summary.today, unit: '条', tone: 'warning', sub: '今日新增' },
-      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ 0.8' },
+      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ ' + (data.summary.high_threshold ?? 0.8).toFixed(2) },
       { label: '异常端口', value: data.abnormal_ports.length, unit: '个', tone: 'primary', sub: '偏离基线 ≥ 2 倍' },
     ]"
   />
-
-  <p v-if="!data.summary.total" class="d-note">
-    当前账号还没有风险事件：风险事件在「风险研判」判定为风险后自动生成，生成后本页所有运行态指标将自动有值。
-  </p>
 
   <DashCard title="近 7 天推理活动趋势（条）" source="近 7 天推理活动趋势。实线=推理总数，虚线=判为风险数。">
     <DashLine

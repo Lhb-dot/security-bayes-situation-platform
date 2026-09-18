@@ -6,7 +6,7 @@
  *  - 管理员：发布、禁用、删除、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -241,6 +241,7 @@ const evaluationMarkdown = ref('');
 const evaluationLoading = ref(false);
 const evaluationError = ref('');
 const evaluationStatus = ref('');
+const evaluationAudience = ref<ModelEvaluationAudience>('current');
 let evaluationAbort: AbortController | null = null;
 
 const safeEvaluationHtml = computed(() => {
@@ -251,6 +252,7 @@ const safeEvaluationHtml = computed(() => {
 const openModelEvaluation = async (model: BackendModelVersion) => {
   evaluationAbort?.abort();
   evaluationTarget.value = model;
+  evaluationAudience.value = isAdmin.value ? 'current' : 'user';
   evaluation.value = null;
   evaluationMarkdown.value = '';
   evaluationError.value = '';
@@ -258,7 +260,7 @@ const openModelEvaluation = async (model: BackendModelVersion) => {
   try {
     evaluation.value = await getModelEvaluation(model.id);
     evaluationMarkdown.value = evaluation.value.evaluation.markdown || '';
-    evaluationStatus.value = evaluation.value.evaluation.available ? '已读取已保存评价' : '尚未生成评价';
+    evaluationStatus.value = evaluation.value.evaluation.available ? '已加载历史评价' : '尚未生成评价';
   } catch (err) {
     evaluationError.value = err instanceof Error ? err.message : '模型评价读取失败';
     evaluationStatus.value = '';
@@ -277,12 +279,13 @@ const closeModelEvaluation = () => {
 
 const generateModelEvaluation = async (
   regenerate = false,
-  audience: ModelEvaluationAudience = 'current',
+  audience: ModelEvaluationAudience = evaluationAudience.value,
 ) => {
   const target = evaluationTarget.value;
   if (!target || evaluationLoading.value) return;
   evaluationAbort?.abort();
   evaluationAbort = new AbortController();
+  evaluationAudience.value = audience;
   evaluationLoading.value = true;
   evaluationError.value = '';
   evaluationMarkdown.value = regenerate ? '' : evaluationMarkdown.value;
@@ -299,7 +302,7 @@ const generateModelEvaluation = async (
       onDone: (data) => {
         evaluationStatus.value = data.source === 'fallback'
           ? 'AI 失败，已完成规则回退'
-          : data.source === 'cached' ? '已读取已保存评价' : '模型评价已保存';
+          : data.source === 'cached' ? '已加载历史评价' : '评价已生成';
       },
     }, evaluationAbort.signal, audience);
     evaluation.value = await getModelEvaluation(target.id);
@@ -313,6 +316,22 @@ const generateModelEvaluation = async (
     evaluationAbort = null;
   }
 };
+
+/** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
+watch(evaluationTarget, (target) => {
+  document.body.style.overflow = target ? 'hidden' : '';
+});
+
+const handleEvaluationKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && evaluationTarget.value) closeModelEvaluation();
+};
+
+window.addEventListener('keydown', handleEvaluationKeydown);
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleEvaluationKeydown);
+  document.body.style.overflow = '';
+});
 
 onMounted(async () => {
   await userStore.bootstrap();
@@ -371,67 +390,110 @@ onMounted(async () => {
       </span>
     </div>
 
-    <!-- 模型级评价：不依赖样本、不创建推理记录，按当前角色返回不同内容。 -->
-    <section v-if="evaluationTarget" class="model-evaluation-panel card">
-      <div class="model-evaluation-panel__header">
-        <div>
-          <p class="eyebrow">Model Evaluation</p>
-          <h3>模型 #{{ evaluationTarget.id }} 评价</h3>
-          <p class="model-evaluation-panel__scope">
-            {{ isAdmin ? '管理员视图：质量诊断、算法结构和优化建议' : '用户视图：当前场景下的模型使用提示' }}
-          </p>
-        </div>
-        <div class="model-evaluation-panel__actions">
-          <button class="op-btn" :disabled="evaluationLoading" @click="generateModelEvaluation(Boolean(evaluationMarkdown))">
-            {{ evaluationMarkdown ? '重新生成' : '生成评价' }}
-          </button>
-          <button
-            v-if="isAdmin"
-            class="op-btn"
-            :disabled="evaluationLoading || evaluationTarget.status !== 'PUBLISHED'"
-            title="为已发布模型预生成普通用户可见的场景化评价"
-            @click="generateModelEvaluation(true, 'user')"
-          >
-            生成用户评价
-          </button>
-          <button class="op-btn op-btn--quiet" @click="closeModelEvaluation">关闭</button>
+    <!-- 模型级评价：点击「AI 评价」以弹窗展示，不依赖样本、不创建推理记录，按当前角色返回不同内容。 -->
+    <Teleport to="body">
+      <div
+        v-if="evaluationTarget"
+        class="model-evaluation-modal"
+        @click.self="closeModelEvaluation"
+      >
+        <div class="model-evaluation-modal__card">
+          <div class="model-evaluation-modal__head">
+            <div class="model-evaluation-modal__title">
+              <p class="eyebrow">Model Evaluation</p>
+              <h3>模型 #{{ evaluationTarget.id }} 评价</h3>
+              <div class="model-evaluation-modal__scope">
+                <div class="model-evaluation-audience-tabs" role="tablist" aria-label="评价视角">
+                  <button
+                    v-if="isAdmin"
+                    type="button"
+                    role="tab"
+                    class="model-evaluation-audience-tab"
+                    :class="{ 'is-active': evaluationAudience === 'current' }"
+                    :aria-selected="evaluationAudience === 'current'"
+                    :disabled="evaluationLoading"
+                    @click="evaluationAudience = 'current'"
+                  >
+                    管理员视角
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    class="model-evaluation-audience-tab"
+                    :class="{ 'is-active': evaluationAudience === 'user' || !isAdmin }"
+                    :aria-selected="evaluationAudience === 'user' || !isAdmin"
+                    :disabled="evaluationLoading"
+                    @click="isAdmin && (evaluationAudience = 'user')"
+                  >
+                    用户视角
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="model-evaluation-modal__head-actions">
+              <button
+                class="op-btn"
+                :disabled="evaluationLoading || (evaluationAudience === 'user' && evaluationTarget.status !== 'PUBLISHED')"
+                @click="generateModelEvaluation(Boolean(evaluationMarkdown), evaluationAudience)"
+              >
+                {{ evaluationMarkdown ? '重新生成' : '生成评价' }}
+              </button>
+              <button
+                class="model-evaluation-modal__close"
+                type="button"
+                aria-label="关闭"
+                title="关闭"
+                @click="closeModelEvaluation"
+              >✕</button>
+            </div>
+          </div>
+
+          <div class="model-evaluation-modal__body">
+            <div v-if="evaluationError" class="model-evaluation-modal__notice model-evaluation-modal__notice--error">
+              {{ evaluationError }}
+            </div>
+            <div v-if="evaluationStatus" class="model-evaluation-modal__status">{{ evaluationStatus }}</div>
+            <div v-if="evaluationLoading" class="model-evaluation-loading">
+              <span class="model-evaluation-loading__dot"></span>
+              <span>AI 正在生成评价，请稍候…</span>
+            </div>
+
+            <div v-if="evaluation?.model_attributes" class="model-evaluation-facts">
+              <div class="model-evaluation-fact">
+                <span>算法</span>
+                <strong>{{ evaluation.model_attributes.algorithm?.name || evaluation.model_attributes.algorithm?.code || '—' }}</strong>
+              </div>
+              <div class="model-evaluation-fact">
+                <span>数据集</span>
+                <strong>{{ evaluation.model_attributes.dataset?.name || evaluation.model_attributes.dataset?.logical_id || '—' }}</strong>
+              </div>
+              <div class="model-evaluation-fact">
+                <span>场景</span>
+                <strong>{{ evaluation.model_attributes.scenario?.name || '—' }}</strong>
+              </div>
+              <div class="model-evaluation-fact">
+                <span>评价范围</span>
+                <strong>模型版本本身</strong>
+              </div>
+            </div>
+
+            <div v-if="evaluation?.model_attributes?.feature_profile?.length" class="model-evaluation-fields">
+              <span class="model-evaluation-fields__label">场景重点字段</span>
+              <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, 8)" :key="field.name" class="model-evaluation-field">
+                {{ field.display_name || field.name }}
+              </span>
+            </div>
+
+            <div v-if="safeEvaluationHtml" class="model-evaluation-markdown" v-html="safeEvaluationHtml"></div>
+            <div v-else-if="!evaluationLoading" class="model-evaluation-empty">点击“生成评价”调用 AI；评价结果会保存到该模型版本。</div>
+          </div>
+
+          <div class="model-evaluation-modal__foot">
+            <button class="op-btn op-btn--quiet" @click="closeModelEvaluation">关闭</button>
+          </div>
         </div>
       </div>
-
-      <div v-if="evaluationError" class="model-evaluation-panel__notice model-evaluation-panel__notice--error">
-        {{ evaluationError }}
-      </div>
-      <div v-if="evaluationStatus" class="model-evaluation-panel__status">{{ evaluationStatus }}</div>
-
-      <div v-if="evaluation?.model_attributes" class="model-evaluation-facts">
-        <div class="model-evaluation-fact">
-          <span>算法</span>
-          <strong>{{ evaluation.model_attributes.algorithm?.name || evaluation.model_attributes.algorithm?.code || '—' }}</strong>
-        </div>
-        <div class="model-evaluation-fact">
-          <span>数据集</span>
-          <strong>{{ evaluation.model_attributes.dataset?.name || evaluation.model_attributes.dataset?.logical_id || '—' }}</strong>
-        </div>
-        <div class="model-evaluation-fact">
-          <span>场景</span>
-          <strong>{{ evaluation.model_attributes.scenario?.name || '—' }}</strong>
-        </div>
-        <div class="model-evaluation-fact">
-          <span>评价范围</span>
-          <strong>模型版本本身</strong>
-        </div>
-      </div>
-
-      <div v-if="evaluation?.model_attributes?.feature_profile?.length" class="model-evaluation-fields">
-        <span class="model-evaluation-fields__label">场景重点字段</span>
-        <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, 8)" :key="field.name" class="model-evaluation-field">
-          {{ field.display_name || field.name }}
-        </span>
-      </div>
-
-      <div v-if="safeEvaluationHtml" class="model-evaluation-markdown" v-html="safeEvaluationHtml"></div>
-      <div v-else-if="!evaluationLoading" class="model-evaluation-empty">点击“生成评价”调用 AI；评价结果会保存到该模型版本。</div>
-    </section>
+    </Teleport>
 
     <!-- 加载状态 -->
     <section v-if="loading" class="state-card">
@@ -521,12 +583,6 @@ onMounted(async () => {
               对比
             </button>
             <button class="compare-btn" @click="openModelEvaluation(model)">AI 评价</button>
-            <span
-              class="model-evaluation-tag"
-              :class="{ 'model-evaluation-tag--ready': model.model_evaluation_available }"
-            >
-              {{ model.model_evaluation_available ? '评价已保存' : '待生成评价' }}
-            </span>
             <span
               class="model-card__status"
               :class="`model-status--${model.status}`"
@@ -1023,46 +1079,159 @@ onMounted(async () => {
   font-weight: 700;
 }
 
-.model-evaluation-tag {
-  color: rgba(220, 234, 255, 0.48);
-  font-size: 0.76rem;
-  white-space: nowrap;
+/* AI 评价弹窗 */
+.model-evaluation-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background: rgba(3, 8, 16, 0.72);
+  backdrop-filter: blur(4px);
 }
 
-.model-evaluation-tag--ready {
-  color: #53e5c8;
+.model-evaluation-modal__card {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 100%);
+  max-height: min(86vh, 940px);
+  border-radius: 14px;
+  border: 1px solid rgba(83, 229, 200, 0.24);
+  background: linear-gradient(160deg, rgba(13, 26, 46, 0.97), rgba(8, 17, 31, 0.99));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
 }
 
-.model-evaluation-panel {
-  margin-bottom: 20px;
-  padding: 20px 24px;
-  border: 1px solid rgba(83, 229, 200, 0.2);
-}
-
-.model-evaluation-panel__header {
+.model-evaluation-modal__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
 }
 
-.model-evaluation-panel__header h3 {
+.model-evaluation-modal__title h3 {
   margin: 0 0 6px;
   color: #e8f1ff;
   font-size: 1.12rem;
 }
 
-.model-evaluation-panel__scope {
+.model-evaluation-modal__scope {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
   margin: 0;
   color: rgba(220, 234, 255, 0.62);
   font-size: 0.84rem;
 }
 
-.model-evaluation-panel__actions {
+.model-evaluation-audience-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 22px;
+}
+
+.model-evaluation-audience-tab {
+  position: relative;
+  padding: 4px 0 9px;
+  border: none;
+  background: transparent;
+  color: rgba(220, 234, 255, 0.55);
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.model-evaluation-audience-tab::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: #53e5c8;
+  content: '';
+  opacity: 0;
+  transform: scaleX(0.45);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.model-evaluation-audience-tab:hover:not(:disabled),
+.model-evaluation-audience-tab.is-active {
+  color: #e8f1ff;
+}
+
+.model-evaluation-audience-tab.is-active::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.model-evaluation-audience-tab:disabled {
+  cursor: not-allowed;
+}
+
+.model-evaluation-modal__head-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   flex-shrink: 0;
+}
+
+.model-evaluation-modal__close {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.model-evaluation-modal__close:hover {
+  background: rgba(91, 166, 255, 0.16);
+  color: #e8f1ff;
+}
+
+.model-evaluation-modal__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 24px 20px;
+}
+
+.model-evaluation-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 24px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
+}
+
+.model-evaluation-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: rgba(154, 214, 255, 0.85);
+  font-size: 0.84rem;
+}
+
+.model-evaluation-loading__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #53e5c8;
+  animation: model-evaluation-pulse 1s ease-in-out infinite;
+}
+
+@keyframes model-evaluation-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 .op-btn--quiet {
@@ -1070,8 +1239,8 @@ onMounted(async () => {
   color: rgba(220, 234, 255, 0.7);
 }
 
-.model-evaluation-panel__status,
-.model-evaluation-panel__notice,
+.model-evaluation-modal__status,
+.model-evaluation-modal__notice,
 .model-evaluation-empty {
   margin-bottom: 14px;
   padding: 10px 12px;
@@ -1081,7 +1250,7 @@ onMounted(async () => {
   font-size: 0.84rem;
 }
 
-.model-evaluation-panel__notice--error {
+.model-evaluation-modal__notice--error {
   background: rgba(255, 123, 114, 0.1);
   color: #ffaaa3;
 }
@@ -1137,8 +1306,6 @@ onMounted(async () => {
 }
 
 .model-evaluation-markdown {
-  max-height: 520px;
-  overflow: auto;
   padding-top: 4px;
   color: rgba(232, 241, 255, 0.88);
   font-size: 0.9rem;
@@ -1174,17 +1341,30 @@ onMounted(async () => {
   .model-card__metrics {
     flex-wrap: wrap;
   }
-  .model-evaluation-panel {
-    padding: 16px;
+  .model-evaluation-modal {
+    padding: 16px 12px;
   }
-  .model-evaluation-panel__header {
-    flex-direction: column;
+  .model-evaluation-modal__card {
+    max-height: 90vh;
   }
-  .model-evaluation-panel__actions {
+  .model-evaluation-modal__head,
+  .model-evaluation-modal__body,
+  .model-evaluation-modal__foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .model-evaluation-modal__head-actions {
     width: 100%;
+    justify-content: space-between;
   }
-  .model-evaluation-panel__actions .op-btn {
+  .model-evaluation-modal__head-actions .op-btn {
     flex: 1;
+  }
+  .model-evaluation-modal__scope {
+    align-items: flex-start;
+  }
+  .model-evaluation-audience-tabs {
+    gap: 18px;
   }
   .model-evaluation-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));

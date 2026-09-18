@@ -1,5 +1,6 @@
 :root {
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-ui: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-ui);
   color: #e8f1ff;
   background:
     radial-gradient(circle at top, rgba(56, 127, 245, 0.22), transparent 30%),
@@ -956,7 +957,11 @@ button {
   grid-column: span 2;
 }
 
-.detail-info span {
+/* 仅「行首标签」用弱化色。
+   原写法 `.detail-info span` 会命中值里的裸 span（如设置页「绑定场景」→ 全部场景），
+   把值也染成标签灰，看起来像换了一套字体；限定为行的直接 span 子元素后，
+   值的 span 继承 <strong> 的亮色，与「用户名」等值保持同一套字色。 */
+.detail-info > div > span {
   color: rgba(220, 234, 255, 0.56);
 }
 
@@ -1228,26 +1233,59 @@ button {
   background: rgba(20, 44, 72, 0.55);
 }
 
-/* 按钮（暗色） */
+/* 按钮（暗色）
+   注意：Element Plus 的组件样式由 unplugin-vue-components 在编译期注入，加载顺序在本文件之后，
+   同权重下 EP 会覆盖这里的规则 —— 表现为弹窗里（append-to-body）的按钮渲染成白底 + EP 默认蓝。
+   所以这里必须用 !important 兜住；下面的 plain 语义色规则要写在后面并同样加 !important，
+   否则会被上面的 .el-button 一并冲成蓝色（丢掉 success/warning/danger 的颜色含义）。 */
 .el-button {
-  border-color: rgba(125, 201, 255, 0.3);
-  color: #9ad6ff;
-  background: rgba(91, 166, 255, 0.1);
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
 }
 .el-button:hover {
-  border-color: rgba(91, 166, 255, 0.5);
-  color: #fff;
-  background: rgba(91, 166, 255, 0.18);
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
 }
 .el-button--primary {
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  border-color: transparent;
-  color: #fff;
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
+  font-weight: 600;
 }
 .el-button--primary:hover {
-  opacity: 0.9;
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
+}
+
+/* plain 语义色：保留颜色含义，统一为「暗底 + 亮字 + 同色描边」 */
+.el-button--success.is-plain {
+  background: rgba(83, 229, 200, 0.14) !important;
+  border-color: rgba(83, 229, 200, 0.3) !important;
+  color: #6ef0c4 !important;
+}
+.el-button--warning.is-plain {
+  background: rgba(255, 177, 107, 0.14) !important;
+  border-color: rgba(255, 177, 107, 0.3) !important;
+  color: #ffc37d !important;
+}
+.el-button--danger.is-plain {
+  background: rgba(255, 123, 114, 0.14) !important;
+  border-color: rgba(255, 123, 114, 0.3) !important;
+  color: #ff9a92 !important;
+}
+.el-button--info.is-plain {
+  background: rgba(91, 166, 255, 0.14) !important;
+  border-color: rgba(125, 201, 255, 0.3) !important;
+  color: #9ad6ff !important;
+}
+.el-button--success.is-plain:hover,
+.el-button--warning.is-plain:hover,
+.el-button--danger.is-plain:hover,
+.el-button--info.is-plain:hover {
+  filter: brightness(1.15);
 }
 
 /* ===================== 筛选框（统一为推理记录样式，全站一致） ===================== */

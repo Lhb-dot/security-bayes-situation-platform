@@ -381,16 +381,13 @@ onMounted(async () => {
         row-class-name="dataset-table-row"
       >
         <el-table-column
-          prop="name"
+          prop="file_name"
           label="数据集名称"
-          min-width="180"
+          min-width="240"
           show-overflow-tooltip
         >
           <template #default="{ row }: { row: Dataset }">
-            <div class="dataset-table__name-cell">
-              <span class="dataset-table__name">{{ row.name }}</span>
-              <span class="dataset-table__desc">{{ row.description }}</span>
-            </div>
+            <span class="dataset-table__name">{{ row.file_name || row.name }}</span>
           </template>
         </el-table-column>
 
@@ -417,7 +414,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="field_count" label="字段数" width="80" align="center" />
+        <el-table-column prop="field_count" label="字段数" width="100" align="center" sortable />
 
         <el-table-column label="版本" width="110" align="center">
           <template #default="{ row }: { row: Dataset }">
@@ -427,7 +424,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="created_at" label="创建时间" width="100" align="center">
+        <el-table-column prop="created_at" label="创建时间" width="120" align="center">
           <template #default="{ row }: { row: Dataset }">
             <span class="dataset-table__time">{{ row.created_at.slice(0, 10) }}</span>
           </template>
@@ -474,7 +471,7 @@ onMounted(async () => {
         style="width: 100%"
         empty-text="该数据集暂无字段信息"
       >
-        <el-table-column prop="field_name" label="字段名" min-width="140" />
+        <el-table-column prop="field_name" label="字段名" min-width="140" show-overflow-tooltip />
         <el-table-column prop="field_type" label="数据类型" width="90" align="center">
           <template #default="{ row }: { row: DatasetField }">
             <span
@@ -495,15 +492,29 @@ onMounted(async () => {
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="nullable" label="允许为空" width="80" align="center">
+        <el-table-column prop="nullable" label="允许为空" width="88" align="center">
           <template #default="{ row }: { row: DatasetField }">
             <span :class="row.nullable ? 'text-muted' : 'text-active'">
               {{ row.nullable ? '是' : '否' }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="字段说明" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="sample_value" label="样例数据" width="120" show-overflow-tooltip />
+        <!-- 样例数据：定宽截断，悬停由列的 show-overflow-tooltip 展示完整值 -->
+        <el-table-column prop="sample_value" label="样例数据" width="170" show-overflow-tooltip />
+        <!-- 字段说明：只用一个圆点表示有/无（无=灰、有=绿），有说明时悬停展示文本 -->
+        <el-table-column label="字段说明" width="88" align="center">
+          <template #default="{ row }: { row: DatasetField }">
+            <el-tooltip
+              v-if="row.description"
+              :content="row.description"
+              placement="top"
+              :show-after="120"
+            >
+              <span class="field-desc-dot field-desc-dot--on" />
+            </el-tooltip>
+            <span v-else class="field-desc-dot field-desc-dot--off" />
+          </template>
+        </el-table-column>
       </el-table>
     </el-dialog>
 
@@ -746,26 +757,11 @@ onMounted(async () => {
   background: transparent !important;
 }
 
-/* 名称列 */
-.dataset-table__name-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 0;
-}
-
+/* 名称列（原始文件名，超长由列的 show-overflow-tooltip 截断并给悬浮提示） */
 .dataset-table__name {
   font-weight: 600;
   color: #c8deff;
   font-size: 0.95rem;
-}
-
-.dataset-table__desc {
-  font-size: 0.8rem;
-  color: rgba(180, 200, 235, 0.5);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 场景标签 */
@@ -890,6 +886,25 @@ onMounted(async () => {
 .type-badge--string {
   background: rgba(220, 234, 255, 0.06);
   color: rgba(220, 234, 255, 0.7);
+}
+
+/* 字段说明指示点：无说明=灰、有说明=绿（悬停展示说明文本） */
+.field-desc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.field-desc-dot--on {
+  background: #53e5c8;
+  box-shadow: 0 0 0 3px rgba(83, 229, 200, 0.14);
+  cursor: help;
+}
+
+.field-desc-dot--off {
+  background: rgba(180, 200, 235, 0.22);
 }
 
 /* 文本颜色 */

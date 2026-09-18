@@ -12,11 +12,12 @@
  *
  * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { syncThreshold } from '@/services/mockApi';
 import {
+  DEFAULT_HIGH_THRESHOLD,
+  DEFAULT_MEDIUM_THRESHOLD,
   getRiskThresholdAuditLogs,
   getRiskThresholds,
   updateRiskThreshold,
@@ -243,6 +244,7 @@ const activeScenarios = computed<ScenarioId[]>(() =>
 const thresholds = ref<ThresholdConfig[]>([]);
 const changeLogs = ref<ThresholdChangeLog[]>([]);
 const showChangeLogs = ref(false);
+const logsLoading = ref(false);
 const saving = ref(false);
 /** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
 const thresholdScenario = ref<ScenarioId>('network_security');
@@ -252,6 +254,8 @@ const editing = ref<Record<string, { medium: number | null; high: number | null 
   flightdeck_operation: { medium: null, high: null },
   geological_risk: { medium: null, high: null },
 });
+/** 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。 */
+const thresholdUnconfigured = ref<Record<string, boolean>>({});
 
 const loadThresholds = async () => {
   const ths = await getRiskThresholds();
@@ -261,32 +265,100 @@ const loadThresholds = async () => {
     high_threshold: Number(t.high_threshold ?? 0),
   }));
   const nextEditing: Record<string, { medium: number | null; high: number | null }> = {};
+  const nextUnconfigured: Record<string, boolean> = {};
   for (const scenarioId of activeScenarios.value) {
-    nextEditing[scenarioId] = { medium: null, high: null };
+    // 未配置的场景也回填兜底值，让输入框显示**系统当前实际生效**的阈值（0.5 / 0.8）。
+    // 留空会让人以为「没有阈值、不做风险判定」，而实际上后端一直在用兜底值判级。
+    nextEditing[scenarioId] = {
+      medium: DEFAULT_MEDIUM_THRESHOLD,
+      high: DEFAULT_HIGH_THRESHOLD,
+    };
+    nextUnconfigured[scenarioId] = true;
   }
   for (const t of thresholds.value) {
     nextEditing[t.scenario_id] = {
       medium: Number(t.medium_threshold),
       high: Number(t.high_threshold),
     };
+    nextUnconfigured[t.scenario_id] = false;
   }
   editing.value = nextEditing;
-  const firstScenario = activeScenarios.value[0];
-  if (firstScenario) thresholdScenario.value = firstScenario; else thresholdScenario.value = 'network_security';
+  thresholdUnconfigured.value = nextUnconfigured;
+  // 只在当前选中场景已不可见时才回落到第一个场景。
+  // 保存成功后也会走这里刷新，若无条件重置，管理员刚改完「电力系统」就会被弹回「网络安全」。
+  if (!activeScenarios.value.includes(thresholdScenario.value)) {
+    thresholdScenario.value = activeScenarios.value[0] ?? 'network_security';
+  }
 };
 
 const loadChangeLogs = async () => {
+  logsLoading.value = true;
   try {
     changeLogs.value = await getRiskThresholdAuditLogs();
   } catch (err) {
+    changeLogs.value = [];
     ElMessage.error(err instanceof Error ? err.message : '阈值修改记录加载失败');
+  } finally {
+    logsLoading.value = false;
   }
 };
 
 const toFixed2 = (v: number | string | null | undefined): string => {
-  if (v === null || v === undefined || v === '') return '-';
-  return Number(v).toFixed(2);
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '—';
 };
+
+/** 记录唯一标识：后端用自增 id，历史 mock 用 log_id，再兜底用「场景 + 时间」。 */
+const logKey = (log: ThresholdChangeLog): string =>
+  String(log.id ?? log.log_id ?? `${log.scenario_id}@${log.operated_at ?? log.changed_at ?? ''}`);
+
+/**
+ * 首次配置的行：该场景在列表里最早的一条记录，且旧值等于新值。
+ * 后端在「该账号该场景还没有阈值行」时把 old 记成 new（语义是"从无到有"），
+ * 所以这些行的旧值不该当成数字展示，统一渲染成「—」。
+ */
+const initialLogKeys = computed(() => {
+  const earliest = new Map<string, ThresholdChangeLog>();
+  for (const log of changeLogs.value) {
+    const key = String(log.scenario_id);
+    const prev = earliest.get(key);
+    const at = log.operated_at ?? log.changed_at ?? '';
+    const prevAt = prev ? prev.operated_at ?? prev.changed_at ?? '' : '';
+    if (!prev || at < prevAt) earliest.set(key, log);
+  }
+  const keys = new Set<string>();
+  for (const log of earliest.values()) {
+    const sameMedium =
+      Number(log.old_medium ?? log.old_medium_threshold) === Number(log.new_medium ?? log.new_medium_threshold);
+    const sameHigh =
+      Number(log.old_high ?? log.old_high_threshold) === Number(log.new_high ?? log.new_high_threshold);
+    if (sameMedium && sameHigh) keys.add(logKey(log));
+  }
+  return keys;
+});
+
+/**
+ * 修改记录表的高度。
+ * 直接用 vh 做 max-height 会把最后一行切掉一半（露出半截胶囊），
+ * 所以按「表头 + 整数行」算一个像素值，配合下面 style 块里固定的行高。
+ */
+const LOG_TABLE_HEADER_HEIGHT = 40;
+const LOG_TABLE_ROW_HEIGHT = 42;
+const logTableMaxHeight = ref('64vh');
+const syncLogTableMaxHeight = () => {
+  const available = Math.round(window.innerHeight * 0.64);
+  const rows = Math.max(4, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
+  logTableMaxHeight.value = `${LOG_TABLE_HEADER_HEIGHT + rows * LOG_TABLE_ROW_HEIGHT}px`;
+};
+
+const oldValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
+  initialLogKeys.value.has(logKey(log))
+    ? '—'
+    : toFixed2(kind === 'medium' ? log.old_medium ?? log.old_medium_threshold : log.old_high ?? log.old_high_threshold);
+
+const newValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
+  toFixed2(kind === 'medium' ? log.new_medium ?? log.new_medium_threshold : log.new_high ?? log.new_high_threshold);
 
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
@@ -302,6 +374,14 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('阈值最多只能有两位小数');
     return;
   }
+  // 值没变就不提交：后端每次 PUT 都会写一条审计日志，重复点「保存」会把记录刷成噪声。
+  const stored = thresholds.value.find(t => t.scenario_id === scenarioId);
+  if (stored
+    && Number(stored.medium_threshold) === e.medium
+    && Number(stored.high_threshold) === e.high) {
+    ElMessage.info('阈值未发生变化，无需保存');
+    return;
+  }
   saving.value = true;
   try {
     const medium = Math.round(e.medium * 100) / 100;
@@ -311,7 +391,6 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
       medium: Number(Number(saved.medium_threshold).toFixed(2)),
       high: Number(Number(saved.high_threshold).toFixed(2)),
     };
-    syncThreshold(saved);
     ElMessage.success(`「${SCENARIO_LABEL[scenarioId]}」阈值已保存并实时生效`);
     await loadThresholds();
   } catch (err) {
@@ -324,8 +403,14 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
 onMounted(async () => {
   currentUser.value = userStore.currentUser;
   settingsStore.loadForUser(currentUser.value?.user_id);
+  syncLogTableMaxHeight();
+  window.addEventListener('resize', syncLogTableMaxHeight);
   await loadAISetting();
   if (canConfigureThresholds.value) await loadThresholds();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncLogTableMaxHeight);
 });
 </script>
 
@@ -369,15 +454,15 @@ onMounted(async () => {
             <strong>{{ currentUser?.username ?? '-' }}</strong>
           </div>
           <div>
-            <span>角色</span>
-            <strong><span class="role-badge" :class="accountRoleBadge">{{ accountRoleLabel }}</span></strong>
-          </div>
-          <div>
             <span>绑定场景</span>
             <strong>
               <span v-if="isSuperAdmin">{{ accountScenarioLabel }}</span>
               <span v-else class="scenario-tag">{{ accountScenarioLabel }}</span>
             </strong>
+          </div>
+          <div>
+            <span>角色</span>
+            <strong><span class="role-badge" :class="accountRoleBadge">{{ accountRoleLabel }}</span></strong>
           </div>
           <div>
             <span>账号状态</span>
@@ -408,36 +493,6 @@ onMounted(async () => {
 
     <!-- ==================== 基础设置 ==================== -->
     <div class="settings-panel" :class="{ 'is-active': activeTab === 'general' }">
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Refresh</p>
-            <h3>自动刷新设置</h3>
-          </div>
-        </div>
-        <div class="settings-form">
-          <div class="settings-form__item settings-form__item--row">
-            <label class="settings-form__label">启用自动刷新</label>
-            <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
-              <span class="settings-switches__knob"></span>
-            </button>
-          </div>
-          <div class="settings-form__item">
-            <label class="settings-form__label">刷新间隔（秒）</label>
-            <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
-              <option :value="10">10 秒</option>
-              <option :value="30">30 秒</option>
-              <option :value="60">60 秒</option>
-              <option :value="120">120 秒</option>
-              <option :value="300">300 秒</option>
-            </select>
-          </div>
-        </div>
-        <div class="settings-actions">
-          <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
-        </div>
-      </section>
-
       <section class="card settings-section">
         <div class="section-heading">
           <div>
@@ -474,6 +529,36 @@ onMounted(async () => {
         <div class="settings-actions">
           <button class="settings-btn" :disabled="testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
           <button class="settings-btn settings-btn--primary" @click="openAIEdit">编辑</button>
+        </div>
+      </section>
+
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Refresh</p>
+            <h3>自动刷新设置</h3>
+          </div>
+        </div>
+        <div class="settings-form">
+          <div class="settings-form__item settings-form__item--row">
+            <label class="settings-form__label">启用自动刷新</label>
+            <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
+              <span class="settings-switches__knob"></span>
+            </button>
+          </div>
+          <div class="settings-form__item">
+            <label class="settings-form__label">刷新间隔（秒）</label>
+            <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
+              <option :value="10">10 秒</option>
+              <option :value="30">30 秒</option>
+              <option :value="60">60 秒</option>
+              <option :value="120">120 秒</option>
+              <option :value="300">300 秒</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
         </div>
       </section>
     </div>
@@ -516,6 +601,10 @@ onMounted(async () => {
               {{ saving ? '保存中...' : '保存并生效' }}
             </button>
           </div>
+          <p v-if="thresholdUnconfigured[thresholdScenario]" class="threshold-bar__hint">
+            该场景尚未配置，输入框内是系统当前生效的兜底值（中风险 {{ DEFAULT_MEDIUM_THRESHOLD.toFixed(2) }} /
+            高风险 {{ DEFAULT_HIGH_THRESHOLD.toFixed(2) }}）。保存后即成为本账号在该场景的正式阈值。
+          </p>
         </div>
       </section>
     </div>
@@ -565,30 +654,36 @@ onMounted(async () => {
       <el-table
         :data="changeLogs"
         stripe
-        max-height="62vh"
+        :max-height="logTableMaxHeight"
         style="width: 100%"
-        empty-text="暂无阈值修改记录"
+        :empty-text="logsLoading ? '加载中…' : '暂无阈值修改记录'"
       >
-        <el-table-column label="变更时间" min-width="170">
+        <el-table-column label="变更时间" min-width="170" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.operated_at ?? row.changed_at ?? '-' }}
+            {{ row.operated_at ?? row.changed_at ?? '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="场景" width="150">
+        <el-table-column label="场景" width="130" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
             {{ SCENARIO_LABEL[row.scenario_id] ?? row.scenario_id }}
           </template>
         </el-table-column>
-        <el-table-column label="中风险阈值" width="120" align="center">
+        <el-table-column label="中风险阈值" min-width="150" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ toFixed2(row.old_medium ?? row.old_medium_threshold) }} →
-            <el-tag type="success" effect="plain">{{ toFixed2(row.new_medium ?? row.new_medium_threshold) }}</el-tag>
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'medium') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--medium">{{ newValueText(row, 'medium') }}</span>
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="高风险阈值" width="120" align="center">
+        <el-table-column label="高风险阈值" min-width="150" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ toFixed2(row.old_high ?? row.old_high_threshold) }} →
-            <el-tag type="success" effect="plain">{{ toFixed2(row.new_high ?? row.new_high_threshold) }}</el-tag>
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'high') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--high">{{ newValueText(row, 'high') }}</span>
+            </span>
           </template>
         </el-table-column>
       </el-table>
@@ -638,6 +733,7 @@ onMounted(async () => {
 .settings-page {
   position: relative;
   z-index: 1;
+  font-family: var(--font-ui);
 }
 
 .settings-page__header {
@@ -803,7 +899,9 @@ onMounted(async () => {
   border-radius: 999px;
   background: rgba(91, 166, 255, 0.12);
   color: #9ad6ff;
-  font-size: 0.76rem;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
   white-space: nowrap;
 }
 
@@ -873,6 +971,22 @@ onMounted(async () => {
   gap: 18px;
   flex-wrap: wrap;
   flex: 1;
+}
+
+/* 未配置提示：说明输入框里显示的是后端兜底值，而不是已保存的阈值。
+   .threshold-bar 是 flex + wrap 容器，这里用 flex-basis:100% 让它独占一行，
+   否则会作为第三个横向子项被挤到输入框右边。 */
+.threshold-bar__hint {
+  flex: 1 0 100%;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
 
 .threshold-field {
@@ -1091,16 +1205,20 @@ select.settings-form__input option {
   background-color: transparent !important;
 }
 
+/* 行高固定成整数，配合 Settings.vue 的 logTableMaxHeight 把表体高度对齐到整行，
+   否则最后一行会被 max-height 切掉一半。两个常量要一起改。 */
 .threshold-log-dialog .el-table th.el-table__cell {
   background-color: rgba(16, 34, 60, 0.9) !important;
   color: rgba(155, 195, 240, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.08) !important;
+  height: 40px;
 }
 
 .threshold-log-dialog .el-table td.el-table__cell {
   background-color: rgba(6, 15, 28, 0.85) !important;
   color: rgba(175, 198, 230, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
+  height: 42px;
 }
 
 .threshold-log-dialog .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
@@ -1113,6 +1231,68 @@ select.settings-form__input option {
 
 .threshold-log-dialog .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
+}
+
+/* 阈值变更单元格：旧值 → 新值。
+   新值沿用 RiskLevelTag 的深色胶囊（中风险蓝 / 高风险橙），
+   不用 Element Plus 的 el-tag——它在深色弹窗里会渲染成白底绿字，
+   而且不管阈值升还是降都是同一个绿色。 */
+.threshold-log-dialog .thr-change {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.threshold-log-dialog .thr-change__old {
+  min-width: 34px;
+  text-align: right;
+  color: rgba(175, 198, 230, 0.45) !important;
+}
+
+.threshold-log-dialog .thr-change__arrow {
+  color: rgba(125, 201, 255, 0.38);
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.threshold-log-dialog .thr-change__new {
+  min-width: 52px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.threshold-log-dialog .thr-change__new--medium {
+  background: rgba(91, 166, 255, 0.18);
+  border: 1px solid rgba(91, 166, 255, 0.25);
+  color: #9ad6ff;
+}
+
+.threshold-log-dialog .thr-change__new--high {
+  background: rgba(255, 177, 107, 0.18);
+  border: 1px solid rgba(255, 177, 107, 0.25);
+  color: #ffc37d;
+}
+
+/* 表体超出一屏时 EP 的滚动条只在 hover 时出现（且是灰色细条），
+   而 max-height 会把最后一行切一半 —— 把滚动条做粗一点、染成主题蓝，提示还能往下滚。 */
+.threshold-log-dialog .el-scrollbar__bar.is-vertical {
+  width: 7px;
+}
+
+.threshold-log-dialog .el-scrollbar__bar.is-vertical > div,
+.threshold-log-dialog .el-scrollbar__bar.is-horizontal > div {
+  background-color: rgba(125, 201, 255, 0.3) !important;
+  border-radius: 4px;
+}
+
+.threshold-log-dialog .el-table__body-wrapper {
+  border-bottom: 1px solid rgba(125, 201, 255, 0.08);
 }
 
 /* style.css 里的 .el-button 暗色覆盖与 Element Plus 自身样式同权重、且 EP 在后，

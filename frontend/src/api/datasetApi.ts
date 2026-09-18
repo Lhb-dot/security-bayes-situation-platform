@@ -29,6 +29,7 @@ interface ApiDataset {
   uploaded_at: string;
   status: string;
   name?: string;
+  file_name?: string;
   field_count?: number;
   data_format?: string;
   record_count?: number;
@@ -173,9 +174,13 @@ export const mapApiDataset = (item: ApiDataset): Dataset => {
   const scenarioId = resolveScenarioCode(item);
   // 展示名统一取后端下发的 name（中文），logical_id 仅作兜底
   const displayName = item.name || item.logical_id;
+  // 原始文件名：优先用后端下发的 file_name，缺失时从 file_path 取 basename 兜底
+  const fileName =
+    item.file_name || item.file_path?.replace(/\\/g, '/').split('/').pop() || item.logical_id;
   return {
     dataset_id: String(item.id),
     name: displayName,
+    file_name: fileName,
     description: item.scenario_name
       ? `${item.scenario_name} · ${displayName}`
       : `${displayName}（v${item.version}）`,

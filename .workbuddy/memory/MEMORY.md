@@ -79,6 +79,19 @@
 - 场景中心卡片三项指标（用户 2026-09-15 确认）：**数据集（去重）/ 已发布模型 / 有效样本量**；
   「风险评分：N」已按用户要求从卡片上**删除**（不要加回来）。
 
+## 前端：嵌套滚动容器一律用 scrollChain（2026-09-16 起）
+- `frontend/src/utils/scrollChain.ts` 的 **`attachOuterFirstWheel(wrapEl)`**（返回卸载函数）：
+  **向下滚时外层页面优先**（页面到底后余量才给内层，一格可分摊：页面 106 + 表格 14）；
+  **向上滚不接管**，交还浏览器默认的「内层优先」（表格先回顶，再滚回页面）。用户 2026-09-16 明确选此非对称口径。
+- 浏览器默认是「内层优先」，`overscroll-behavior` 只能禁止链式滚动、无法反转，所以必须自己接管
+  `wheel`（`{ passive: false }`）。向下方向必须**始终自己处理余量**（`preventDefault` + 写 `inner.scrollTop`）：
+  一旦页面被推动，表格就从指针下方移开，交还原生滚动会因命中点不在滚动体上而整格失效。
+- 任何 `el-table height/max-height` 都等于多了一个内层滚动容器（真正的滚动体是 `.el-scrollbar__wrap`，
+  `.el-table__body-wrapper` 是 `overflow: hidden`）。页面里内嵌这类定高表格时，都应挂这个监听。
+  已接入：`components/common/DataPreviewTable.vue`（数据集详情 → 数据内容预览）。
+- 弹窗（`el-dialog`）内的表格**不要**挂 —— 弹窗不该把滚动甩给背后的页面。
+- 挂载时机：包裹层往往只在「加载完成」后才渲染，用 `watch(ref, ...)` 挂/卸，不要用 `onMounted`。
+
 ## 环境坑（本机）
 - Bash 工具 PATH 被裁剪，`ls/head/grep/sed` 不可用：临时 `export PATH="/usr/bin:/bin:$PATH"`。
 - PowerShell 工具 stdout 不回显 → 写文件再 Read；`Invoke-WebRequest -SessionVariable` 在非交互模式报错 → 本地 HTTP 校验用 `curl` 或 Python `requests`。

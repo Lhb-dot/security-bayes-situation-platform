@@ -4,6 +4,7 @@
    ========================================================================== */
 
 .dash-page {
+  font-family: var(--font-ui);
   color: #e8f1ff;
   padding-bottom: 34px;
 }

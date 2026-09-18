@@ -14,10 +14,14 @@
    只读前 500 行导致恒 0）；
 3. **风险分区间固定分箱** 0.5-0.7 / 0.7-0.9 / 0.9-1.0 —— 事件仅在判为风险时创建，
    分数恒 ≥0.5，故「<0.5」档恒空；
-4. **高置信告警** = `risk_score ≥ 0.8`（替代恒成立的「≥0.5」，后者等于告警总数）；
+4. **高置信告警** = 按**当前账号**在该场景的高风险阈值判定为高风险的事件数
+   （见 `app/services/risk_view.py`）。原先写死 `risk_score ≥ 0.8`，与账号阈值并存会导致
+   同一页面上「高风险事件数」和「高置信告警数」用两套口径；生效阈值随 summary 的
+   `high_threshold` 一并下发；
 5. **离散区间字段**（ARFF 分箱值，如 `'(174.365-310.525]'`）取区间中点参与数值统计；
 6. 地质场景**不存在「区域」字段**，改按真实字段 `Slope` 的坡度档位分组；
-7. 用户端**不聚合他人数据**，后端按 `created_by_user_id` 强制过滤。
+7. 用户端**不聚合他人数据**，后端按 `created_by_user_id` 强制过滤；
+8. **风险等级一律按查看者阈值重算**，不读 `RiskEvent.risk_level` 这个落库的创建者视角值。
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ import os
 import threading
 import time
 from statistics import mean, median, pstdev
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import func, select
 
@@ -40,6 +44,7 @@ from app.models.model_version import ModelVersion
 from app.models.risk_event import RiskEvent
 from app.models.scenario import Scenario
 from app.schemas.common import ok
+from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_RISK_TYPES,
@@ -47,7 +52,7 @@ from app.services.constants import (
     DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
-    dataset_display_name,
+    dataset_display_name_of,
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
     RISK_LEVEL_MEDIUM,
@@ -115,8 +120,9 @@ EVENT_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOL
 #: 风险分固定分箱（下限由「只在判风险时建事件」决定，恒 ≥0.5）
 SCORE_BINS = (("0.5-0.7", 0.5, 0.7), ("0.7-0.9", 0.7, 0.9), ("0.9-1.0", 0.9, 1.01))
 
-#: 高置信告警阈值
-HIGH_CONFIDENCE = 0.8
+# 注：原 HIGH_CONFIDENCE = 0.8 已删除。它是写死的「高置信告警」线，与账号阈值并存
+# 会导致同一页面上「高风险事件数」和「高置信告警数」用两套口径。
+# 现在统一走 risk_view：按当前账号在该场景的高风险阈值判定，生效阈值随 summary 下发。
 
 #: 地质地形因子（DIS_raw_data 真实字段）
 GEO_FACTORS = ("Slope", "TWI", "Elevation", "Relief", "SPI", "Dis2roads", "Dis2fault", "Dis2river")
@@ -576,7 +582,7 @@ class _DatasetReader:
         return {
             "dataset_id": dataset.id,
             "logical_id": dataset.logical_id,
-            "name": dataset_display_name(dataset.logical_id),
+            "name": dataset_display_name_of(dataset),
             "version": dataset.version,
             "label_field": dataset.label_field,
             # 标签字段是否属于风险标签（dis_global_catalog 的 label 是灾害规模，不是风险标签）
@@ -677,13 +683,25 @@ def _daily_trend(events: list[RiskEvent], days: int = 7) -> list[dict[str, Any]]
     return [{"date": day, **buckets[day]} for day in buckets]
 
 
-def _event_summary(events: list[RiskEvent], days: int = 7) -> dict[str, Any]:
+def _event_summary(
+    events: list[RiskEvent],
+    days: int = 7,
+    thresholds: Optional[dict] = None,
+    scenario_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """风险事件汇总。
+
+    ``high_confidence`` 按**当前账号**在 ``scenario_id`` 的阈值判定（原先写死 0.8），
+    并把生效阈值一并下发，前端据此渲染「风险分 ≥ x」的说明文字，避免文案与口径脱节。
+    """
     status = {"PENDING": 0, "PROCESSING": 0, "RESOLVED": 0}
     today = datetime.now(timezone.utc).date()
     for event in events:
         if event.status in status:
             status[event.status] += 1
     scores = [float(event.risk_score or 0) for event in events]
+    thresholds = thresholds or {}
+    medium, high = risk_view.thresholds_for(thresholds, scenario_id)
     return {
         "total": len(events),
         "pending": status["PENDING"],
@@ -694,7 +712,11 @@ def _event_summary(events: list[RiskEvent], days: int = 7) -> dict[str, Any]:
             for event in events
             if event.occurred_at and event.occurred_at.astimezone(timezone.utc).date() == today
         ),
-        "high_confidence": sum(1 for score in scores if score >= HIGH_CONFIDENCE),
+        "high_confidence": sum(
+            1 for event in events if risk_view.level_of(event, thresholds) == RISK_LEVEL_HIGH
+        ),
+        "high_threshold": high,
+        "medium_threshold": medium,
         "avg_risk_score": round(mean(scores), 4) if scores else 0,
         "max_risk_score": round(max(scores), 4) if scores else 0,
         "score_bins": _score_bins(events),
@@ -715,8 +737,10 @@ def _event_feature_values(events: list[RiskEvent], key: str) -> list[str]:
     return values
 
 
-def _recent_event(event: RiskEvent) -> dict[str, Any]:
+def _recent_event(event: RiskEvent, thresholds: Optional[dict] = None) -> dict[str, Any]:
     data = row_to_dict(event)
+    # risk_level 按查看者阈值重算（落库值是创建者视角）
+    data["risk_level"] = risk_view.level_of(event, thresholds or {})
     data["risk_score"] = round(float(event.risk_score), 4) if event.risk_score is not None else None
     data["occurred_at"] = event.occurred_at.isoformat() if event.occurred_at else None
     return data
@@ -918,6 +942,8 @@ class DashboardService(ServiceBase):
 
         reader = _DatasetReader()
         events = self.db.scalars(_event_scope(select(RiskEvent), current_user)).all()
+        # 等级计数按当前账号阈值重算；level_of 内部按每条事件的 scenario_id 取本人该场景阈值
+        thresholds = risk_view.load_thresholds(self.db, current_user)
 
         cards: list[dict[str, Any]] = []
         total_datasets = total_samples = total_models = total_events = total_high = total_medium = 0
@@ -926,8 +952,12 @@ class DashboardService(ServiceBase):
             scene_datasets = [item for item in datasets if item.scenario_id == scenario.id]
             samples, risk_samples, dataset_count = _effective_counts(reader, scene_datasets)
             scene_events = [event for event in events if event.scenario_id == scenario.id]
-            high_count = sum(1 for event in scene_events if event.risk_level == RISK_LEVEL_HIGH)
-            medium_count = sum(1 for event in scene_events if event.risk_level == RISK_LEVEL_MEDIUM)
+            high_count = sum(
+                1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_HIGH
+            )
+            medium_count = sum(
+                1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_MEDIUM
+            )
             published = published_by_scenario.get(scenario.id, 0)
             scores = [float(event.risk_score or 0) for event in scene_events]
 
@@ -1249,7 +1279,9 @@ class DashboardService(ServiceBase):
             select(RiskEvent).where(RiskEvent.scenario_id == scenario_id), current_user, scenario_id
         )
         events = self.db.scalars(stmt.order_by(RiskEvent.occurred_at.desc())).all()
-        summary = _event_summary(events)
+        # 风险等级/高风险计数按当前账号在该场景的阈值判定
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        summary = _event_summary(events, thresholds=thresholds, scenario_id=scenario_id)
 
         dataset = self.db.scalar(
             select(Dataset)
@@ -1270,7 +1302,7 @@ class DashboardService(ServiceBase):
             "scenario_name": scenario.name,
             "risk_type": risk_type,
             "summary": summary,
-            "recent_events": [_recent_event(event) for event in events[:20]],
+            "recent_events": [_recent_event(event, thresholds) for event in events[:20]],
             "scope": {
                 "self_only": getattr(current_user, "role", None) == ROLE_SCENARIO_USER,
                 "user_id": current_user.id,

@@ -29,14 +29,10 @@ const NORMAL_BAND: Record<string, { low: number | null; high: number | null }> =
     :items="[
       { label: '我的待处置告警', value: data.summary.pending, unit: '条', tone: 'danger', sub: '待处置' },
       { label: '今日新增', value: data.summary.today, unit: '条', tone: 'warning', sub: '今日新增' },
-      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ 0.8' },
+      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ ' + (data.summary.high_threshold ?? 0.8).toFixed(2) },
       { label: '受影响设备', value: data.device_ranking.length, unit: '类', tone: 'primary', sub: '按设备去重' },
     ]"
   />
-
-  <p v-if="!data.summary.total" class="d-note">
-    当前账号还没有风险事件：本页运行态指标会在「风险研判」产生告警后自动有值。
-  </p>
 
   <DashCard
     title="告警样本电参量均值"

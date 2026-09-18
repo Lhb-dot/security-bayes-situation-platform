@@ -50,10 +50,6 @@ const radarSeries = () => [
     ]"
   />
 
-  <p v-if="!data.summary.total" class="d-note">
-    当前账号还没有风险事件：散点图与方向角雷达会在「风险研判」产生告警后自动有值。
-  </p>
-
   <div class="d-grid2">
     <DashCard
       title="双机航向映射散点图"

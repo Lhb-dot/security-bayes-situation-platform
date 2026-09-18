@@ -20,15 +20,10 @@ defineProps<{ data: GeologicalWorkspace }>();
     :items="[
       { label: '我的待处置告警', value: data.summary.pending, unit: '条', tone: 'danger', sub: '待处置' },
       { label: '今日新增', value: data.summary.today, unit: '条', tone: 'warning', sub: '今日新增' },
-      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ 0.8' },
+      { label: '高置信告警', value: data.summary.high_confidence, unit: '条', tone: 'purple', sub: '风险分 ≥ ' + (data.summary.high_threshold ?? 0.8).toFixed(2) },
       { label: '涉及坡度档位', value: data.slope_bucket_count, unit: '档', tone: 'primary', sub: '按坡度分档' },
     ]"
   />
-
-  <p v-if="!data.summary.total" class="d-note">
-    当前账号还没有风险事件：因子贡献、坡度档位排行等会在「风险研判」产生告警后自动有值。
-    下方「各数据集风险占比」不依赖告警。
-  </p>
 
   <div class="d-grid2">
     <DashCard title="关键因子贡献排行" source="事件地形因子均值归一">

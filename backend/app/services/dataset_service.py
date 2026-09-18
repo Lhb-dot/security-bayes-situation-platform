@@ -37,7 +37,7 @@ from app.services.constants import (
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
     DATASET_VISIBILITIES,
-    dataset_display_name,
+    dataset_display_name_of,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
@@ -124,11 +124,14 @@ class DatasetService(ServiceBase):
     def _to_dict(self, dataset: Dataset) -> dict:
         """序列化数据集，并补充前端列表/详情常用展示字段。"""
         data = row_to_dict(dataset)
-        data["name"] = dataset.name or dataset_display_name(dataset.logical_id)
+        data["name"] = dataset_display_name_of(dataset)
         data["field_count"] = len(dataset.fields_schema or [])
         normalized = dataset.file_path.replace("\\", "/")
         suffix = Path(normalized).suffix.lstrip(".").lower()
         data["data_format"] = suffix if suffix in ("csv", "arff", "json") else "arff"
+        # 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列用它展示，
+        # 与自动映射出来的中文展示名（name）区分开，两者用途不同。
+        data["file_name"] = Path(normalized).name
         data["record_count"] = self._count_records(dataset.file_path)
         data["referenced"] = self._is_referenced(dataset.id)
         data["enabled"] = dataset.status == DATASET_STATUS_ACTIVE

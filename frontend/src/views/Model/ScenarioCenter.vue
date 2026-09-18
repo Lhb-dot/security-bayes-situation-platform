@@ -92,6 +92,7 @@ onMounted(() => {
   position: relative;
   z-index: 1;
   padding: 0;
+  font-family: var(--font-ui);
 }
 
 .scenario-center__header {

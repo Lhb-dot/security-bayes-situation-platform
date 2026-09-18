@@ -7,6 +7,14 @@
 import request, { unwrapData } from '@/utils/request';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/security';
 
+/**
+ * 账号未配置该场景阈值时的兜底值（0~1）。
+ * 必须与后端 app/services/constants.py 的 DEFAULT_MEDIUM_THRESHOLD / DEFAULT_HIGH_THRESHOLD 保持一致，
+ * 否则同一张卡片会出现「状态按 0.5 判、分数颜色按 0.45 判」这种自相矛盾的显示。
+ */
+export const DEFAULT_MEDIUM_THRESHOLD = 0.5;
+export const DEFAULT_HIGH_THRESHOLD = 0.8;
+
 const SCENARIO_ID_TO_CODE: Record<number, ScenarioId> = {
   1: 'network_security',
   2: 'power_system',

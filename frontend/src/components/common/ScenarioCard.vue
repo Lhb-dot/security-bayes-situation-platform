@@ -118,6 +118,7 @@ const sampleIcon = '📈';
   transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
   display: flex;
   flex-direction: column;
+  font-family: var(--font-ui);
 }
 
 .scenario-card:hover {

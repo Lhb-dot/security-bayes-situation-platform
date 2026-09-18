@@ -66,7 +66,7 @@ _CST = ZoneInfo("Asia/Shanghai")
 def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
-    - DateTime → MM-DD HH:MM:SS（北京时间 UTC+8）
+    - DateTime → YYYY-MM-DD HH:MM:SS（北京时间 UTC+8）
     - Decimal → float（避免 JSON 序列化问题）
     - JSONB / dict / list 原样保留
     - exclude 用于隐藏敏感字段（如 password_hash）
@@ -82,7 +82,11 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
                 value = value.replace(tzinfo=_CST)
             else:
                 value = value.astimezone(_CST)
-            value = value.strftime("%m-%d %H:%M:%S")
+            # 必须带年份：前端多处按 YYYY-MM-DD 做 .slice(0,10) / .slice(5) 取日期，
+            # 少一个年份会让它们切出 "08-08 13:1" 这种碎片（并连带打挂按日聚合、
+            # "今日告警" startsWith 判断、new Date() 解析等）。全项目其余格式化点
+            # （main.py / report_service / _activity_trend）也一律用 %Y-%m-%d。
+            value = value.strftime("%Y-%m-%d %H:%M:%S")
         elif isinstance(value, Decimal):
             value = float(value)
         result[name] = value

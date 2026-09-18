@@ -22,15 +22,10 @@ from app.models.risk_event import RiskEvent
 from app.models.scenario import Scenario
 from app.models.situation_snapshot import SituationSnapshot
 from app.schemas.common import ok
+from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
-    RISK_EVENT_STATUS_PENDING,
-    RISK_EVENT_STATUS_PROCESSING,
-    RISK_EVENT_STATUS_RESOLVED,
-    RISK_LEVEL_HIGH,
-    RISK_LEVEL_LOW,
-    RISK_LEVEL_MEDIUM,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
@@ -44,30 +39,29 @@ class SituationSnapshotService(ServiceBase):
 
     # ------------------------------------------------------------------
     # 统计（需求 6.8：口径按风险等级与处置状态）
+    #
+    # 风险等级一律按**当前账号**的阈值重算（见 app/services/risk_view.py）：
+    # RiskEvent.risk_level 是创建者视角的落库值，不能代表其他账号看到的等级。
+    # 处置状态（pending/processing/resolved）与阈值无关，沿用落库值。
     # ------------------------------------------------------------------
     @staticmethod
-    def _aggregate(events) -> dict:
-        total = len(events)
-        return {
-            "total_events": total,
-            "high_count": sum(1 for e in events if e.risk_level == RISK_LEVEL_HIGH),
-            "medium_count": sum(1 for e in events if e.risk_level == RISK_LEVEL_MEDIUM),
-            "low_count": sum(1 for e in events if e.risk_level == RISK_LEVEL_LOW),
-            "pending_count": sum(1 for e in events if e.status == RISK_EVENT_STATUS_PENDING),
-            "processing_count": sum(1 for e in events if e.status == RISK_EVENT_STATUS_PROCESSING),
-            "resolved_count": sum(1 for e in events if e.status == RISK_EVENT_STATUS_RESOLVED),
-        }
+    def _aggregate(events, thresholds=None) -> dict:
+        return risk_view.aggregate(events, thresholds or {})
 
     @service_call
     def compute_user_stats(self, current_user):
-        """个人态势（需求 6.8.1：普通用户只统计本人数据，后端强制按用户过滤）。"""
+        """个人态势（需求 6.8.1：普通用户只统计本人数据，后端强制按用户过滤）。
+
+        统计口径：等级按 current_user 自己的阈值判定。
+        """
         self.require_login(current_user)
         events = self.db.scalars(
             select(RiskEvent).where(
                 RiskEvent.created_by_user_id == current_user.id
             )
         ).all()
-        return ok(data=self._aggregate(events))
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        return ok(data=self._aggregate(events, thresholds))
 
     @service_call
     def compute_scene_stats(
@@ -76,6 +70,8 @@ class SituationSnapshotService(ServiceBase):
         """平台总览态势（需求 0.2 / 6.8.3 / 6.11）。
 
         SUPER_ADMIN 仅统计 platform 数据集派生的风险事件，不含公司/个人派生数据。
+        统计口径：等级按 current_user 自己的阈值判定 —— 同一批事实，
+        不同管理员按各自阈值会看到不同的高/中/低分布，这是预期行为。
         """
         self.require_admin(current_user)
         stmt = (
@@ -86,15 +82,17 @@ class SituationSnapshotService(ServiceBase):
         if scenario_id is not None:
             stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         events = self.db.scalars(stmt).all()
-        return ok(data=self._aggregate(events))
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        return ok(data=self._aggregate(events, thresholds))
 
     @service_call
     def get_scene_situation(self, current_user, scenario_id: int):
         """场景态势（动态统计 + 最近风险事件），供场景大屏使用。
 
         返回 {scenario_id, stats, recent_events}：
-        - stats：按风险等级/处置状态聚合的真实计数（口径同 _aggregate）；
-        - recent_events：最近 20 条真实风险事件（按发生时间倒序）。
+        - stats：按**当前账号**阈值重算的等级计数 + 落库的处置状态计数；
+        - recent_events：最近 20 条真实风险事件（按发生时间倒序），
+          risk_level 同样按当前账号阈值重算，不直接透传创建者视角的落库值。
         """
         self.require_scenario_access(current_user, scenario_id)
         role = getattr(current_user, "role", None)
@@ -107,12 +105,13 @@ class SituationSnapshotService(ServiceBase):
             # 普通用户态势只统计本人数据（需求 6.8.1，后端强制按用户过滤）
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
         events = self.db.scalars(stmt).all()
+        thresholds = risk_view.load_thresholds(self.db, current_user)
         recent = sorted(events, key=lambda e: e.occurred_at or datetime(1970, 1, 1), reverse=True)[:20]
         return ok(
             data={
                 "scenario_id": scenario_id,
-                "stats": self._aggregate(events),
-                "recent_events": [row_to_dict(e) for e in recent],
+                "stats": self._aggregate(events, thresholds),
+                "recent_events": risk_view.view_events(recent, thresholds),
             }
         )
 
@@ -125,6 +124,11 @@ class SituationSnapshotService(ServiceBase):
 
         注意：SituationSnapshot 表只有 pending_count/resolved_count 列（无
         processing_count），"处理中"口径仅出现在动态统计（compute_*）中，不落库。
+
+        ⚠️ 视角说明：快照把等级计数**落库**，因此它固化的是**生成者当时的视角**。
+        阈值改为跟随账号后，「另一个账号查这张快照」得到的不是他自己的视图。
+        实时展示请走 compute_user_stats / compute_scene_stats / get_scene_situation
+        （这三者都按调用者阈值重算）。此处按生成者阈值计算并留痕。
         """
         self.require_scenario_admin_of(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
@@ -136,7 +140,8 @@ class SituationSnapshotService(ServiceBase):
                 Dataset.visibility == DATASET_VISIBILITY_PLATFORM
             )
         events = self.db.scalars(stmt).all()
-        stats = self._aggregate(events)
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+        stats = self._aggregate(events, thresholds)
         snapshot = SituationSnapshot(
             scenario_id=scenario_id,
             snapshot_time=datetime.now(timezone.utc),

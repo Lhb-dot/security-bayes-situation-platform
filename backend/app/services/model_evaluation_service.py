@@ -19,7 +19,7 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
-    dataset_display_name,
+    dataset_display_name_of,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
@@ -89,7 +89,7 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
         },
         "dataset": {
             "logical_id": getattr(dataset, "logical_id", None),
-            "name": dataset_display_name(getattr(dataset, "logical_id", None)),
+            "name": dataset_display_name_of(dataset),
             "version": getattr(dataset, "version", None),
             "label_field": getattr(dataset, "label_field", None),
             "field_count": len(feature_profile),

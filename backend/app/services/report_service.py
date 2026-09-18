@@ -26,6 +26,7 @@ from app.models.report import Report
 from app.models.risk_event import RiskEvent
 from app.models.scenario import Scenario
 from app.schemas.common import ok
+from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
@@ -321,7 +322,9 @@ class ReportService(ServiceBase):
             "model_versions": [{"id": k, "algorithm_code": v} for k, v in models.items()],
         }
 
-        overview = self._overview(events, records)
+        overview = self._overview(
+            events, records, risk_view.load_thresholds(self.db, current_user)
+        )
         model_analysis = self._model_analysis(records)
         model_evaluations = self._model_evaluations(current_user, records)
 
@@ -333,7 +336,9 @@ class ReportService(ServiceBase):
             "model_evaluations": model_evaluations,
             "feature_analysis": self._feature_analysis(records),
             "trend": self._trend(records),
-            "key_events": self._key_events(events, records),
+            "key_events": self._key_events(
+                events, records, thresholds=risk_view.load_thresholds(self.db, current_user)
+            ),
             "data_notes": self._data_notes(report_info, overview, model_analysis),
         }
 
@@ -376,11 +381,16 @@ class ReportService(ServiceBase):
         return lo_s if lo_s == hi_s else f"{lo_s} 至 {hi_s}"
 
     @staticmethod
-    def _overview(events, records):
+    def _overview(events, records, thresholds=None):
+        """报告总览。
+
+        等级计数按**生成报告的那个账号**的阈值重算（见 risk_view）：
+        报告是他自己的风险视图，不是把别人算好的等级相加。
+        """
         total = len(records)
         risk_count = sum(1 for r, _m in records if r.is_risk_event)
         normal_count = total - risk_count
-        stats = SituationSnapshotService._aggregate(events)
+        stats = SituationSnapshotService._aggregate(events, thresholds or {})
         risk_scores = [
             float(r.risk_score) for r, _m in records if r.is_risk_event and r.risk_score is not None
         ]
@@ -619,7 +629,9 @@ class ReportService(ServiceBase):
         return result
 
     @staticmethod
-    def _key_events(events, records, limit=10):
+    def _key_events(events, records, limit=10, thresholds=None):
+        """重点风险事件。等级按报告生成者的阈值重算，不透传落库的创建者视角。"""
+        thresholds = thresholds or {}
         event_map = {e.inference_record_id: e for e in events}
         key = []
         for record, _model in records:
@@ -630,7 +642,7 @@ class ReportService(ServiceBase):
                 {
                     "time": e.occurred_at.strftime("%Y-%m-%d %H:%M") if e.occurred_at else None,
                     "risk_level": {"HIGH": "高危", "MEDIUM": "中危", "LOW": "低危"}.get(
-                        e.risk_level, e.risk_level
+                        risk_view.level_of(e, thresholds), risk_view.level_of(e, thresholds)
                     ),
                     "probability": float(e.risk_score) if e.risk_score is not None else None,
                     "risk_type": e.risk_type,
