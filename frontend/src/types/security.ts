@@ -126,21 +126,6 @@ export interface DatasetVersion {
   referenced: boolean;          // 是否被模型版本引用
 }
 
-/** 模型版本记录（需求 6.7.1 最小信息） */
-export interface ModelVersion {
-  model_id: string;
-  scenario_id: ScenarioId;
-  dataset_name: string;
-  algo_type: string;
-  discrete_method: string;
-  accuracy: number;
-  f1: number;
-  recall: number;
-  g_mean: number;
-  train_time_s: number;
-  created_at: string;
-}
-
 /** 模型生命周期状态（需求 6.7.2） */
 export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
 
@@ -157,24 +142,6 @@ export interface EvaluationMetrics {
   cv_mean?: number | null;
   cv_std?: number | null;
   quality_availability?: Record<string, { available: boolean; reason: string | null }>;
-}
-
-/** 模型版本（v2.0 生命周期模型，需求 6.7.1） */
-export interface ModelVersionRecord {
-  model_version_id: string;
-  scenario_id: ScenarioId;
-  dataset_id: string;
-  dataset_version: string;
-  algorithm_id: string;
-  training_parameters: Record<string, unknown>;
-  evaluation_metrics: EvaluationMetrics;
-  train_time_s: number;
-  trained_by: string;          // 发起训练的管理员账号
-  trained_at: string;
-  status: ModelStatus;
-  published_by?: string;       // 发布操作管理员
-  published_at?: string;
-  is_default: boolean;         // 是否为"场景＋数据集"默认推荐模型
 }
 
 /** 风险等级（大写枚举：风险事件/推理记录使用；历史大小写双轨，统一走 toRiskLevel 转换） */
