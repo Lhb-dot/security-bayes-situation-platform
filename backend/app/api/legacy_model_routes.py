@@ -5,8 +5,6 @@ older integrations may still call them, but they are isolated from application
 startup and the database-backed API.
 """
 
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
@@ -17,13 +15,11 @@ from app.algorithms.pmwnb_demo import (
     save_threshold_sim,
 )
 from app.api.deps import get_current_user, require_scenario_admin
+from app.paths import OUTPUT_ROOT
 from app.services.model_sim import get_dataset_list, infer_bayes_sim, train_bayes_sim
 
 
 router = APIRouter(tags=["兼容接口"])
-
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = BACKEND_ROOT / "storage" / "output"
 
 # The old training endpoint is process-local by design. Keep its original
 # behavior while preventing the state from leaking into the v1 model APIs.
@@ -35,7 +31,7 @@ _legacy_training_state = {
 
 @router.get("/china-map.json")
 async def get_map_json():
-    map_file = OUTPUT_DIR / "china-map.json"
+    map_file = OUTPUT_ROOT / "china-map.json"
     if not map_file.exists():
         raise HTTPException(status_code=404, detail="地图数据文件缺失")
     return FileResponse(map_file, media_type="application/json")

@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import threading
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +14,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.legacy_model_routes import router as legacy_model_router
 from app.api.v1 import api_router
+from app.paths import BACKEND_ROOT, PROJECT_ROOT
 
 
 logger = logging.getLogger(__name__)
 
-BACKEND_ROOT = Path(__file__).resolve().parent.parent
-PROJECT_ROOT = BACKEND_ROOT.parent
 WEB_ROOT = PROJECT_ROOT / "frontend"
 DIST_ROOT = WEB_ROOT / "dist"
 SITE_ROOT = DIST_ROOT if (DIST_ROOT / "index.html").exists() else WEB_ROOT

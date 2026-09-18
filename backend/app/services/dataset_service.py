@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from sqlalchemy import func, select
+from app.paths import PROJECT_ROOT
 from app.models.dataset import Dataset
 from app.models.model_version import ModelVersion
 from app.models.scenario import Scenario
@@ -336,7 +337,6 @@ class DatasetService(ServiceBase):
         - 自动推断字段类型与枚举值域、样本数；
         - label_field 必须存在于文件字段中（否则报错，前端可据此提示修正）。
         """
-        from app.services.model_sim import PROJECT_ROOT
         from app.utils.dataset_file_reader import (
             build_fields_schema,
             detect_format,
@@ -353,8 +353,8 @@ class DatasetService(ServiceBase):
 
         # 保存到 data/<场景编码>/<安全文件名>（basename 防路径穿越）
         safe_name = os.path.basename(filename)
-        target_dir = os.path.join(PROJECT_ROOT, "data", scenario.code, safe_name)
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        target_dir = PROJECT_ROOT / "data" / scenario.code / safe_name
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
         with open(target_dir, "wb") as f:
             f.write(file_bytes)
         relative_path = f"data/{scenario.code}/{safe_name}"
