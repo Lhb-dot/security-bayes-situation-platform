@@ -727,16 +727,6 @@ def _event_summary(
     }
 
 
-def _event_feature_values(events: list[RiskEvent], key: str) -> list[str]:
-    values = []
-    for event in events:
-        features = event.raw_features if isinstance(event.raw_features, dict) else {}
-        text = _clean(features.get(key))
-        if text and text != "?":
-            values.append(text)
-    return values
-
-
 def _recent_event(event: RiskEvent, thresholds: Optional[dict] = None) -> dict[str, Any]:
     data = row_to_dict(event)
     # risk_level 按查看者阈值重算（落库值是创建者视角）
@@ -1509,7 +1499,13 @@ class DashboardService(ServiceBase):
     # ------------------------------------------------------------------
     @staticmethod
     def _feature_values(events: list[RiskEvent], key: str) -> list[str]:
-        return _event_feature_values(events, key)
+        values = []
+        for event in events:
+            features = event.raw_features if isinstance(event.raw_features, dict) else {}
+            text = _clean(features.get(key))
+            if text and text != "?":
+                values.append(text)
+        return values
 
     @classmethod
     def _feature_nums(cls, events: list[RiskEvent], key: str) -> list[float]:

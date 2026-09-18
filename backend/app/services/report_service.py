@@ -90,6 +90,48 @@ class ReportService(ServiceBase):
             or report.target_user_id == user.id
         )
 
+    def _resolve_generation_scope(
+        self,
+        current_user,
+        scenario_id: Optional[int],
+        scope: str,
+        target_user_id: Optional[int],
+        *,
+        force_user_scope: bool = False,
+    ) -> tuple[object, Optional[int], str, Optional[int]]:
+        """Normalize report scope after applying the three-level access rules.
+
+        Both report creation paths use the same boundary: management roles may
+        select a user within their scope, while scenario users are always
+        restricted to their own data.  Returning normalized values keeps the
+        downstream queries independent from request-specific role branches.
+        """
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SUPER_ADMIN:
+            if target_user_id is not None and self.db.get(AppUser, target_user_id) is None:
+                raise ServiceError(404, "目标用户不存在")
+            return role, scenario_id, scope, target_user_id
+
+        bound_scenario_id = getattr(current_user, "scenario_id", None)
+        if scenario_id is not None and scenario_id != bound_scenario_id:
+            raise ServiceError(403, "只能生成本人绑定场景的报告")
+        scenario_id = bound_scenario_id
+
+        if role == ROLE_SCENARIO_USER:
+            if force_user_scope:
+                return role, scenario_id, "self", current_user.id
+            if target_user_id is not None and target_user_id != current_user.id:
+                raise ServiceError(403, "普通用户只能基于本人数据生成报告")
+            return role, scenario_id, scope, target_user_id
+
+        if role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
+            target = self.db.get(AppUser, target_user_id)
+            if target is None:
+                raise ServiceError(404, "目标用户不存在")
+            if target.scenario_id != scenario_id:
+                raise ServiceError(403, "只能指定本人绑定场景内的用户")
+        return role, scenario_id, scope, target_user_id
+
     # ------------------------------------------------------------------
     # 生成（需求 6.8.5：报告数据范围）
     # ------------------------------------------------------------------
@@ -127,24 +169,12 @@ class ReportService(ServiceBase):
         if scheduled and (interval_days is None or interval_days < 1):
             raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
 
-        role = getattr(current_user, "role", None)
-        if role != ROLE_SUPER_ADMIN:
-            # 场景角色只能生成本人绑定场景的报告。
-            if scenario_id is not None and scenario_id != current_user.scenario_id:
-                raise ServiceError(403, "只能生成本人绑定场景的报告")
-            scenario_id = current_user.scenario_id
-            if role == ROLE_SCENARIO_USER and target_user_id is not None and target_user_id != current_user.id:
-                raise ServiceError(403, "普通用户只能基于本人数据生成报告")
-            if role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
-                target = self.db.get(AppUser, target_user_id)
-                if target is None:
-                    raise ServiceError(404, "目标用户不存在")
-                if target.scenario_id != scenario_id:
-                    raise ServiceError(403, "只能指定本人绑定场景内的用户")
-        elif target_user_id is not None:
-            target = self.db.get(AppUser, target_user_id)
-            if target is None:
-                raise ServiceError(404, "目标用户不存在")
+        _, scenario_id, _, target_user_id = self._resolve_generation_scope(
+            current_user,
+            scenario_id,
+            "self",
+            target_user_id,
+        )
 
         report = Report(
             generated_by=current_user.id,
@@ -190,24 +220,13 @@ class ReportService(ServiceBase):
         if err:
             raise ServiceError(400, err)
 
-        role = getattr(current_user, "role", None)
-        if role != ROLE_SUPER_ADMIN:
-            if scenario_id is not None and scenario_id != current_user.scenario_id:
-                raise ServiceError(403, "只能生成本人绑定场景的报告")
-            scenario_id = current_user.scenario_id
-            if role == ROLE_SCENARIO_USER:
-                scope = "self"
-                target_user_id = current_user.id
-            elif role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
-                target = self.db.get(AppUser, target_user_id)
-                if target is None:
-                    raise ServiceError(404, "目标用户不存在")
-                if target.scenario_id != scenario_id:
-                    raise ServiceError(403, "只能指定本人绑定场景内的用户")
-        elif target_user_id is not None:
-            target = self.db.get(AppUser, target_user_id)
-            if target is None:
-                raise ServiceError(404, "目标用户不存在")
+        role, scenario_id, scope, target_user_id = self._resolve_generation_scope(
+            current_user,
+            scenario_id,
+            scope,
+            target_user_id,
+            force_user_scope=True,
+        )
 
         # 1) 汇总真实数据（风险事件 + 推理记录，按 6.10.1 三级角色隔离）
         events = self._gather_events(current_user, role, scenario_id, scope, target_user_id)
