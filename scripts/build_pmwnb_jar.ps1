@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
 $sourceZip = Join-Path $repo "backend\java\algorithm-src\PMWNB\PMWNB.zip"

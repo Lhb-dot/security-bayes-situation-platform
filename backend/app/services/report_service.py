@@ -40,9 +40,11 @@ from app.services.constants import (
 )
 from app.services.situation_snapshot_service import SituationSnapshotService
 from app.utils.common import (
+    beijing_now_str,
     get_logger,
     paginate,
     row_to_dict,
+    to_beijing,
     validate_enum,
     validate_required,
 )
@@ -327,7 +329,7 @@ class ReportService(ServiceBase):
 
         report_info = {
             "title": title.strip(),
-            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            "generated_at": beijing_now_str("%Y-%m-%d %H:%M"),
             "report_period": period,
             "generated_by": getattr(current_user, "display_name", None)
             or getattr(current_user, "username", ""),
@@ -393,10 +395,16 @@ class ReportService(ServiceBase):
 
     @staticmethod
     def _period(times):
+        """数据范围的起止日期（**按北京时间取日**）。
+
+        库里是 UTC，直接 strftime 会拿到 UTC 的日期：例如北京时间 08-22 01:00
+        （= UTC 08-21 17:00）会被算成 08-21，报告期整体提前一天。
+        比较大小仍用原始 datetime（比的是时刻），只在取日时换算。
+        """
         if not times:
             return None
         lo, hi = min(times), max(times)
-        lo_s, hi_s = lo.strftime("%Y-%m-%d"), hi.strftime("%Y-%m-%d")
+        lo_s, hi_s = to_beijing(lo).strftime("%Y-%m-%d"), to_beijing(hi).strftime("%Y-%m-%d")
         return lo_s if lo_s == hi_s else f"{lo_s} 至 {hi_s}"
 
     @staticmethod
@@ -622,7 +630,7 @@ class ReportService(ServiceBase):
         for record, _model in records:
             if not record.executed_at:
                 continue
-            day = record.executed_at.strftime("%m-%d")
+            day = to_beijing(record.executed_at).strftime("%m-%d")
             d = by_day.setdefault(
                 day, {"date": day, "inference_count": 0, "risk_count": 0, "risk_scores": []}
             )
@@ -659,7 +667,7 @@ class ReportService(ServiceBase):
                 continue
             key.append(
                 {
-                    "time": e.occurred_at.strftime("%Y-%m-%d %H:%M") if e.occurred_at else None,
+                    "time": to_beijing(e.occurred_at).strftime("%Y-%m-%d %H:%M") if e.occurred_at else None,
                     "risk_level": {"HIGH": "高危", "MEDIUM": "中危", "LOW": "低危"}.get(
                         risk_view.level_of(e, thresholds), risk_view.level_of(e, thresholds)
                     ),

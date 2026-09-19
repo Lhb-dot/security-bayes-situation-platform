@@ -6,7 +6,7 @@
  *  - 管理员：发布、禁用、删除、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -235,83 +235,136 @@ const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) =
 const canPublish = (model: BackendModelVersion) => currentUser.value?.id === model.trained_by;
 
 // 模型评价独立于推理记录：先读模型快照，只有需要生成时才调用 AI。
+// 管理员视角与用户视角在后端是两份独立产物，前端按视角分桶缓存，切标签时互不覆盖。
+type EvaluationTab = Extract<ModelEvaluationAudience, 'current' | 'user'>;
+
+interface EvaluationBucket {
+  loaded: boolean;
+  pending: boolean;
+  response: ModelEvaluationResponse | null;
+  markdown: string;
+  status: string;
+  error: string;
+}
+
 const evaluationTarget = ref<BackendModelVersion | null>(null);
-const evaluation = ref<ModelEvaluationResponse | null>(null);
-const evaluationMarkdown = ref('');
 const evaluationLoading = ref(false);
-const evaluationError = ref('');
-const evaluationStatus = ref('');
-const evaluationAudience = ref<ModelEvaluationAudience>('current');
+const evaluationAudience = ref<EvaluationTab>('current');
 let evaluationAbort: AbortController | null = null;
+
+const emptyEvaluationBucket = (): EvaluationBucket => ({
+  loaded: false,
+  pending: false,
+  response: null,
+  markdown: '',
+  status: '',
+  error: '',
+});
+
+const evaluationBuckets = reactive<Record<EvaluationTab, EvaluationBucket>>({
+  current: emptyEvaluationBucket(),
+  user: emptyEvaluationBucket(),
+});
+
+const activeEvaluation = computed(() => evaluationBuckets[evaluationAudience.value]);
+const evaluation = computed(() => activeEvaluation.value.response);
+const evaluationMarkdown = computed(() => activeEvaluation.value.markdown);
+const evaluationStatus = computed(() => activeEvaluation.value.status);
+const evaluationError = computed(() => activeEvaluation.value.error);
 
 const safeEvaluationHtml = computed(() => {
   if (!evaluationMarkdown.value) return '';
   return DOMPurify.sanitize(marked.parse(evaluationMarkdown.value, { async: false }) as string);
 });
 
-const openModelEvaluation = async (model: BackendModelVersion) => {
-  evaluationAbort?.abort();
-  evaluationTarget.value = model;
-  evaluationAudience.value = isAdmin.value ? 'current' : 'user';
-  evaluation.value = null;
-  evaluationMarkdown.value = '';
-  evaluationError.value = '';
-  evaluationStatus.value = '正在读取模型属性...';
+const loadEvaluation = async (audience: EvaluationTab) => {
+  const target = evaluationTarget.value;
+  const bucket = evaluationBuckets[audience];
+  if (!target || bucket.pending) return;
+  bucket.pending = true;
+  bucket.status = '正在读取模型属性...';
   try {
-    evaluation.value = await getModelEvaluation(model.id);
-    evaluationMarkdown.value = evaluation.value.evaluation.markdown || '';
-    evaluationStatus.value = evaluation.value.evaluation.available ? '已加载历史评价' : '尚未生成评价';
+    const response = await getModelEvaluation(target.id, audience);
+    if (evaluationTarget.value?.id !== target.id) return;
+    bucket.response = response;
+    bucket.markdown = response.evaluation.markdown || '';
+    // 评价读取完成后的结果由正文/空状态呈现，不再用状态条重复一遍。
+    bucket.status = '';
+    bucket.error = '';
+    bucket.loaded = true;
   } catch (err) {
-    evaluationError.value = err instanceof Error ? err.message : '模型评价读取失败';
-    evaluationStatus.value = '';
+    bucket.error = err instanceof Error ? err.message : '模型评价读取失败';
+    bucket.status = '';
+  } finally {
+    bucket.pending = false;
   }
+};
+
+/** 已加载过或正在加载中的视角不重复取数。 */
+const ensureEvaluationLoaded = (audience: EvaluationTab) => {
+  const bucket = evaluationBuckets[audience];
+  if (bucket.loaded || bucket.pending) return;
+  void loadEvaluation(audience);
+};
+
+const openModelEvaluation = (model: BackendModelVersion) => {
+  evaluationAbort?.abort();
+  evaluationAbort = null;
+  evaluationTarget.value = model;
+  evaluationBuckets.current = emptyEvaluationBucket();
+  evaluationBuckets.user = emptyEvaluationBucket();
+  evaluationAudience.value = isAdmin.value ? 'current' : 'user';
+  evaluationLoading.value = false;
+  ensureEvaluationLoaded(evaluationAudience.value);
 };
 
 const closeModelEvaluation = () => {
   evaluationAbort?.abort();
   evaluationAbort = null;
   evaluationTarget.value = null;
-  evaluation.value = null;
-  evaluationMarkdown.value = '';
-  evaluationError.value = '';
-  evaluationStatus.value = '';
+  evaluationBuckets.current = emptyEvaluationBucket();
+  evaluationBuckets.user = emptyEvaluationBucket();
 };
 
 const generateModelEvaluation = async (
   regenerate = false,
-  audience: ModelEvaluationAudience = evaluationAudience.value,
+  audience: EvaluationTab = evaluationAudience.value,
 ) => {
   const target = evaluationTarget.value;
   if (!target || evaluationLoading.value) return;
   evaluationAbort?.abort();
   evaluationAbort = new AbortController();
+  const bucket = evaluationBuckets[audience];
+  // 先占位，避免切换视角的 watch 在流式生成期间并发拉取。
+  bucket.pending = true;
   evaluationAudience.value = audience;
   evaluationLoading.value = true;
-  evaluationError.value = '';
-  evaluationMarkdown.value = regenerate ? '' : evaluationMarkdown.value;
-  evaluationStatus.value = audience === 'user'
+  bucket.error = '';
+  if (regenerate) bucket.markdown = '';
+  bucket.status = audience === 'user'
     ? '正在生成普通用户评价...'
     : regenerate ? '正在重新生成模型评价...' : '正在生成模型评价...';
   try {
     await streamModelEvaluation(target.id, regenerate, {
-      onStart: (data) => { evaluationStatus.value = String(data.status || '评价生成中'); },
-      onDelta: (content) => { evaluationMarkdown.value += content; },
+      onStart: (data) => { bucket.status = String(data.status || '评价生成中'); },
+      onDelta: (content) => { bucket.markdown += content; },
       onError: (data) => {
-        evaluationError.value = String(data.message || 'AI 服务不可用，已回退规则评价');
+        bucket.error = String(data.message || 'AI 服务不可用');
       },
-      onDone: (data) => {
-        evaluationStatus.value = data.source === 'fallback'
-          ? 'AI 失败，已完成规则回退'
-          : data.source === 'cached' ? '已加载历史评价' : '评价已生成';
+      onDone: () => {
+        // 生成结束即清空状态条，正文自己会呈现结果。
+        bucket.status = '';
       },
     }, evaluationAbort.signal, audience);
-    evaluation.value = await getModelEvaluation(target.id);
+    bucket.response = await getModelEvaluation(target.id, audience);
+    bucket.loaded = true;
   } catch (err) {
     if ((err as Error)?.name !== 'AbortError') {
-      evaluationError.value = err instanceof Error ? err.message : '模型评价生成失败';
-      evaluationStatus.value = '';
+      bucket.error = err instanceof Error ? err.message : '模型评价生成失败';
+      bucket.status = '';
     }
   } finally {
+    bucket.pending = false;
     evaluationLoading.value = false;
     evaluationAbort = null;
   }
@@ -320,6 +373,12 @@ const generateModelEvaluation = async (
 /** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
 watch(evaluationTarget, (target) => {
   document.body.style.overflow = target ? 'hidden' : '';
+});
+
+/** 切换视角时按需拉取该视角的评价：后端两份产物分别存储，不会互相覆盖。 */
+watch(evaluationAudience, (audience) => {
+  if (!evaluationTarget.value) return;
+  ensureEvaluationLoaded(audience);
 });
 
 const handleEvaluationKeydown = (event: KeyboardEvent) => {

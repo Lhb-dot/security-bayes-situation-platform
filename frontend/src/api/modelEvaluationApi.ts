@@ -22,8 +22,15 @@ export interface ModelEvaluationStreamHandlers {
 
 export type ModelEvaluationAudience = 'current' | 'management' | 'user';
 
-export const getModelEvaluation = async (modelId: number): Promise<ModelEvaluationResponse> =>
-  unwrapData(await request.get(`/api/v1/model-versions/${modelId}/evaluation`));
+export const getModelEvaluation = async (
+  modelId: number,
+  audience: ModelEvaluationAudience = 'current',
+): Promise<ModelEvaluationResponse> =>
+  unwrapData(
+    await request.get(`/api/v1/model-versions/${modelId}/evaluation`, {
+      params: { audience },
+    }),
+  );
 
 export const streamModelEvaluation = async (
   modelId: number,
