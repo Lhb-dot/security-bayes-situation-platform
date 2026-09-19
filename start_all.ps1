@@ -1,4 +1,4 @@
-$ErrorActionPreference = "SilentlyContinue"
+﻿$ErrorActionPreference = "SilentlyContinue"
 $Host.UI.RawUI.WindowTitle = "Security Platform"
 
 $root    = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -60,12 +60,16 @@ $t = (Get-Date).AddSeconds(5)
 while (-not $pgOk -and (Get-Date) -lt $t) { $pgOk = Test-Pg; if (-not $pgOk) { Start-Sleep 1 } }
 if (-not $pgOk) {
     Write-Host ":5432  DOWN" -ForegroundColor Yellow
-    Write-Host "  -> docker compose up -d ..." -NoNewline
+    Write-Host "  -> docker compose up -d"
     Push-Location $root
-    docker compose up -d | Out-Null
+    # 2>$null: 屏蔽 docker 的原始报错, 否则整段 npipe 错误会糊在上一条状态行末尾
+    docker compose up -d 2>$null | Out-Null
     Pop-Location
     $t = (Get-Date).AddSeconds(40)
     while (-not $pgOk -and (Get-Date) -lt $t) { $pgOk = Test-Pg; if (-not $pgOk) { Start-Sleep 2 } }
+    if (-not $pgOk) {
+        Write-Host "     Docker Desktop 没启动? 启动后重跑本脚本, 或手动执行: docker compose up -d" -ForegroundColor DarkYellow
+    }
 }
 if ($pgOk) { Write-Host ":5432  OK" -ForegroundColor Green }
 else { Write-Host ":5432  FAIL (数据库不可用, /api/v1 接口将报错; 旧 /api/model 演示不受影响)" -ForegroundColor Red }
@@ -160,17 +164,6 @@ while ((Get-Date) -lt $t) {
 }
 if ($ok) { Write-Host ":12312  OK" -ForegroundColor Green }
 else     { Write-Host ":12312  FAIL" -ForegroundColor Red }
-# FastAPI 起来后,顺带探测数据库新接口 /api/v1 是否真的连通
-if ($ok) {
-    try {
-        $h = @{ "X-User-Id" = "1" }
-        $r = Invoke-RestMethod "http://127.0.0.1:12312/api/v1/scenarios" -Headers $h -TimeoutSec 5
-        if ($r.code -eq 0) { Write-Host "    /api/v1     OK (数据库已连接)" -ForegroundColor Green }
-        else { Write-Host "    /api/v1     WARN ($($r.message))" -ForegroundColor Yellow }
-    } catch {
-        Write-Host "    /api/v1     WARN (数据库未就绪, 新接口暂不可用)" -ForegroundColor Yellow
-    }
-}
 
 # ---- Vue Frontend ----
 Write-Host "  Vue Frontend  " -NoNewline
