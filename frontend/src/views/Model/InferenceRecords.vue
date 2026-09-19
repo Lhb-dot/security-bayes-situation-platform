@@ -5,7 +5,7 @@
  * 需求 6.2（P0）：普通用户只能查询本人推理记录；管理员可以查询平台全部推理记录。
  * 需求 6.8.4：管理员查看单个用户数据时，可以按用户ID筛选。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
@@ -110,13 +110,45 @@ const explanationTarget = ref<InferenceRecordItem | null>(null);
 const explanationDialogVisible = ref(false);
 const explanationLoading = ref(false);
 const explanationMarkdown = ref('');
-const explanationSource = ref<'ai' | 'fallback' | null>(null);
 const explanationGeneratedAt = ref<string | null>(null);
 const explanationError = ref('');
 const modelEvaluationMarkdown = ref('');
 const explanationWasAvailable = ref(false);
 const explanationGenerating = ref(false);
+/** 「模型评价」入口开关：默认关闭，只展示本条研判的 AI 评价 */
+const modelEvaluationVisible = ref(false);
+const modelEvaluationBlock = ref<HTMLElement | null>(null);
 let explanationController: AbortController | null = null;
+
+/** 该推理所用模型是否已保存 AI 评价（无评价时入口仍可点，面板内给出提示） */
+const hasModelEvaluation = computed(() => Boolean(modelEvaluationMarkdown.value));
+
+/**
+ * 后端下发的是 UTC ISO 串（如 2026-09-14T09:09:08.949249+00:00），
+ * 直接渲染会把带微秒的 ISO 原文怼到界面上。这里固定按北京时间（UTC+8）格式化，
+ * 不依赖浏览器所在时区，避免换机器后显示口径漂移。
+ */
+const formatBeijingTime = (value: string | null | undefined): string => {
+  if (!value) return '';
+  const raw = String(value);
+  // 无时区标记的裸时间按 UTC 处理（后端统一存 timezone.utc）
+  const parsed = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  const beijing = new Date(parsed.getTime() + 8 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${beijing.getUTCFullYear()}-${pad(beijing.getUTCMonth() + 1)}-${pad(beijing.getUTCDate())} ` +
+    `${pad(beijing.getUTCHours())}:${pad(beijing.getUTCMinutes())}:${pad(beijing.getUTCSeconds())}`
+  );
+};
+
+const toggleModelEvaluation = async () => {
+  modelEvaluationVisible.value = !modelEvaluationVisible.value;
+  if (!modelEvaluationVisible.value) return;
+  // 面板在正文顶部，长内容会把按钮顶出视口，展开后主动滚到面板
+  await nextTick();
+  modelEvaluationBlock.value?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+};
 
 const safeExplanationHtml = computed(() =>
   explanationMarkdown.value
@@ -136,10 +168,10 @@ const openExplanation = async (record: InferenceRecordItem) => {
   explanationDialogVisible.value = true;
   explanationLoading.value = true;
   explanationMarkdown.value = '';
-  explanationSource.value = null;
   explanationGeneratedAt.value = null;
   explanationError.value = '';
   modelEvaluationMarkdown.value = record.model_evaluation?.markdown ?? '';
+  modelEvaluationVisible.value = false;
   explanationWasAvailable.value = false;
   explanationGenerating.value = false;
   try {
@@ -151,7 +183,6 @@ const openExplanation = async (record: InferenceRecordItem) => {
       return;
     }
     explanationMarkdown.value = saved.markdown;
-    explanationSource.value = saved.source ?? null;
     explanationGeneratedAt.value = saved.generated_at ?? null;
   } catch (err) {
     explanationError.value = err instanceof Error ? err.message : '解释文本读取失败';
@@ -170,7 +201,6 @@ const generateExplanation = async () => {
   explanationGenerating.value = true;
   explanationError.value = '';
   explanationMarkdown.value = '';
-  explanationSource.value = null;
   explanationGeneratedAt.value = null;
 
   try {
@@ -197,7 +227,6 @@ const generateExplanation = async () => {
       throw new Error('AI评价生成后未能保存，请稍后重试');
     }
     explanationMarkdown.value = saved.markdown;
-    explanationSource.value = saved.source ?? null;
     explanationGeneratedAt.value = saved.generated_at ?? null;
     explanationWasAvailable.value = true;
   } catch (err) {
@@ -218,6 +247,7 @@ const closeExplanation = () => {
   explanationTarget.value = null;
   explanationMarkdown.value = '';
   modelEvaluationMarkdown.value = '';
+  modelEvaluationVisible.value = false;
   explanationWasAvailable.value = false;
   explanationGenerating.value = false;
 };
@@ -356,14 +386,26 @@ onMounted(() => {
       <template #header="{ titleId, titleClass }">
         <div class="inference-explanation-dialog__header">
           <span :id="titleId" :class="titleClass">模型解释 - 推理记录 {{ explanationTarget?.id ?? '' }}</span>
-          <button
-            class="inference-explanation-dialog__generate"
-            type="button"
-            :disabled="explanationLoading"
-            @click="generateExplanation"
-          >
-            {{ explanationWasAvailable ? '重新生成' : '生成AI评价' }}
-          </button>
+          <div class="inference-explanation-dialog__actions">
+            <button
+              class="inference-explanation-dialog__evaluation"
+              :class="{ 'is-active': modelEvaluationVisible }"
+              type="button"
+              :aria-pressed="modelEvaluationVisible"
+              :title="hasModelEvaluation ? '查看该推理所用模型的 AI 评价' : '该推理所用模型尚未生成 AI 评价'"
+              @click="toggleModelEvaluation"
+            >
+              模型评价
+            </button>
+            <button
+              class="inference-explanation-dialog__generate"
+              type="button"
+              :disabled="explanationLoading"
+              @click="generateExplanation"
+            >
+              {{ explanationWasAvailable ? '重新生成' : '生成AI评价' }}
+            </button>
+          </div>
         </div>
       </template>
       <p v-if="explanationLoading" class="explanation-state">
@@ -371,13 +413,17 @@ onMounted(() => {
       </p>
       <template v-else>
         <p v-if="explanationError" class="explanation-state explanation-state--error">{{ explanationError }}</p>
-        <section v-if="safeModelEvaluationHtml" class="linked-model-evaluation">
-          <div class="linked-model-evaluation__title">关联模型评价（已保存）</div>
-          <div class="saved-explanation-markdown" v-html="safeModelEvaluationHtml"></div>
+        <section
+          v-if="modelEvaluationVisible"
+          ref="modelEvaluationBlock"
+          class="linked-model-evaluation"
+        >
+          <div class="linked-model-evaluation__title">模型评价</div>
+          <div v-if="safeModelEvaluationHtml" class="saved-explanation-markdown" v-html="safeModelEvaluationHtml"></div>
+          <p v-else class="explanation-state">该推理所用模型尚未生成 AI 评价。</p>
         </section>
-        <div class="explanation-meta">
-          <span>{{ explanationSource === 'ai' ? 'AI 生成' : '规则回退' }}</span>
-          <span v-if="explanationGeneratedAt">保存于 {{ explanationGeneratedAt }}</span>
+        <div v-if="explanationGeneratedAt" class="explanation-meta">
+          <span>保存于 {{ formatBeijingTime(explanationGeneratedAt) }}</span>
         </div>
         <div class="saved-explanation-markdown" v-html="safeExplanationHtml"></div>
       </template>
@@ -638,6 +684,36 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding-right: 44px;
+}
+
+.inference-explanation-dialog__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 「模型评价」入口：默认收起，选中态用模型评价面板的青色描边呼应 */
+.inference-explanation-dialog__evaluation {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(125, 201, 255, 0.06);
+  color: rgba(200, 222, 250, 0.78);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.inference-explanation-dialog__evaluation:hover {
+  background: rgba(125, 201, 255, 0.16);
+  color: #cfe4ff;
+}
+
+.inference-explanation-dialog__evaluation.is-active {
+  border-color: rgba(83, 229, 200, 0.42);
+  background: rgba(83, 229, 200, 0.16);
+  color: #53e5c8;
 }
 
 .inference-explanation-dialog__generate {
