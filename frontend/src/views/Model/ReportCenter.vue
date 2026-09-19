@@ -598,7 +598,7 @@ onMounted(async () => {
           >
             <p class="report-section__hint">
               <b>{{ evaluation.algorithm_name ?? evaluation.algorithm_code ?? '模型' }}</b>
-              · {{ evaluation.available ? (evaluation.source === 'ai' ? 'AI 评价' : '规则回退') : '暂无已保存评价' }}
+              · {{ evaluation.available ? '评价已生成' : '暂无已保存评价' }}
             </p>
             <div
               v-if="evaluation.markdown"

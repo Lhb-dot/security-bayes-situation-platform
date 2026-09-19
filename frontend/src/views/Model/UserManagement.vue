@@ -44,6 +44,13 @@ const roleLabel = (role: UserRole) => {
   return '普通用户';
 };
 
+/** 徽标配色：与「设置 → 账号与安全」保持一致（系统管理员=琥珀黄） */
+const roleBadge = (role: UserRole) => {
+  if (role === 'SUPER_ADMIN') return 'role-badge--super';
+  if (role === 'SCENARIO_USER') return 'role-badge--user';
+  return 'role-badge--admin';
+};
+
 const scenarioLabel = (user: UserAccount) => {
   if (user.scenario_code && scenarioNameByCode.value[user.scenario_code]) {
     return scenarioNameByCode.value[user.scenario_code];
@@ -284,7 +291,7 @@ onMounted(async () => {
               <td>
                 <span
                   class="role-badge"
-                  :class="user.role === 'SCENARIO_USER' ? 'role-badge--user' : 'role-badge--admin'"
+                  :class="roleBadge(user.role)"
                 >
                   {{ roleLabel(user.role) }}
                 </span>
