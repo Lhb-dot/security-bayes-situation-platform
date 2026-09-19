@@ -19,7 +19,10 @@ venv/
 # ==================== Models & Data ====================
 *.pkl
 *.model
-data/
+# 必须带前导斜杠：只匹配仓库根目录的 /data/（数据集）。
+# 写成 data/ 会匹配任意深度的同名目录，会误伤 backend/app/data/（Python 包目录）。
+/data/
+# 下面两条故意不锚定：要忽略的 backend/storage/logs/ 和 frontend/dist/ 都在子目录里。
 logs/
 *.log
 
@@ -47,6 +50,10 @@ backend/java/algorithm-src/PMWNB/PMWNB.zip
 # ==================== Codex local workspace ====================
 /.workbuddy/
 /.workbuddy-ai/
+
+# ==================== Local scratch ====================
+# 本地验证产物：临时截图、一次性冒烟/断言脚本。不带进仓库。
+/tmp/
 
 # ==================== OS ====================
 .DS_Store
