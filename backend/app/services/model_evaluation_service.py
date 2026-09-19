@@ -258,10 +258,11 @@ class ModelEvaluationService(ServiceBase):
         return current
 
     @service_call
-    def get_evaluation(self, current_user, model_id: int) -> dict:
+    def get_evaluation(self, current_user, model_id: int, audience: str = "current") -> dict:
         model = self._get_authorized(current_user, model_id)
         attributes = self._attributes(model)
-        role = _role_key(current_user)
+        # 与 stream 共用同一套受众解析：管理员可切换查看用户视角，普通用户无法越权。
+        role = self.requested_role(current_user, audience)
         artifact = (getattr(model, "ai_evaluation", None) or {}).get(role) or {}
         return ok(data={
             "model_version_id": model.id,

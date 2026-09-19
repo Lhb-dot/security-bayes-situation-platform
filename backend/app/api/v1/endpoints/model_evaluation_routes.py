@@ -23,10 +23,15 @@ def _sse(event: str, data: dict) -> str:
 @router.get("/{model_id}/evaluation", summary="读取模型版本的角色化 AI 评价")
 def get_model_evaluation(
     model_id: int,
+    audience: str = "current",
     current_user: AppUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    return unwrap(ModelEvaluationService(db).get_evaluation(current_user, model_id))
+    """audience: current（当前角色）/ management（管理员视角）/ user（用户视角）。
+
+    管理员可用 audience 切换查看另一视角；普通用户请求 management 会被拒绝。
+    """
+    return unwrap(ModelEvaluationService(db).get_evaluation(current_user, model_id, audience))
 
 
 @router.post("/{model_id}/evaluation/stream", summary="流式生成模型版本的角色化 AI 评价")
