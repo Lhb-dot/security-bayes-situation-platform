@@ -13,7 +13,7 @@ import hashlib
 import hmac
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Sequence
@@ -63,6 +63,27 @@ def paginate(
 _CST = ZoneInfo("Asia/Shanghai")
 
 
+def to_beijing(value: datetime) -> datetime:
+    """把 datetime 统一归到北京时间（UTC+8）。
+
+    naive 值视为「已经是北京时间的墙上时间」（与库中其余 naive 列口径一致），
+    aware 值做真实时区换算。
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_CST)
+    return value.astimezone(_CST)
+
+
+def beijing_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """当前北京时间字符串。
+
+    ⚠️ 凡是「把 datetime 格式化成字符串下发给前端展示」的地方都必须走这里。
+    直接 `datetime.now(timezone.utc).strftime(...)` 会把 UTC 墙上时间当北京时间显示
+    —— 实测报告中心「生成时间」因此比真实时间早 8 小时（报告 id 3：显示 10:35，实际 18:35）。
+    """
+    return to_beijing(datetime.now(timezone.utc)).strftime(fmt)
+
+
 def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
@@ -78,15 +99,11 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
             continue
         value = getattr(obj, name)
         if isinstance(value, datetime):
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=_CST)
-            else:
-                value = value.astimezone(_CST)
             # 必须带年份：前端多处按 YYYY-MM-DD 做 .slice(0,10) / .slice(5) 取日期，
             # 少一个年份会让它们切出 "08-08 13:1" 这种碎片（并连带打挂按日聚合、
             # "今日告警" startsWith 判断、new Date() 解析等）。全项目其余格式化点
             # （main.py / report_service / _activity_trend）也一律用 %Y-%m-%d。
-            value = value.strftime("%Y-%m-%d %H:%M:%S")
+            value = to_beijing(value).strftime("%Y-%m-%d %H:%M:%S")
         elif isinstance(value, Decimal):
             value = float(value)
         result[name] = value
