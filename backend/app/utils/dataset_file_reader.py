@@ -111,6 +111,37 @@ def read_dataset_file(path: str):
     return fmt, fields, record_count
 
 
+def read_sample_rows(
+    file_path: str,
+    fields_schema: list[dict] | None,
+    offset: int = 0,
+    limit: int = 50,
+) -> list[dict]:
+    """读取第 offset..offset+limit 条样本，返回 [{字段名: 值}]。
+
+    字段名优先取登记的 fields_schema（与数据预览、推理表单同一口径），
+    缺失时回退到文件自身的表头。ARFF 与 CSV 都支持。
+
+    注意：值统一为文件里的原始字符串，数值转换由调用方按字段类型决定。
+    """
+    fmt = detect_format(file_path)
+    need = offset + limit
+    if fmt == "csv":
+        raw_fields, rows = read_csv(file_path, sample_limit=need)
+    else:
+        raw_fields, rows = read_arff(file_path, max_rows=need)
+
+    if fields_schema:
+        names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(fields_schema)]
+    else:
+        names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(raw_fields)]
+
+    return [
+        {names[i]: (row[i] if i < len(row) else None) for i in range(len(names))}
+        for row in rows[offset:need]
+    ]
+
+
 def build_fields_schema(fields: list[dict], label_field: str) -> list[dict]:
     """把解析出的 fields 加上角色 role，转为可入库的 fields_schema。
 

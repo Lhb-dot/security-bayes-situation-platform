@@ -536,27 +536,16 @@ class DatasetService(ServiceBase):
             raise ServiceError(403, "无权限操作")
 
         from app.services.training_executor import resolve_dataset_path
-        from app.utils.arff_reader import read_arff
+        from app.utils.dataset_file_reader import read_sample_rows
 
         path = resolve_dataset_path(dataset.file_path)
         if not os.path.exists(path):
             raise ServiceError(404, f"数据集文件不存在: {path}")
 
         offset = (page - 1) * page_size
-        raw_fields, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
-        # 优先使用登记的 fields_schema 字段名，保证与字段预览/标签列一致
-        if dataset.fields_schema:
-            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(dataset.fields_schema)]
-        else:
-            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(raw_fields)]
-        page_rows = []
-        for row in rows[offset: offset + page_size]:
-            page_rows.append(
-                {
-                    names[i]: (row[i] if i < len(row) else None)
-                    for i in range(len(names))
-                }
-            )
+        # 取样本的统一入口（ARFF / CSV 都支持，字段名取登记的 fields_schema），
+        # 与「批量研判」共用，避免两处口径漂移。
+        page_rows = read_sample_rows(path, dataset.fields_schema, offset, page_size)
         total = self._count_records(dataset.file_path)
         return ok(
             data={

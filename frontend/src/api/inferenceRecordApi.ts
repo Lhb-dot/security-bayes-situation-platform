@@ -51,6 +51,59 @@ export const predictInference = async (params: {
 }): Promise<PredictResult> =>
   unwrapData(await request.post('/api/v1/inference-records/predict', params));
 
+/** 批量研判单条结果 */
+export interface BatchInferenceItem {
+  index: number;
+  prediction_label: string | null;
+  risk_probability: number | null;
+  risk_level: string | null;
+  is_risk_event: boolean;
+  inference_record_id: number | null;
+  risk_event_id: number | null;
+  /** 该条失败时的原因；成功为 null */
+  error: string | null;
+}
+
+/** 批量研判汇总结果 */
+export interface BatchInferenceResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  risk_count: number;
+  items: BatchInferenceItem[];
+  /** 样本数超过单批上限、只跑了前面部分时为 true */
+  truncated?: boolean;
+}
+
+/**
+ * 批量研判（POST /inference-records/predict-batch）
+ *
+ * source='dataset'：由服务端从模型绑定数据集读 offset..offset+limit 条样本；
+ * source='samples'：直接提交样本列表。
+ * 判为风险类的样本与单条一致，会自动生成 RiskEvent（告警中心可见）。
+ */
+export const predictInferenceBatch = async (params: {
+  model_version_id: string | number;
+  source: 'dataset' | 'samples';
+  offset?: number;
+  limit?: number;
+  samples?: Record<string, unknown>[];
+}): Promise<BatchInferenceResult> =>
+  unwrapData(await request.post('/api/v1/inference-records/predict-batch', params));
+
+/** 上传 CSV 批量研判（表头需覆盖数据集全部输入特征） */
+export const predictInferenceBatchUpload = async (params: {
+  model_version_id: string | number;
+  file: File;
+}): Promise<BatchInferenceResult> => {
+  const form = new FormData();
+  form.append('file', params.file);
+  form.append('model_version_id', String(params.model_version_id));
+  return unwrapData(
+    await request.post('/api/v1/inference-records/predict-batch/upload', form),
+  );
+};
+
 /** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */
 export const getInferenceRecordList = async (params?: {
   model_version_id?: string;
@@ -59,6 +112,28 @@ export const getInferenceRecordList = async (params?: {
 }): Promise<InferenceRecord[]> => {
   const data = await unwrapData(await request.get('/api/v1/inference-records', { params }));
   return data.items ?? [];
+};
+
+/** 推理记录分页列表（带 total，供列表页翻页用；后端分页结构与 getInferenceRecordList 同一接口） */
+export interface InferenceRecordPage {
+  items: InferenceRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const getInferenceRecordPage = async (params?: {
+  model_version_id?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<InferenceRecordPage> => {
+  const data = await unwrapData(await request.get('/api/v1/inference-records', { params }));
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    page: data.page ?? 1,
+    page_size: data.page_size ?? 20,
+  };
 };
 
 /** 推理记录详情（GET /inference-records/{record_id}，普通用户仅本人） */

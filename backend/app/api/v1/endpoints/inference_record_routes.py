@@ -6,7 +6,7 @@
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
@@ -14,7 +14,7 @@ from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.schemas.common import ResponseModel
-from app.schemas.inference_record import InferencePredict
+from app.schemas.inference_record import InferenceBatchPredict, InferencePredict
 from app.services.inference_record_service import InferenceRecordService
 
 router = APIRouter(prefix="/inference-records", tags=["推理记录"])
@@ -44,6 +44,59 @@ def predict(
             current_user=current_user,
             model_version_id=payload.model_version_id,
             input_features=payload.input_features,
+        )
+    )
+
+
+@router.post(
+    "/predict-batch",
+    response_model=ResponseModel,
+    summary="批量推理（登录用户；逐条落库，风险类自动生成 RiskEvent）",
+)
+def predict_batch(
+    payload: InferenceBatchPredict,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """批量研判：与单条推理行为一致，风险类样本照常生成 RiskEvent。
+
+    必须注册在 ``/{record_id}`` 之前 —— 否则 "predict-batch" 会被当成
+    路径参数解析而返回 422。
+    """
+    service = InferenceRecordService(db)
+    if payload.source == "dataset":
+        return service.create_batch_from_dataset(
+            current_user=current_user,
+            model_version_id=payload.model_version_id,
+            offset=payload.offset,
+            limit=payload.limit,
+        )
+    return service.create_batch_inference(
+        current_user=current_user,
+        model_version_id=payload.model_version_id,
+        samples=payload.samples or [],
+    )
+
+
+@router.post(
+    "/predict-batch/upload",
+    response_model=ResponseModel,
+    summary="上传 CSV 批量研判（表头需覆盖数据集全部输入特征）",
+)
+async def predict_batch_upload(
+    file: UploadFile = File(..., description="CSV 文件"),
+    model_version_id: int = Form(..., description="模型版本 ID"),
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """用上传的 CSV 做批量研判；列名对不上会明确告知缺哪几列。"""
+    file_bytes = await file.read()
+    return unwrap(
+        InferenceRecordService(db).create_batch_from_csv(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            filename=file.filename or "",
+            file_bytes=file_bytes,
         )
     )
 

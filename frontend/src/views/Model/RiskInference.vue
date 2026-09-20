@@ -1,14 +1,21 @@
 <script setup lang="ts">
 /**
- * RiskInference - 风险研判（普通用户模型使用闭环，需求 6.3.2 / 6.7.4 / 6.7.5）
+ * RiskInference - 风险研判
  *
- * 选择场景 → 选择数据集 → 展示该范围已发布模型列表（含评估指标）
- * → 自动选中默认推荐模型（无默认则提示手动选择）→ 按模型绑定数据集生成固定字段输入表单
- * （carrier 279 字段按字段族分组折叠）→ 执行单条样本推理 → 风险类结果可跳风险事件详情
+ * 三段纵向：
+ *   1 选范围   —— 场景 / 数据集 / 模型（一行搞定，模型不再铺卡片列表）
+ *   2 选数据来源 —— 样本库（默认）/ 手工录入 / 批量导入
+ *   3 结果     —— 单条结果卡 + 批量结果表，完成后自动滚入视口
  *
- * 数据链路：页面 → scenarioStore / datasetStore / inferenceStore（不直连服务实现）。
+ * 单条推理（需求 6.3.2 / 6.7.4 / 6.7.5）：选已发布模型 → 按模型绑定数据集字段
+ * 生成输入 → 执行推理 → 风险类结果转 RiskEvent。
+ *
+ * 批量研判：从数据集样本区间或上传 CSV 批量跑，逐条与单条行为一致
+ * （风险类照常生成 RiskEvent，保证告警中心/态势大屏/看板都能看到）。
+ *
+ * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
@@ -17,9 +24,16 @@ import { useDatasetStore } from '@/stores/datasetStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
 import { getScenarioList } from '@/api/scenarioApi';
+import { getDatasetPreview } from '@/api/datasetApi';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
-import { streamInferenceExplanation, type PredictResult } from '@/api/inferenceRecordApi';
+import {
+  predictInferenceBatch,
+  predictInferenceBatchUpload,
+  streamInferenceExplanation,
+  type BatchInferenceResult,
+  type PredictResult,
+} from '@/api/inferenceRecordApi';
 
 const router = useRouter();
 const route = useRoute();
@@ -27,46 +41,89 @@ const datasetStore = useDatasetStore();
 const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
 
-/** 真实场景列表（直接调 /api/v1/scenarios，绕过 mock 的 scenarioStore） */
+/** 真实场景列表（直接调 /api/v1/scenarios） */
 interface RealScenario { id: number; code: string; name: string; access_status: string; }
 const scenarios = ref<RealScenario[]>([]);
 /** 真实模型版本列表（直接调 /api/v1/model-versions） */
 const modelVersions = ref<BackendModelVersion[]>([]);
 
-/** 需求 6.5.2/6.2：系统管理员用 tabs 切场景；管理员/用户场景固定（账号绑定，自动确定） */
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
 const isManager = computed(() => ['SUPER_ADMIN', 'SCENARIO_ADMIN'].includes(userStore.currentUser?.role ?? ''));
 
-/** 场景选项：普通用户=感兴趣的场景（设置页自选），管理员=全部场景 */
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
   scenarios.value
     .filter((s) => s.access_status === 'ACTUAL')
     .map((s) => ({ value: s.code as ScenarioId, label: s.name }))
 );
 
+// ===================== 1 选范围 =====================
 const selectedScenario = ref<ScenarioId | ''>('');
 const selectedDatasetId = ref<string>('');
 const loadingDatasets = ref(false);
 
-/** 当前场景的数据集（datasetStore.fetchDatasets(scenarioId) 已按场景/用户过滤） */
 const datasetOptions = computed<Dataset[]>(() =>
   selectedScenario.value
     ? datasetStore.datasets.filter((d) => d.scenario_id === selectedScenario.value)
     : []
 );
 
-/** 当前范围的已发布模型（直接调 /api/v1/model-versions） */
 const publishedModels = computed<BackendModelVersion[]>(() =>
   modelVersions.value.filter((m) => m.status === 'PUBLISHED')
 );
 const loadingModels = ref(false);
 const selectedModelId = ref<string | number>('');
+const selectedModel = computed(() =>
+  publishedModels.value.find((m) => String(m.model_version_id) === String(selectedModelId.value))
+);
 
+const modelLabel = (m: BackendModelVersion) =>
+  `#${m.model_version_id} ${m.algorithm_name ?? m.algorithm_id}${m.is_default ? '（默认推荐）' : ''}`;
+
+const metricText = (key: 'accuracy' | 'recall' | 'f1' | 'g_mean') => {
+  const value = Number(selectedModel.value?.evaluation_metrics?.[key]);
+  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
+};
+
+// ===================== 2 数据来源 =====================
+type SourceTab = 'sample' | 'manual' | 'batch';
+const sourceTab = ref<SourceTab>('sample');
+
+/** 手工录入：字段与取值 */
 const inputFields = ref<DatasetField[]>([]);
 const inputData = ref<Record<string, string | number>>({});
+
+/** 样本库 */
+const samples = ref<Record<string, string | number>[]>([]);
+const sampleLoading = ref(false);
+const sampleTotal = ref(0);
+const samplePage = ref(1);
+const SAMPLE_PAGE_SIZE = 50;
+const selectedSampleIndex = ref<number | null>(null);
+
+const totalSamplePages = computed(() =>
+  Math.max(1, Math.ceil(sampleTotal.value / SAMPLE_PAGE_SIZE))
+);
+
+/** 样本表里展示的列（输入特征前 5 个，够判断这行是什么样本） */
+const sampleColumns = computed(() =>
+  inputFields.value.slice(0, 5).map((f) => f.field_name)
+);
+const labelField = computed(
+  () => inputFields.value.find((f) => f.field_role === '分类标签')?.field_name ?? ''
+);
+
+/** 批量导入 */
+const batchLimit = ref(50);
+const batchRunning = ref(false);
+const batchResult = ref<BatchInferenceResult | null>(null);
+const uploadFile = ref<File | null>(null);
+
+// ===================== 3 单条推理结果 =====================
 const inferResult = ref<PredictResult | null>(null);
 const hasInferred = ref(false);
 const inferring = ref(false);
+const resultRef = ref<HTMLElement | null>(null);
+
 const explanationMarkdown = ref('');
 const explanationLoading = ref(false);
 const explanationError = ref('');
@@ -89,88 +146,7 @@ const adminExplanationJson = computed(() => {
   }, null, 2);
 });
 
-const selectedModel = computed(() => publishedModels.value.find((m) => String(m.model_version_id) === String(selectedModelId.value)));
-
-// ===================== 场景切换 =====================
-watch(selectedScenario, async (scenario) => {
-  selectedDatasetId.value = '';
-  selectedModelId.value = '';
-  inputFields.value = [];
-  inputData.value = {};
-  inferResult.value = null;
-  hasInferred.value = false;
-  if (!scenario) {
-    datasetStore.datasets = [];
-    return;
-  }
-  loadingDatasets.value = true;
-  try {
-    await datasetStore.fetchDatasets(scenario);
-  } catch {
-    datasetStore.datasets = [];
-  } finally {
-    loadingDatasets.value = false;
-  }
-});
-
-// ===================== 数据集切换 → 加载已发布模型 =====================
-watch(selectedDatasetId, async (datasetId) => {
-  selectedModelId.value = '';
-  inputFields.value = [];
-  inputData.value = {};
-  inferResult.value = null;
-  hasInferred.value = false;
-  if (!datasetId) return;
-  loadingModels.value = true;
-  try {
-    // 后端 model-versions 的 scenario_id 是数字 ID，需把场景编码转成数字
-    const scenarioNumeric = scenarios.value.find((s) => s.code === selectedScenario.value)?.id;
-    modelVersions.value = await getModelVersionList({
-      scenario_id: scenarioNumeric,
-      dataset_id: datasetId,
-      page_size: 200,
-    });
-    // 自动选中默认推荐模型（需求 6.7.4.3）；无默认时提示手动选择（需求 6.7.4.6）
-    const def = publishedModels.value.find((m) => m.is_default);
-    if (def) {
-      selectedModelId.value = def.model_version_id;
-    } else {
-      selectedModelId.value = '';
-    }
-  } finally {
-    loadingModels.value = false;
-  }
-});
-
-// ===================== 模型切换 → 加载绑定数据集字段 =====================
-watch(selectedModelId, async (modelId) => {
-  inputFields.value = [];
-  inputData.value = {};
-  inferResult.value = null;
-  hasInferred.value = false;
-  if (!modelId) return;
-  const model = publishedModels.value.find((m) => String(m.model_version_id) === String(modelId));
-  if (!model) return;
-  try {
-    await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''));
-    const allFields = datasetStore.fields;
-    inputFields.value = allFields.filter((f: DatasetField) => f.field_role === '输入特征');
-    inputData.value = buildInputData(inputFields.value);
-    // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
-    const port = route.query.port;
-    if (port && inputData.value.L4_DST_PORT !== undefined) {
-      const n = Number(port);
-      if (Number.isFinite(n)) inputData.value.L4_DST_PORT = n;
-    }
-    // 默认仅展开第一组（carrier 279 字段不一次性挂载 279 个 DOM）
-    expandedGroups.value = fieldGroups.value.length > 0 ? [fieldGroups.value[0].name] : [];
-  } catch {
-    inputFields.value = [];
-    inputData.value = {};
-  }
-});
-
-// ===================== carrier 字段族分组（需求 7.4：279 字段折叠防卡顿） =====================
+// ===================== carrier 字段族分组（279 字段折叠防卡顿） =====================
 const CARRIER_GROUP_RULES: Array<{ name: string; match: (name: string) => boolean }> = [
   { name: '方向角族', match: (n) => n.startsWith('Plane1_dir_') || n.startsWith('Plane2_dir_') },
   { name: '相对角度族', match: (n) => n.startsWith('relative_angle_') },
@@ -196,12 +172,8 @@ const CARRIER_GROUP_RULES: Array<{ name: string; match: (name: string) => boolea
   { name: '标识族', match: (n) => n === 'PlaneID1' || n === 'PlaneID2' },
 ];
 
-interface FieldGroup {
-  name: string;
-  fields: DatasetField[];
-}
+interface FieldGroup { name: string; fields: DatasetField[]; }
 
-/** 按字段族前缀分组；未命中任何前缀归入"其它字段"，非 carrier 小字段集归为单组「全部字段」 */
 const fieldGroups = computed<FieldGroup[]>(() => {
   const groups: FieldGroup[] = CARRIER_GROUP_RULES.map((r) => ({ name: r.name, fields: [] as DatasetField[] }));
   const other: DatasetField[] = [];
@@ -218,18 +190,11 @@ const fieldGroups = computed<FieldGroup[]>(() => {
   return matched;
 });
 
-/** el-collapse 展开的组名 */
 const expandedGroups = ref<string[]>([]);
+const expandAll = () => { expandedGroups.value = fieldGroups.value.map((g) => g.name); };
+const collapseAll = () => { expandedGroups.value = []; };
 
-const expandAll = () => {
-  expandedGroups.value = fieldGroups.value.map((g) => g.name);
-};
-
-const collapseAll = () => {
-  expandedGroups.value = [];
-};
-
-/** 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value，否则空（由校验提示填写） */
+/** 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value */
 const buildInputData = (fields: DatasetField[]): Record<string, string | number> => {
   const init: Record<string, string | number> = {};
   for (const f of fields) {
@@ -245,7 +210,144 @@ const buildInputData = (fields: DatasetField[]): Record<string, string | number>
   return init;
 };
 
-// ===================== 执行推理 =====================
+// ===================== 级联加载 =====================
+const resetResults = () => {
+  inferResult.value = null;
+  hasInferred.value = false;
+  batchResult.value = null;
+  selectedSampleIndex.value = null;
+  explanationMarkdown.value = '';
+  explanationError.value = '';
+  explanationFallback.value = false;
+  explanationStatus.value = 'idle';
+  explanationController?.abort();
+  explanationController = null;
+};
+
+watch(selectedScenario, async (scenario) => {
+  selectedDatasetId.value = '';
+  selectedModelId.value = '';
+  inputFields.value = [];
+  inputData.value = {};
+  samples.value = [];
+  sampleTotal.value = 0;
+  resetResults();
+  if (!scenario) {
+    datasetStore.datasets = [];
+    return;
+  }
+  loadingDatasets.value = true;
+  try {
+    await datasetStore.fetchDatasets(scenario);
+  } catch {
+    datasetStore.datasets = [];
+  } finally {
+    loadingDatasets.value = false;
+  }
+});
+
+watch(selectedDatasetId, async (datasetId) => {
+  selectedModelId.value = '';
+  inputFields.value = [];
+  inputData.value = {};
+  samples.value = [];
+  sampleTotal.value = 0;
+  resetResults();
+  if (!datasetId) return;
+  loadingModels.value = true;
+  try {
+    const scenarioNumeric = scenarios.value.find((s) => s.code === selectedScenario.value)?.id;
+    modelVersions.value = await getModelVersionList({
+      scenario_id: scenarioNumeric,
+      dataset_id: datasetId,
+      page_size: 200,
+    });
+    const def = publishedModels.value.find((m) => m.is_default);
+    selectedModelId.value = def ? def.model_version_id : '';
+  } finally {
+    loadingModels.value = false;
+  }
+});
+
+watch(selectedModelId, async (modelId) => {
+  inputFields.value = [];
+  inputData.value = {};
+  samples.value = [];
+  sampleTotal.value = 0;
+  samplePage.value = 1;
+  resetResults();
+  if (!modelId) return;
+  const model = publishedModels.value.find((m) => String(m.model_version_id) === String(modelId));
+  if (!model) return;
+  try {
+    await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''));
+    inputFields.value = datasetStore.fields.filter((f: DatasetField) => f.field_role === '输入特征');
+    inputData.value = buildInputData(inputFields.value);
+    // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
+    const port = route.query.port;
+    if (port && inputData.value.L4_DST_PORT !== undefined) {
+      const n = Number(port);
+      if (Number.isFinite(n)) inputData.value.L4_DST_PORT = n;
+    }
+    expandedGroups.value = fieldGroups.value.length > 0 ? [fieldGroups.value[0].name] : [];
+    await loadSamples(1);
+  } catch {
+    inputFields.value = [];
+    inputData.value = {};
+  }
+});
+
+const loadSamples = async (page: number) => {
+  if (!selectedModel.value) return;
+  sampleLoading.value = true;
+  try {
+    const preview = await getDatasetPreview(String(selectedModel.value.dataset_id), {
+      page,
+      page_size: SAMPLE_PAGE_SIZE,
+    });
+    samples.value = preview.rows;
+    sampleTotal.value = preview.total;
+    samplePage.value = preview.page;
+    selectedSampleIndex.value = null;
+  } catch {
+    samples.value = [];
+    sampleTotal.value = 0;
+  } finally {
+    sampleLoading.value = false;
+  }
+};
+
+/** 点样本行 → 把该行取值填进输入表单 */
+const applySample = (index: number) => {
+  selectedSampleIndex.value = index;
+  const row = samples.value[index];
+  if (!row) return;
+  const next: Record<string, string | number> = { ...inputData.value };
+  for (const field of inputFields.value) {
+    const value = row[field.field_name];
+    if (value === undefined || value === null || value === '') continue;
+    if (field.field_type === 'float' || field.field_type === 'int') {
+      const n = Number(value);
+      next[field.field_name] = Number.isFinite(n) ? n : value;
+    } else {
+      next[field.field_name] = value;
+    }
+  }
+  inputData.value = next;
+  inferResult.value = null;
+  hasInferred.value = false;
+};
+
+// ===================== 执行单条推理 =====================
+/** 执行条上的状态反馈（不是提示文案，是当前选择的结果） */
+const actionHint = computed(() => {
+  // 手工录入 tab 的特征数已经在字段区工具栏显示，这里不再重复
+  if (sourceTab.value !== 'sample') return '';
+  if (selectedSampleIndex.value === null) return '未选择样本';
+  const ordinal = (samplePage.value - 1) * SAMPLE_PAGE_SIZE + selectedSampleIndex.value + 1;
+  return `已选第 ${ordinal} 条样本`;
+});
+
 const handleInfer = async () => {
   if (!selectedModelId.value) {
     ElMessage.warning('请先选择一个已发布模型');
@@ -260,6 +362,7 @@ const handleInfer = async () => {
   inferring.value = true;
   inferResult.value = null;
   hasInferred.value = false;
+  batchResult.value = null;
   try {
     const result = await inferenceStore.executeInference({
       model_version_id: selectedModelId.value,
@@ -268,8 +371,9 @@ const handleInfer = async () => {
     inferResult.value = result;
     hasInferred.value = true;
     void generateExplanation(result);
+    await scrollToResult();
     if (result.is_risk_event) {
-      ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}，可在「推理记录 / 告警中心」查看`);
+      ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}`);
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '推理请求失败');
@@ -278,6 +382,127 @@ const handleInfer = async () => {
   }
 };
 
+// ===================== 批量研判 =====================
+const canBatch = computed(() => Boolean(selectedModelId.value) && !batchRunning.value);
+
+const batchDone = async (res: BatchInferenceResult) => {
+  batchResult.value = res;
+  await scrollToResult();
+  ElMessage.success(
+    `批量研判完成：成功 ${res.succeeded} 条、风险 ${res.risk_count} 条`
+    + (res.failed ? `、失败 ${res.failed} 条` : '')
+  );
+};
+
+const handleBatch = async () => {
+  if (!selectedModelId.value) {
+    ElMessage.warning('请先选择一个已发布模型');
+    return;
+  }
+  batchRunning.value = true;
+  batchResult.value = null;
+  inferResult.value = null;
+  hasInferred.value = false;
+  try {
+    await batchDone(await predictInferenceBatch({
+      model_version_id: selectedModelId.value,
+      source: 'dataset',
+      offset: 0,
+      limit: batchLimit.value,
+    }));
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '批量研判失败');
+  } finally {
+    batchRunning.value = false;
+  }
+};
+
+const onFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  uploadFile.value = input.files?.[0] ?? null;
+};
+
+const handleUpload = async () => {
+  if (!selectedModelId.value) {
+    ElMessage.warning('请先选择一个已发布模型');
+    return;
+  }
+  if (!uploadFile.value) {
+    ElMessage.warning('请先选择 CSV 文件');
+    return;
+  }
+  batchRunning.value = true;
+  batchResult.value = null;
+  inferResult.value = null;
+  hasInferred.value = false;
+  try {
+    await batchDone(await predictInferenceBatchUpload({
+      model_version_id: selectedModelId.value,
+      file: uploadFile.value,
+    }));
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'CSV 批量研判失败');
+  } finally {
+    batchRunning.value = false;
+  }
+};
+
+// ===================== 结果展示辅助 =====================
+const formatPercent = (raw: number | null | undefined) => {
+  if (raw === null || raw === undefined || !Number.isFinite(Number(raw))) return '—';
+  const percent = Number(raw) * 100;
+  if (percent === 0) return '0%';
+  if (percent < 0.01) return '<0.01%';
+  return `${percent.toFixed(2)}%`;
+};
+
+const riskPercent = (item: { risk_probability: number | null }) => formatPercent(item.risk_probability);
+
+const singleRiskPercent = computed(() =>
+  formatPercent(
+    inferResult.value?.explain_data?.risk_probability ?? inferResult.value?.risk_score
+  )
+);
+
+const levelText = (level?: string | null) =>
+  level === 'HIGH' ? '高' : level === 'MEDIUM' ? '中' : level === 'LOW' ? '低' : '—';
+
+const exportBatchCsv = () => {
+  const items = batchResult.value?.items ?? [];
+  const rows: string[][] = [['序号', '分类结果', '风险概率', '风险等级', '风险事件ID', '失败原因']];
+  for (const item of items) {
+    rows.push([
+      String(item.index + 1),
+      item.error ? '失败' : item.is_risk_event ? '风险类' : '正常类',
+      riskPercent(item),
+      levelText(item.risk_level),
+      item.risk_event_id ? String(item.risk_event_id) : '',
+      item.error ?? '',
+    ]);
+  }
+  const csv = rows
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `批量研判结果_${Date.now()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const scrollToResult = async () => {
+  await nextTick();
+  resultRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+const goEventDetail = (eventId?: string | number | null) => {
+  if (eventId == null) return;
+  router.push({ path: `/events/${eventId}` });
+};
+
+// ===================== AI 场景化分析 =====================
 const generateExplanation = async (result: PredictResult) => {
   explanationController?.abort();
   explanationController = new AbortController();
@@ -338,16 +563,9 @@ const stopExplanation = () => {
   explanationStatus.value = 'stopped';
 };
 
-/** 推理结果 → 风险事件详情（Task 012 /events/:id） */
-const goEventDetail = (eventId?: string | number) => {
-  if (eventId == null) return;
-  router.push({ path: `/events/${eventId}` });
-};
-
 onMounted(async () => {
   const list = await getScenarioList();
   scenarios.value = list as unknown as RealScenario[];
-  // 自动确定当前场景：普通用户取绑定/自选场景（首个）；管理员默认选中第一个便于直接操作（仍可通过 tabs 切换）。
   if (!selectedScenario.value && scenarioOptions.value.length) {
     selectedScenario.value = scenarioOptions.value[0].value;
   }
@@ -357,180 +575,252 @@ onMounted(async () => {
 <template>
   <div class="inference-page">
     <div class="inference-page__header">
-      <div>
-        <p class="eyebrow">Risk Inference</p>
-        <h2>风险研判</h2>
-        <p class="inference-page__desc">选择已发布模型，按模型绑定数据集字段执行单条样本推理</p>
-      </div>
+      <h2>风险研判</h2>
     </div>
 
-    <div class="inference-layout">
-      <!-- 左侧：输入区域 -->
-      <section class="card inference-input">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Input</p>
-            <h3>推理输入</h3>
-          </div>
-        </div>
-
-        <!-- 场景选择（系统管理员 tabs 切换；管理员/用户场景已固定，直接选数据集） -->
-        <div v-if="isSuperAdmin" class="form-group">
-          <label class="form-label">业务场景</label>
-          <div class="scenario-tabs">
-            <button
-              v-for="sc in scenarioOptions"
-              :key="sc.value"
-              class="scenario-tab"
-              :class="{ 'is-active': selectedScenario === sc.value }"
-              @click="selectedScenario = sc.value"
-            >
-              {{ sc.label }}
-            </button>
-          </div>
-        </div>
-        <p v-if="!isSuperAdmin && scenarioOptions.length === 0" class="no-model-tip">
-          当前账号暂无可用场景，请在"设置"中选择感兴趣的场景
-        </p>
-
-        <!-- 数据集选择 -->
-        <div class="form-group">
-          <label class="form-label">数据集</label>
-          <select v-model="selectedDatasetId" class="form-input" :disabled="!selectedScenario || loadingDatasets">
-            <option value="" disabled>-- 请选择数据集 --</option>
-            <option v-for="ds in datasetOptions" :key="ds.dataset_id" :value="ds.dataset_id">
-              {{ ds.name }}（{{ ds.field_count }} 字段）
-            </option>
-          </select>
-        </div>
-
-        <!-- 已发布模型列表（需求 6.7.5.3） -->
-        <div v-if="selectedDatasetId" class="form-group">
-          <label class="form-label">已发布模型（默认选中推荐模型，可改选）</label>
-          <div v-if="loadingModels" class="inference-placeholder"><p>正在加载模型...</p></div>
-          <div v-else-if="publishedModels.length === 0" class="no-model-tip">
-            暂无可用模型：该范围下管理员尚未发布模型，请等待管理员发布后重试
-          </div>
-          <div v-else class="model-options">
-            <label
-              v-for="m in publishedModels"
-              :key="m.model_version_id"
-              class="model-option"
-              :class="{ 'is-selected': selectedModelId === m.model_version_id }"
-            >
-              <input
-                v-model="selectedModelId"
-                type="radio"
-                :value="m.model_version_id"
-                class="model-option__radio"
-              />
-              <div class="model-option__body">
-                <div class="model-option__head">
-                  <span class="model-option__id">{{ m.model_version_id }}</span>
-                  <span v-if="m.is_default" class="model-option__default">默认推荐</span>
-                </div>
-                <div class="model-option__algo">{{ m.algorithm_name ?? m.algorithm_id }}</div>
-                <div class="model-option__metrics">
-                  <span>Acc {{ (Number(m.evaluation_metrics.accuracy) * 100).toFixed(1) }}%</span>
-                  <span>Rec {{ (Number(m.evaluation_metrics.recall) * 100).toFixed(1) }}%</span>
-                  <span>F1 {{ (Number(m.evaluation_metrics.f1) * 100).toFixed(1) }}%</span>
-                  <span>G-mean {{ (Number(m.evaluation_metrics.g_mean) * 100).toFixed(1) }}%</span>
-                </div>
-              </div>
-            </label>
-            <p v-if="publishedModels.length > 0 && !selectedModelId" class="no-model-tip">
-              当前范围暂无默认推荐模型，请手动选择一个已发布模型
-            </p>
-          </div>
-        </div>
-
-        <!-- 动态输入字段 -->
-        <div v-if="selectedModel && inputFields.length > 0" class="dynamic-fields">
-          <div class="dynamic-fields__toolbar">
-            <span class="dynamic-fields__count">共 {{ inputFields.length }} 个输入特征</span>
-            <el-button size="small" plain @click="expandAll">展开全部</el-button>
-            <el-button size="small" plain @click="collapseAll">收起全部</el-button>
-          </div>
-
-          <el-collapse v-model="expandedGroups" class="field-collapse">
-            <el-collapse-item v-for="group in fieldGroups" :key="group.name" :name="group.name">
-              <template #title>
-                <span class="field-group-title">{{ group.name }}（{{ group.fields.length }} 字段）</span>
-              </template>
-              <!-- v-if 保证折叠组不挂载内部 input（el-collapse 默认 v-show 仍会挂载子节点） -->
-              <div v-if="expandedGroups.includes(group.name)" class="field-group-body">
-                <div class="form-group" v-for="field in group.fields" :key="field.field_name">
-                  <label class="form-label">
-                    {{ field.field_name }}
-                    <span class="form-label__type">（{{ field.field_type }}）</span>
-                    <span class="form-label__hint">{{ field.description }}</span>
-                  </label>
-                  <input
-                    v-if="field.field_type === 'float'"
-                    v-model.number="inputData[field.field_name]"
-                    type="number"
-                    step="0.01"
-                    class="form-input"
-                    :placeholder="field.sample_value"
-                  />
-                  <input
-                    v-else-if="field.field_type === 'int'"
-                    v-model.number="inputData[field.field_name]"
-                    type="number"
-                    step="1"
-                    class="form-input"
-                    :placeholder="field.sample_value"
-                  />
-                  <select
-                    v-else-if="field.enum_values && field.enum_values.length > 0"
-                    v-model="inputData[field.field_name]"
-                    class="form-input"
-                  >
-                    <option value="" disabled>-- 请选择 --</option>
-                    <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
-                  </select>
-                  <input
-                    v-else
-                    v-model="inputData[field.field_name]"
-                    type="text"
-                    class="form-input"
-                    :placeholder="field.sample_value"
-                  />
-                </div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-
+    <!-- ============ 1 选范围 ============ -->
+    <section class="card scope-bar">
+      <div v-if="isSuperAdmin" class="scope-field scope-field--scenario">
+        <label class="form-label">业务场景</label>
+        <div class="scenario-tabs">
           <button
-            class="infer-btn"
-            :disabled="inferring"
-            @click="handleInfer"
+            v-for="sc in scenarioOptions"
+            :key="sc.value"
+            class="scenario-tab"
+            :class="{ 'is-active': selectedScenario === sc.value }"
+            @click="selectedScenario = sc.value"
           >
-            <span v-if="inferring" class="btn-spinner"></span>
-            {{ inferring ? '推理中...' : '执行风险推理' }}
+            {{ sc.label }}
           </button>
         </div>
+      </div>
 
-        <div v-else-if="selectedDatasetId && publishedModels.length === 0" class="inference-placeholder">
-          <p>该范围暂无已发布模型，暂不可执行推理</p>
+      <div class="scope-field">
+        <label class="form-label">数据集</label>
+        <select
+          v-model="selectedDatasetId"
+          class="form-input"
+          :disabled="!selectedScenario || loadingDatasets"
+        >
+          <option value="" disabled>请选择数据集</option>
+          <option v-for="ds in datasetOptions" :key="ds.dataset_id" :value="ds.dataset_id">
+            {{ ds.name }}（{{ ds.field_count }} 字段）
+          </option>
+        </select>
+      </div>
+
+      <div class="scope-field">
+        <label class="form-label">模型</label>
+        <select
+          v-model="selectedModelId"
+          class="form-input"
+          :disabled="!selectedDatasetId || loadingModels || publishedModels.length === 0"
+        >
+          <option value="" disabled>
+            {{ loadingModels ? '加载中' : publishedModels.length ? '请选择模型' : '该范围暂无已发布模型' }}
+          </option>
+          <option v-for="m in publishedModels" :key="m.model_version_id" :value="m.model_version_id">
+            {{ modelLabel(m) }}
+          </option>
+        </select>
+        <div v-if="selectedModel" class="model-metrics">
+          <span>Acc {{ metricText('accuracy') }}</span>
+          <span>Rec {{ metricText('recall') }}</span>
+          <span>F1 {{ metricText('f1') }}</span>
+          <span>G-mean {{ metricText('g_mean') }}</span>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <!-- 右侧：推理结果 -->
-      <section class="card inference-result">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Result</p>
-            <h3>推理结果</h3>
+    <!-- ============ 2 选数据来源 ============ -->
+    <section v-if="selectedModelId" class="card source-card">
+      <div class="source-tabs">
+        <button
+          class="source-tab"
+          :class="{ 'is-active': sourceTab === 'sample' }"
+          @click="sourceTab = 'sample'"
+        >样本库</button>
+        <button
+          class="source-tab"
+          :class="{ 'is-active': sourceTab === 'manual' }"
+          @click="sourceTab = 'manual'"
+        >手工录入</button>
+        <button
+          class="source-tab"
+          :class="{ 'is-active': sourceTab === 'batch' }"
+          @click="sourceTab = 'batch'"
+        >批量导入</button>
+      </div>
+
+      <!-- 样本库 -->
+      <div v-if="sourceTab === 'sample'" class="pane">
+        <div v-if="sampleLoading" class="pane-status">正在读取样本…</div>
+        <template v-else-if="samples.length">
+          <div class="sample-table__wrap">
+            <table class="sample-table">
+              <thead>
+                <tr>
+                  <th class="sample-table__pick"></th>
+                  <th class="sample-table__idx">序号</th>
+                  <th v-if="labelField">{{ labelField }}</th>
+                  <th v-for="col in sampleColumns" :key="col">{{ col }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, index) in samples"
+                  :key="index"
+                  :class="{ 'is-selected': selectedSampleIndex === index }"
+                  @click="applySample(index)"
+                >
+                  <td class="sample-table__pick">
+                    <input type="radio" :checked="selectedSampleIndex === index" tabindex="-1" />
+                  </td>
+                  <td class="sample-table__idx">{{ (samplePage - 1) * SAMPLE_PAGE_SIZE + index + 1 }}</td>
+                  <td v-if="labelField">{{ row[labelField] }}</td>
+                  <td v-for="col in sampleColumns" :key="col">{{ row[col] }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </div>
+          <div v-if="totalSamplePages > 1" class="sample-pager">
+            <button class="ghost-btn" :disabled="samplePage <= 1" @click="loadSamples(samplePage - 1)">上一页</button>
+            <span class="sample-pager__info">{{ samplePage }} / {{ totalSamplePages }}</span>
+            <button class="ghost-btn" :disabled="samplePage >= totalSamplePages" @click="loadSamples(samplePage + 1)">下一页</button>
+          </div>
+        </template>
+        <div v-else class="pane-status">该数据集没有可读取的样本</div>
+      </div>
 
-        <div v-if="!hasInferred" class="inference-placeholder">
-          <div class="inference-placeholder__icon">🔍</div>
-          <p>选择已发布模型并输入特征后点击「执行风险推理」</p>
+      <!-- 手工录入 -->
+      <div v-else-if="sourceTab === 'manual'" class="pane">
+        <div class="pane-toolbar">
+          <span class="pane-toolbar__count">共 {{ inputFields.length }} 个输入特征</span>
+          <button class="ghost-btn" @click="expandAll">展开全部</button>
+          <button class="ghost-btn" @click="collapseAll">收起全部</button>
         </div>
+        <el-collapse v-model="expandedGroups" class="field-collapse">
+          <el-collapse-item v-for="group in fieldGroups" :key="group.name" :name="group.name">
+            <template #title>
+              <span class="field-group-title">{{ group.name }}（{{ group.fields.length }} 字段）</span>
+            </template>
+            <div v-if="expandedGroups.includes(group.name)" class="field-group-body">
+              <div v-for="field in group.fields" :key="field.field_name" class="form-group">
+                <label class="form-label">
+                  {{ field.field_name }}
+                  <span v-if="field.description" class="form-label__hint">{{ field.description }}</span>
+                </label>
+                <input
+                  v-if="field.field_type === 'float' || field.field_type === 'int'"
+                  v-model.number="inputData[field.field_name]"
+                  type="number"
+                  :step="field.field_type === 'float' ? '0.01' : '1'"
+                  class="form-input"
+                  :placeholder="field.sample_value"
+                />
+                <select
+                  v-else-if="field.enum_values && field.enum_values.length > 0"
+                  v-model="inputData[field.field_name]"
+                  class="form-input"
+                >
+                  <option value="" disabled>请选择</option>
+                  <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+                <input
+                  v-else
+                  v-model="inputData[field.field_name]"
+                  type="text"
+                  class="form-input"
+                  :placeholder="field.sample_value"
+                />
+              </div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
 
-        <div v-else-if="inferResult" class="inference-result__content">
+      <!-- 批量导入 -->
+      <div v-else class="pane">
+        <div class="batch-row">
+          <label class="form-label">数据集样本条数</label>
+          <input v-model.number="batchLimit" type="number" min="1" max="200" class="form-input batch-row__num" />
+          <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
+            <span v-if="batchRunning" class="btn-spinner"></span>
+            {{ batchRunning ? '研判中…' : '批量研判' }}
+          </button>
+        </div>
+        <div class="batch-row">
+          <label class="form-label">上传 CSV</label>
+          <input type="file" accept=".csv" class="batch-row__file" @change="onFileChange" />
+          <button class="infer-btn" :disabled="!canBatch || !uploadFile" @click="handleUpload">
+            <span v-if="batchRunning" class="btn-spinner"></span>
+            {{ batchRunning ? '研判中…' : '上传并研判' }}
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 执行条：必须放在 .card 外面 —— .card 有 backdrop-filter，
+         它会让 position: fixed 改为相对卡片定位，fixed 就失效了。 -->
+    <div v-if="selectedModelId && sourceTab !== 'batch'" class="action-bar">
+      <span class="action-bar__hint">{{ actionHint }}</span>
+      <button class="infer-btn" :disabled="inferring" @click="handleInfer">
+        <span v-if="inferring" class="btn-spinner"></span>
+        {{ inferring ? '推理中…' : '执行风险推理' }}
+      </button>
+    </div>
+
+    <!-- ============ 3 结果 ============ -->
+    <section v-if="batchResult || hasInferred" ref="resultRef" class="card result-card">
+      <!-- 批量结果 -->
+      <template v-if="batchResult">
+        <div class="section-heading">
+          <h3>批量研判结果</h3>
+          <button class="ghost-btn" @click="exportBatchCsv">导出 CSV</button>
+        </div>
+        <div class="batch-summary">
+          <span class="batch-summary__item">共 {{ batchResult.total }} 条</span>
+          <span class="batch-summary__item is-risk">风险 {{ batchResult.risk_count }}</span>
+          <span class="batch-summary__item">正常 {{ batchResult.succeeded - batchResult.risk_count }}</span>
+          <span v-if="batchResult.failed" class="batch-summary__item is-failed">失败 {{ batchResult.failed }}</span>
+        </div>
+        <div class="batch-table__wrap">
+          <table class="batch-table">
+            <thead>
+              <tr>
+                <th>序号</th><th>分类结果</th><th>风险概率</th><th>风险等级</th><th>风险事件</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in batchResult.items" :key="item.index" :class="{ 'is-failed': item.error }">
+                <td>{{ item.index + 1 }}</td>
+                <td>
+                  <span v-if="item.error" class="cell-muted">{{ item.error }}</span>
+                  <span v-else :class="item.is_risk_event ? 'cell-risk' : 'cell-normal'">
+                    {{ item.is_risk_event ? '风险类' : '正常类' }}
+                  </span>
+                </td>
+                <td>{{ riskPercent(item) }}</td>
+                <td>{{ levelText(item.risk_level) }}</td>
+                <td>{{ item.risk_event_id ? '已生成' : '—' }}</td>
+                <td>
+                  <button v-if="item.risk_event_id" class="link-btn" @click="goEventDetail(item.risk_event_id)">
+                    查看事件
+                  </button>
+                  <span v-else class="cell-muted">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- 单条结果 -->
+      <template v-else-if="inferResult">
+        <div class="section-heading">
+          <h3>推理结果</h3>
+        </div>
+        <div class="inference-result__content">
           <div class="result-item result-item--level">
             <span class="result-item__label">分类结果</span>
             <span
@@ -546,15 +836,11 @@ onMounted(async () => {
           </div>
           <div v-if="inferResult.is_risk_event" class="result-item">
             <span class="result-item__label">风险等级</span>
-            <span class="result-item__value">
-              {{ inferResult.risk_level === 'HIGH' ? '高' : inferResult.risk_level === 'MEDIUM' ? '中' : '低' }}
-            </span>
+            <span class="result-item__value">{{ levelText(inferResult.risk_level) }}</span>
           </div>
-          <div v-if="inferResult.explain_data?.risk_probability != null || inferResult.risk_score != null" class="result-item">
+          <div class="result-item">
             <span class="result-item__label">风险概率</span>
-            <span class="result-item__value result-item__value--num">
-              {{ ((inferResult.explain_data?.risk_probability ?? inferResult.risk_score ?? 0) * 100).toFixed(1) }}%
-            </span>
+            <span class="result-item__value result-item__value--num">{{ singleRiskPercent }}</span>
           </div>
           <div v-if="inferResult.explain_data?.confidence" class="result-item">
             <span class="result-item__label">判断置信度</span>
@@ -572,43 +858,32 @@ onMounted(async () => {
             <span class="result-item__label">风险类型</span>
             <span class="result-item__value">{{ inferResult.risk_event?.risk_type || '—' }}</span>
           </div>
-          <div v-if="inferResult.is_risk_event" class="result-item">
-            <span class="result-item__label">风险说明</span>
-            <span class="result-item__value">{{ inferResult.risk_event?.description || '—' }}</span>
-          </div>
           <div class="result-item">
             <span class="result-item__label">使用模型</span>
-            <span class="result-item__value">{{ inferResult.model_version_id }}</span>
-          </div>
-          <div v-if="inferResult.is_risk_event" class="event-tip">
-            已生成风险事件：{{ inferResult.risk_event?.id }}（状态：待处置）
-            <el-button
-              v-if="inferResult.risk_event?.id"
-              size="small"
-              type="primary"
-              plain
-              class="event-tip__btn"
-              @click="goEventDetail(inferResult.risk_event?.id)"
-            >
-              查看风险事件详情
-            </el-button>
+            <span class="result-item__value">#{{ inferResult.model_version_id }}</span>
           </div>
         </div>
 
-        <div v-if="hasInferred" class="ai-explanation">
+        <div v-if="inferResult.is_risk_event" class="event-tip">
+          <span>已生成风险事件 {{ inferResult.risk_event?.id }}</span>
+          <button
+            v-if="inferResult.risk_event?.id"
+            class="link-btn event-tip__btn"
+            @click="goEventDetail(inferResult.risk_event?.id)"
+          >查看事件详情</button>
+        </div>
+
+        <div class="ai-explanation">
           <div class="ai-explanation__head">
-            <div>
-              <p class="eyebrow">AI Explanation</p>
-              <h3>场景化分析</h3>
-            </div>
+            <h3>场景化分析</h3>
             <div class="ai-explanation__actions">
-              <button v-if="explanationLoading" class="settings-btn" type="button" @click="stopExplanation">停止生成</button>
-              <button v-else class="settings-btn" type="button" @click="inferResult && generateExplanation(inferResult)">重新生成</button>
+              <button v-if="explanationLoading" class="ghost-btn" type="button" @click="stopExplanation">停止生成</button>
+              <button v-else class="ghost-btn" type="button" @click="inferResult && generateExplanation(inferResult)">重新生成</button>
             </div>
           </div>
-          <p v-if="explanationLoading && !explanationMarkdown" class="ai-explanation__status">正在根据模型结果生成说明...</p>
-          <p v-else-if="explanationStatus === 'stopped'" class="ai-explanation__status">用户已停止生成，可点击“重新生成”继续。</p>
-          <p v-else-if="explanationStatus === 'failed'" class="ai-explanation__status">生成失败，可点击“重新生成”重试。</p>
+          <p v-if="explanationLoading && !explanationMarkdown" class="ai-explanation__status">正在根据模型结果生成说明…</p>
+          <p v-else-if="explanationStatus === 'stopped'" class="ai-explanation__status">已停止生成</p>
+          <p v-else-if="explanationStatus === 'failed'" class="ai-explanation__status">生成失败，可重新生成</p>
           <p v-if="explanationError" class="ai-explanation__error">{{ explanationError }}</p>
           <div v-if="explanationMarkdown" class="ai-explanation__markdown" v-html="safeExplanationHtml"></div>
           <p v-if="explanationFallback" class="ai-explanation__note">当前显示平台规则模板，模型预测结果未受影响。</p>
@@ -618,8 +893,8 @@ onMounted(async () => {
           <summary>管理员中间数据</summary>
           <pre>{{ adminExplanationJson }}</pre>
         </details>
-      </section>
-    </div>
+      </template>
+    </section>
   </div>
 </template>
 
@@ -627,34 +902,89 @@ onMounted(async () => {
 .inference-page {
   position: relative;
   z-index: 1;
-}
-
-.inference-page__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
   gap: 20px;
-  margin-bottom: 24px;
+  /* 给固定底栏留位置，避免盖住结果表最后几行 */
+  padding-bottom: 84px;
 }
 
 .inference-page__header h2 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 1.6rem;
 }
 
-.inference-page__desc {
-  margin: 0;
-  color: rgba(220, 234, 255, 0.7);
-  font-size: 0.95rem;
-}
-
-.inference-layout {
+/* ---------- 1 选范围 ---------- */
+.scope-bar {
   display: grid;
+  gap: 18px;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  align-items: start;
 }
 
-/* 场景选择标签 */
+.scope-field--scenario {
+  grid-column: 1 / -1;
+}
+
+.scope-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.7);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.form-label__hint {
+  font-size: 0.78rem;
+  color: rgba(220, 234, 255, 0.4);
+  font-weight: normal;
+  margin-left: auto;
+}
+
+.form-input {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.6);
+  color: #e8f1ff;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.form-input::placeholder {
+  color: rgba(220, 234, 255, 0.3);
+}
+
+.form-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select.form-input option {
+  background: #0b1628;
+  color: #e8f1ff;
+}
+
 .scenario-tabs {
   display: flex;
   gap: 4px;
@@ -663,6 +993,7 @@ onMounted(async () => {
   background: rgba(8, 17, 31, 0.5);
   border: 1px solid rgba(125, 201, 255, 0.12);
   width: fit-content;
+  flex-wrap: wrap;
 }
 
 .scenario-tab {
@@ -687,26 +1018,157 @@ onMounted(async () => {
   font-weight: 500;
 }
 
-/* 表单 */
-.dynamic-fields {
-  display: grid;
-  gap: 16px;
-  margin-top: 18px;
+.model-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  color: rgba(220, 234, 255, 0.55);
 }
 
-.dynamic-fields__toolbar {
+/* ---------- 2 数据来源 ---------- */
+.source-card {
+  display: grid;
+  gap: 16px;
+}
+
+.source-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(8, 17, 31, 0.5);
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  width: fit-content;
+}
+
+.source-tab {
+  border: 0;
+  padding: 6px 18px;
+  border-radius: 999px;
+  color: rgba(220, 234, 255, 0.7);
+  background: transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.source-tab:hover {
+  background: rgba(91, 166, 255, 0.1);
+  color: #fff;
+}
+
+.source-tab.is-active {
+  background: rgba(91, 166, 255, 0.18);
+  color: #fff;
+  font-weight: 500;
+}
+
+.pane {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  /* 字段区内部滚动：页面不会被 279 个字段拉成 30 屏，执行条也始终留在卡片底部。
+     （不用 position: sticky —— 祖先 .app-shell 有 overflow: hidden，
+     它会成为 sticky 的参照容器且自身不滚动，粘不住。） */
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.pane-status {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.5);
+}
+
+.pane-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 0 8px;
+  background: rgba(9, 18, 32, 0.97);
 }
 
-.dynamic-fields__count {
+.pane-toolbar__count {
   margin-right: auto;
   font-size: 0.8rem;
   color: rgba(220, 234, 255, 0.55);
 }
 
+/* 样本表 */
+.sample-table__wrap {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 10px;
+}
+
+.sample-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.sample-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(11, 22, 40, 0.98);
+  color: rgba(220, 234, 255, 0.6);
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.sample-table td {
+  padding: 8px 12px;
+  color: rgba(232, 241, 255, 0.88);
+  border-top: 1px solid rgba(125, 201, 255, 0.07);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sample-table tbody tr {
+  cursor: pointer;
+}
+
+.sample-table tbody tr:hover {
+  background: rgba(91, 166, 255, 0.07);
+}
+
+.sample-table tbody tr.is-selected {
+  background: rgba(91, 166, 255, 0.14);
+}
+
+.sample-table__pick {
+  width: 34px;
+}
+
+.sample-table__pick input {
+  accent-color: #5ba6ff;
+}
+
+.sample-table__idx {
+  width: 56px;
+  color: rgba(220, 234, 255, 0.5);
+}
+
+.sample-pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sample-pager__info {
+  font-size: 0.8rem;
+  color: rgba(220, 234, 255, 0.6);
+}
+
+/* 字段折叠表单 */
 .field-collapse {
   width: 100%;
 }
@@ -721,195 +1183,142 @@ onMounted(async () => {
   gap: 14px;
 }
 
-.form-group {
+/* 批量导入 */
+.batch-row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.form-label {
-  font-size: 0.85rem;
+.batch-row .form-label {
+  min-width: 120px;
+}
+
+.batch-row__num {
+  width: 110px;
+}
+
+.batch-row__file {
+  font-size: 0.82rem;
   color: rgba(220, 234, 255, 0.7);
+  max-width: 320px;
+}
+
+/* 执行条：固定在视口底部，字段再多也不用滚到底找按钮。
+   不用 position: sticky —— 祖先 .app-shell 有 overflow: hidden，
+   它会成为 sticky 的参照容器且自身不滚动，粘不住。 */
+.action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 30px;
+  background: rgba(9, 18, 32, 0.97);
+  border-top: 1px solid rgba(125, 201, 255, 0.16);
 }
 
-.form-label__type {
-  font-size: 0.78rem;
-  color: rgba(220, 234, 255, 0.4);
+.action-bar__hint {
+  margin-right: auto;
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.6);
 }
 
-.form-label__hint {
-  font-size: 0.78rem;
-  color: rgba(220, 234, 255, 0.4);
-  font-weight: normal;
-  margin-left: auto;
-}
-
-.form-input {
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 201, 255, 0.2);
-  background: rgba(8, 17, 31, 0.6);
-  color: #e8f1ff;
-  font-size: 0.9rem;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.form-input:focus {
-  border-color: rgba(91, 166, 255, 0.5);
-}
-
-.form-input::placeholder {
-  color: rgba(220, 234, 255, 0.3);
-}
-
-.form-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-select.form-input option {
-  background: #0b1628;
-  color: #e8f1ff;
-}
-
-/* 模型选项列表 */
-.model-options {
+/* ---------- 3 结果 ---------- */
+.result-card {
   display: grid;
-  gap: 10px;
+  gap: 16px;
 }
 
-.model-option {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(125, 201, 255, 0.15);
-  background: rgba(255, 255, 255, 0.02);
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-}
-
-.model-option:hover {
-  border-color: rgba(91, 166, 255, 0.4);
-}
-
-.model-option.is-selected {
-  border-color: rgba(91, 166, 255, 0.65);
-  background: rgba(91, 166, 255, 0.08);
-}
-
-.model-option__radio {
-  margin-top: 4px;
-  accent-color: #5ba6ff;
-}
-
-.model-option__body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-}
-
-.model-option__head {
+.section-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.model-option__id {
-  font-weight: 700;
-  color: #e8f1ff;
-  font-size: 0.92rem;
+.section-heading h3 {
+  margin: 0;
+  font-size: 1.05rem;
 }
 
-.model-option__default {
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: rgba(255, 209, 102, 0.16);
-  color: #ffd166;
-  font-size: 0.74rem;
-}
-
-.model-option__algo {
-  font-size: 0.8rem;
-  color: rgba(154, 214, 255, 0.8);
-}
-
-.model-option__metrics {
+.batch-summary {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   flex-wrap: wrap;
-  font-size: 0.76rem;
-  color: rgba(220, 234, 255, 0.55);
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.75);
 }
 
-.no-model-tip {
-  padding: 12px 14px;
+.batch-summary__item.is-risk {
+  color: #ff8c84;
+}
+
+.batch-summary__item.is-failed {
+  color: #ffd166;
+}
+
+.batch-table__wrap {
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid rgba(125, 201, 255, 0.12);
   border-radius: 10px;
-  background: rgba(255, 209, 102, 0.08);
-  border: 1px solid rgba(255, 209, 102, 0.22);
-  color: rgba(255, 209, 102, 0.9);
-  font-size: 0.84rem;
-  line-height: 1.5;
 }
 
-.infer-btn {
-  padding: 12px 24px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
-  font-size: 0.95rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.2s;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 4px;
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
 }
 
-.infer-btn:hover {
-  opacity: 0.9;
+.batch-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(11, 22, 40, 0.98);
+  color: rgba(220, 234, 255, 0.6);
+  font-weight: 500;
+  text-align: left;
+  padding: 10px 14px;
+  white-space: nowrap;
 }
 
-.infer-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.batch-table td {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(125, 201, 255, 0.07);
+  color: #e8f1ff;
+  font-variant-numeric: tabular-nums;
 }
 
-.btn-spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
+.batch-table tbody tr:hover {
+  background: rgba(91, 166, 255, 0.06);
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.cell-risk {
+  color: #ff8c84;
 }
 
-/* 右侧结果 */
+.cell-normal {
+  color: #53e5c8;
+}
+
+.cell-muted {
+  color: rgba(220, 234, 255, 0.45);
+}
+
 .inference-result__content {
   display: grid;
-  gap: 20px;
+  gap: 14px;
 }
 
 .result-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
+  padding: 14px 18px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(125, 201, 255, 0.08);
@@ -953,6 +1362,18 @@ select.form-input option {
   color: #53e5c8;
 }
 
+.result-item--features {
+  align-items: flex-start;
+}
+
+.result-item__value--features {
+  display: grid;
+  gap: 4px;
+  max-width: 70%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .event-tip {
   display: flex;
   align-items: center;
@@ -970,34 +1391,22 @@ select.form-input option {
   margin-left: auto;
 }
 
-.result-item--features {
-  align-items: flex-start;
-}
-
-.result-item__value--features {
-  display: grid;
-  gap: 4px;
-  max-width: 70%;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
 .ai-explanation {
-  margin-top: 24px;
-  padding-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid rgba(125, 201, 255, 0.12);
 }
 
 .ai-explanation__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .ai-explanation__head h3 {
   margin: 0;
+  font-size: 1.05rem;
 }
 
 .ai-explanation__actions {
@@ -1024,6 +1433,8 @@ select.form-input option {
 }
 
 .ai-explanation__markdown {
+  max-height: 420px;
+  overflow: auto;
   color: rgba(232, 241, 255, 0.9);
   line-height: 1.7;
   overflow-wrap: anywhere;
@@ -1049,7 +1460,6 @@ select.form-input option {
 }
 
 .admin-explanation {
-  margin-top: 16px;
   border-top: 1px solid rgba(125, 201, 255, 0.1);
   padding-top: 12px;
 }
@@ -1075,24 +1485,82 @@ select.form-input option {
   overflow-wrap: anywhere;
 }
 
-.inference-placeholder {
-  display: grid;
-  place-items: center;
-  gap: 16px;
-  padding: 40px 0;
-  color: rgba(220, 234, 255, 0.4);
+/* ---------- 通用按钮 ---------- */
+.infer-btn {
+  padding: 11px 26px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #5ba6ff, #407acc);
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
 }
 
-.inference-placeholder p {
-  margin: 0;
+.infer-btn:hover {
+  opacity: 0.9;
 }
 
-.inference-placeholder__icon {
-  font-size: 3rem;
+.infer-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
-  .inference-layout {
+.ghost-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(91, 166, 255, 0.35);
+  background: rgba(91, 166, 255, 0.1);
+  color: #9ad6ff;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.2);
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #9ad6ff;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+  .scope-bar {
     grid-template-columns: 1fr;
   }
 }
@@ -1134,23 +1602,5 @@ select.form-input option {
 
 .inference-page .el-collapse-item__content {
   padding: 10px 14px 16px;
-}
-
-.inference-page .el-button.is-plain {
-  --el-button-bg-color: rgba(91, 166, 255, 0.1) !important;
-  --el-button-border-color: rgba(91, 166, 255, 0.35) !important;
-  --el-button-text-color: #9ad6ff !important;
-  --el-button-hover-bg-color: rgba(91, 166, 255, 0.2) !important;
-  --el-button-hover-border-color: rgba(91, 166, 255, 0.5) !important;
-  --el-button-hover-text-color: #bae3ff !important;
-}
-
-.inference-page .el-button--primary {
-  --el-button-bg-color: #5ba6ff;
-  --el-button-border-color: #5ba6ff;
-  --el-button-text-color: #ffffff;
-  --el-button-hover-bg-color: #4a94ee;
-  --el-button-hover-border-color: #4a94ee;
-  --el-button-hover-text-color: #ffffff;
 }
 </style>

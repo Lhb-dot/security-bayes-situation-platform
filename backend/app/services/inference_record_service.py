@@ -13,8 +13,11 @@
    正常结果只保存推理记录（需求 4.x）。
 5. 普通用户只能查询本人推理记录；管理员可查询全部（需求 6.8.1/6.8.3）。
 """
+import csv
+import io
+import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 
@@ -41,6 +44,29 @@ from app.services.risk_event_service import RiskEventService
 from app.utils.common import get_logger, paginate, row_to_dict, validate_input_features
 
 logger = get_logger("inference_record")
+
+#: fields_schema 里表示数值的 type 取值（与 dataset_file_reader 的约定一致）
+_NUMERIC_TYPES = {"numeric", "real", "float", "double", "integer", "int"}
+
+
+def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
+    """按字段类型把 CSV 里的字符串转成推理服务期望的类型。
+
+    转不动就原样返回 —— 让 validate_input_features 报出可读的错误，
+    不在这里把问题吞掉。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "":
+        return value
+    if str(field_type or "").lower() in _NUMERIC_TYPES:
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return value
+        return int(number) if number.is_integer() else number
+    return value
 
 
 class InferenceRecordService(ServiceBase):
@@ -166,6 +192,24 @@ class InferenceRecordService(ServiceBase):
             )
         )
 
+    def _resolve_target(self, current_user, model_version_id: int) -> tuple:
+        """解析并校验推理目标，返回 (model, dataset)。
+
+        单条与批量共用，保证两条链路的权限与状态口径一致。
+        """
+        self.require_login(current_user)
+        model = self.db.get(ModelVersion, model_version_id)
+        if model is None:
+            raise ServiceError(404, "模型版本不存在")
+        if model.status not in INFERENCE_ALLOWED_MODEL_STATUSES:
+            raise ServiceError(400, "仅已发布模型可执行推理")
+        dataset = self.db.get(Dataset, model.dataset_id)
+        if dataset is None:
+            raise ServiceError(404, "模型绑定的数据集不存在")
+        if not self._can_infer_from_model(current_user, model, dataset):
+            raise ServiceError(403, "无权限使用该模型")
+        return model, dataset
+
     def _predict(self, model: ModelVersion, dataset: Dataset, input_features: Dict[str, Any]) -> tuple:
         """调用服务端统一预测入口，返回 (prediction_label, probability, explain_data)。
 
@@ -261,17 +305,7 @@ class InferenceRecordService(ServiceBase):
         """
         self.require_login(current_user)
 
-        model = self.db.get(ModelVersion, model_version_id)
-        if model is None:
-            raise ServiceError(404, "模型版本不存在")
-        if model.status not in INFERENCE_ALLOWED_MODEL_STATUSES:
-            raise ServiceError(400, "仅已发布模型可执行推理")
-
-        dataset = self.db.get(Dataset, model.dataset_id)
-        if dataset is None:
-            raise ServiceError(404, "模型绑定的数据集不存在")
-        if not self._can_infer_from_model(current_user, model, dataset):
-            raise ServiceError(403, "无权限使用该模型")
+        model, dataset = self._resolve_target(current_user, model_version_id)
 
         # 输入校验（需求 3.1.2/3.1.5）：固定字段齐全 + 枚举值域
         err = validate_input_features(dataset.fields_schema, input_features)
@@ -322,6 +356,185 @@ class InferenceRecordService(ServiceBase):
             data=data,
             message="推理完成" + ("，已生成风险事件" if generated_event else ""),
         )
+
+    # ------------------------------------------------------------------
+    # 批量推理（页面「批量研判」）
+    # ------------------------------------------------------------------
+    @service_call
+    def create_batch_inference(
+        self,
+        current_user,
+        model_version_id: int,
+        samples: List[Dict[str, Any]],
+    ):
+        """批量执行推理：逐条走单条链路（校验 / 预测 / 落库 / 风险事件）。
+
+        - **与单条行为完全一致**：判为风险类的样本照常生成 RiskEvent，
+          这样告警中心、态势大屏与看板都能看到这批结果，不会出现
+          「研判出来了但别处没有」的断链。
+        - **单条失败不影响整批**：失败样本只记录 error 文案，继续跑后面的。
+        - 返回汇总（total / succeeded / failed / risk_count）与逐条明细。
+        """
+        model, dataset = self._resolve_target(current_user, model_version_id)
+        if not samples:
+            raise ServiceError(400, "没有可研判的样本")
+
+        items: List[Dict[str, Any]] = []
+        succeeded = failed = risk_count = 0
+
+        for index, sample in enumerate(samples):
+            # 标签列不参与推理（需求 3.1.3）；样本来自数据集时本来就带标签，这里剥掉
+            features = {
+                key: value
+                for key, value in (sample or {}).items()
+                if key != dataset.label_field
+            }
+            response = self.create_inference(
+                current_user=current_user,
+                model_version_id=model_version_id,
+                input_features=features,
+            )
+            if response.code != 0:
+                failed += 1
+                items.append(
+                    {
+                        "index": index,
+                        "prediction_label": None,
+                        "risk_probability": None,
+                        "risk_level": None,
+                        "is_risk_event": False,
+                        "inference_record_id": None,
+                        "risk_event_id": None,
+                        "error": response.message,
+                    }
+                )
+                continue
+
+            data = response.data or {}
+            is_risk = bool(data.get("is_risk_event"))
+            event = data.get("risk_event") or {}
+            succeeded += 1
+            if is_risk:
+                risk_count += 1
+            items.append(
+                {
+                    "index": index,
+                    "prediction_label": data.get("prediction_label"),
+                    # 风险类概率取模型对风险类的输出概率，正常类也有值（更有参考意义）
+                    "risk_probability": (data.get("explain_data") or {}).get(
+                        "risk_probability"
+                    ),
+                    "risk_level": data.get("risk_level"),
+                    "is_risk_event": is_risk,
+                    "inference_record_id": data.get("id"),
+                    "risk_event_id": event.get("id"),
+                    "error": None,
+                }
+            )
+
+        return ok(
+            data={
+                "total": len(samples),
+                "succeeded": succeeded,
+                "failed": failed,
+                "risk_count": risk_count,
+                "items": items,
+            },
+            message=(
+                f"批量研判完成：成功 {succeeded} 条、风险 {risk_count} 条"
+                + (f"、失败 {failed} 条" if failed else "")
+            ),
+        )
+
+    @service_call
+    def create_batch_from_dataset(
+        self,
+        current_user,
+        model_version_id: int,
+        offset: int = 0,
+        limit: int = 50,
+    ):
+        """从模型绑定数据集读取 offset..offset+limit 条样本并批量研判。
+
+        样本读取走 ``read_sample_rows``（与数据预览同一口径），ARFF / CSV 都支持。
+        """
+        model, dataset = self._resolve_target(current_user, model_version_id)
+
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.dataset_file_reader import read_sample_rows
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            raise ServiceError(404, f"数据集文件不存在: {path}")
+        samples = read_sample_rows(path, dataset.fields_schema, offset, limit)
+        if not samples:
+            raise ServiceError(400, "指定区间内没有样本")
+        return self.create_batch_inference(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            samples=samples,
+        )
+
+    @service_call
+    def create_batch_from_csv(
+        self,
+        current_user,
+        model_version_id: int,
+        filename: str,
+        file_bytes: bytes,
+        limit: int = 200,
+    ):
+        """解析上传的 CSV 并批量研判。
+
+        列名必须覆盖数据集全部输入特征（顺序任意，多余列忽略，标签列可有可无）。
+        列名对不上时直接给出缺哪几列，不把解析细节抛给用户。
+        """
+        model, dataset = self._resolve_target(current_user, model_version_id)
+
+        if not str(filename).lower().endswith(".csv"):
+            raise ServiceError(400, "仅支持 .csv 文件")
+        try:
+            text = file_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise ServiceError(400, "文件编码无法识别，请另存为 UTF-8 编码的 CSV")
+
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            raise ServiceError(400, "CSV 缺少表头行")
+        headers = {str(h).strip() for h in reader.fieldnames if h is not None}
+
+        feature_fields = [
+            f for f in (dataset.fields_schema or []) if f.get("role") != "label"
+        ]
+        required = [str(f.get("name")) for f in feature_fields]
+        missing = [name for name in required if name not in headers]
+        if missing:
+            shown = "、".join(missing[:5])
+            suffix = f" 等 {len(missing)} 列" if len(missing) > 5 else ""
+            raise ServiceError(400, f"CSV 缺少字段：{shown}{suffix}")
+
+        type_by_name = {str(f.get("name")): f.get("type") for f in feature_fields}
+        samples: List[Dict[str, Any]] = []
+        for row in reader:
+            if len(samples) >= limit:
+                break
+            samples.append(
+                {
+                    name: _coerce_value(row.get(name), type_by_name.get(name))
+                    for name in required
+                }
+            )
+        if not samples:
+            raise ServiceError(400, "CSV 中没有数据行")
+
+        result = self.create_batch_inference(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            samples=samples,
+        )
+        if result.code == 0 and result.data:
+            result.data["truncated"] = len(samples) >= limit
+        return result
 
     # ------------------------------------------------------------------
     # 查询（需求 6.8：USER 仅本人；ADMIN 全部）
