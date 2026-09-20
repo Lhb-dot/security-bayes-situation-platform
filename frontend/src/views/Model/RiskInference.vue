@@ -821,7 +821,7 @@ onMounted(async () => {
           <h3>推理结果</h3>
         </div>
         <div class="inference-result__content">
-          <div class="result-item result-item--level">
+          <div class="result-item">
             <span class="result-item__label">分类结果</span>
             <span
               class="result-item__value result-level-badge"
