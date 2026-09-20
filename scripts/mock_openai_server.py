@@ -55,10 +55,14 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
             return
 
         content = "### 研判结论\nMock 服务已生成解释。"
+        reasoning = ""
         if mode == "empty":
             content = ""
+        if mode == "reasoning":
+            # 模拟推理型模型：正文之前先流式吐思维链。
+            reasoning = "先确认输入事实，再组织结论。"
         if payload.get("stream"):
-            self._send_stream(content)
+            self._send_stream(content, reasoning)
             return
         self._send_json(200, {
             "id": "mock-completion",
@@ -66,11 +70,14 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         })
 
-    def _send_stream(self, content: str) -> None:
-        chunks = [content[index:index + 12] for index in range(0, len(content), 12)]
+    def _send_stream(self, content: str, reasoning: str = "") -> None:
+        deltas: list[dict] = []
+        for chunk in [reasoning[index:index + 12] for index in range(0, len(reasoning), 12)]:
+            deltas.append({"choices": [{"delta": {"reasoning_content": chunk}}]})
+        for chunk in [content[index:index + 12] for index in range(0, len(content), 12)]:
+            deltas.append({"choices": [{"delta": {"content": chunk}}]})
         body = "".join(
-            "data: " + json.dumps({"choices": [{"delta": {"content": chunk}}]}, ensure_ascii=False) + "\n\n"
-            for chunk in chunks
+            "data: " + json.dumps(delta, ensure_ascii=False) + "\n\n" for delta in deltas
         ) + "data: [DONE]\n\n"
         encoded = body.encode("utf-8")
         self.send_response(200)
@@ -93,7 +100,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
         "--mode",
-        choices=("success", "empty", "rate_limited", "authentication_failed", "model_not_found"),
+        choices=("success", "empty", "reasoning", "rate_limited", "authentication_failed", "model_not_found"),
         default="success",
     )
     args = parser.parse_args()

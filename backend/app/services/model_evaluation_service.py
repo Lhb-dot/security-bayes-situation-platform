@@ -323,9 +323,13 @@ class ModelEvaluationService(ServiceBase):
             return
         try:
             parts: list[str] = []
-            for chunk in _openai_stream(setting, build_model_evaluation_prompt(facts, role)):
-                parts.append(chunk)
-                yield "delta", {"content": chunk}
+            for kind, text in _openai_stream(setting, build_model_evaluation_prompt(facts, role)):
+                if kind == "reasoning":
+                    # 思维链只透传给前端做「正在生成」的反馈，不进 parts、不落库。
+                    yield "reasoning", {"content": text}
+                    continue
+                parts.append(text)
+                yield "delta", {"content": text}
             markdown = "".join(parts).strip()
             if not markdown:
                 raise RuntimeError("empty AI response")

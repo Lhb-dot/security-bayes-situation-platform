@@ -32,6 +32,9 @@ def list_risk_events(
     status: Optional[str] = Query(
         None, description="按处置状态过滤：PENDING/PROCESSING/RESOLVED"
     ),
+    risk_level: Optional[str] = Query(
+        None, description="按风险等级过滤（按查看者阈值判级）：HIGH/MEDIUM/LOW"
+    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):
@@ -40,6 +43,7 @@ def list_risk_events(
             current_user=current_user,
             scenario_id=scenario_id,
             status=status,
+            risk_level=risk_level,
             page=page,
             page_size=page_size,
         )

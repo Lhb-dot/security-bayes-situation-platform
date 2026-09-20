@@ -351,7 +351,7 @@ onMounted(async () => {
         empty-text="暂无报告"
         row-class-name="report-table-row"
       >
-        <el-table-column prop="title" label="报告名称" min-width="220" show-overflow-tooltip>
+        <el-table-column prop="title" label="报告名称" min-width="220">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__title-cell">
               <span class="report-table__title">{{ row.title }}</span>

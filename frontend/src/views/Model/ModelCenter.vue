@@ -6,7 +6,7 @@
  *  - 管理员：发布、禁用、删除、设置默认推荐模型
  *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -243,6 +243,8 @@ interface EvaluationBucket {
   pending: boolean;
   response: ModelEvaluationResponse | null;
   markdown: string;
+  /** 推理型模型的思维链：只用于等待期展示「确实在生成」，正文到达即覆盖，且不落库 */
+  reasoning: string;
   status: string;
   error: string;
 }
@@ -257,6 +259,7 @@ const emptyEvaluationBucket = (): EvaluationBucket => ({
   pending: false,
   response: null,
   markdown: '',
+  reasoning: '',
   status: '',
   error: '',
 });
@@ -269,8 +272,24 @@ const evaluationBuckets = reactive<Record<EvaluationTab, EvaluationBucket>>({
 const activeEvaluation = computed(() => evaluationBuckets[evaluationAudience.value]);
 const evaluation = computed(() => activeEvaluation.value.response);
 const evaluationMarkdown = computed(() => activeEvaluation.value.markdown);
+const evaluationReasoning = computed(() => activeEvaluation.value.reasoning);
 const evaluationStatus = computed(() => activeEvaluation.value.status);
 const evaluationError = computed(() => activeEvaluation.value.error);
+
+const evaluationBodyRef = ref<HTMLElement | null>(null);
+const evaluationReasoningRef = ref<HTMLElement | null>(null);
+
+/** 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。 */
+const stickEvaluationToBottom = () => {
+  if (!evaluationLoading.value) return;
+  void nextTick(() => {
+    for (const el of [evaluationBodyRef.value, evaluationReasoningRef.value]) {
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+};
+
+watch([evaluationReasoning, evaluationMarkdown], stickEvaluationToBottom);
 
 const safeEvaluationHtml = computed(() => {
   if (!evaluationMarkdown.value) return '';
@@ -288,6 +307,7 @@ const loadEvaluation = async (audience: EvaluationTab) => {
     if (evaluationTarget.value?.id !== target.id) return;
     bucket.response = response;
     bucket.markdown = response.evaluation.markdown || '';
+    bucket.reasoning = '';
     // 评价读取完成后的结果由正文/空状态呈现，不再用状态条重复一遍。
     bucket.status = '';
     bucket.error = '';
@@ -340,6 +360,7 @@ const generateModelEvaluation = async (
   evaluationAudience.value = audience;
   evaluationLoading.value = true;
   bucket.error = '';
+  bucket.reasoning = '';
   if (regenerate) bucket.markdown = '';
   bucket.status = audience === 'user'
     ? '正在生成普通用户评价...'
@@ -347,15 +368,22 @@ const generateModelEvaluation = async (
   try {
     await streamModelEvaluation(target.id, regenerate, {
       onStart: (data) => { bucket.status = String(data.status || '评价生成中'); },
-      onDelta: (content) => { bucket.markdown += content; },
+      onReasoning: (content) => { bucket.reasoning += content; },
+      onDelta: (content) => {
+        // 正文一到就覆盖思考链：它只负责让用户看到「确实在生成」，不留在结果里。
+        if (bucket.reasoning) bucket.reasoning = '';
+        bucket.markdown += content;
+      },
       onError: (data) => {
         bucket.error = String(data.message || 'AI 服务不可用');
         // 流式中途失败时先丢弃半截正文，避免「半句 AI 文本 + 规则模板」拼在一起。
         bucket.markdown = '';
+        bucket.reasoning = '';
       },
       onDone: () => {
         // 生成结束即清空状态条，正文自己会呈现结果。
         bucket.status = '';
+        stickEvaluationToBottom();
       },
     }, evaluationAbort.signal, audience);
     bucket.response = await getModelEvaluation(target.id, audience);
@@ -364,6 +392,7 @@ const generateModelEvaluation = async (
     if ((err as Error)?.name !== 'AbortError') {
       bucket.error = err instanceof Error ? err.message : '模型评价生成失败';
       bucket.status = '';
+      bucket.reasoning = '';
     }
   } finally {
     bucket.pending = false;
@@ -534,7 +563,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="model-evaluation-modal__body">
+          <div ref="evaluationBodyRef" class="model-evaluation-modal__body">
             <div v-if="evaluationError" class="model-evaluation-modal__notice model-evaluation-modal__notice--error">
               {{ evaluationError }}
             </div>
@@ -542,6 +571,11 @@ onMounted(async () => {
             <div v-if="evaluationLoading" class="model-evaluation-loading">
               <span class="model-evaluation-loading__dot"></span>
               <span>AI 正在生成评价，请稍候…</span>
+            </div>
+
+            <div v-if="evaluationReasoning" class="model-evaluation-reasoning">
+              <div class="model-evaluation-reasoning__label">模型推理中</div>
+              <div ref="evaluationReasoningRef" class="model-evaluation-reasoning__text">{{ evaluationReasoning }}</div>
             </div>
 
             <div v-if="evaluation?.model_attributes" class="model-evaluation-facts">
@@ -1305,6 +1339,31 @@ onMounted(async () => {
   margin-bottom: 14px;
   color: rgba(154, 214, 255, 0.85);
   font-size: 0.84rem;
+}
+
+/* 等待期的思维链：正文一到就被清空，所以这里只求「看得出在动」，不求好读 */
+.model-evaluation-reasoning {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 22, 40, 0.5);
+}
+
+.model-evaluation-reasoning__label {
+  margin-bottom: 6px;
+  color: rgba(154, 214, 255, 0.72);
+  font-size: 0.78rem;
+}
+
+.model-evaluation-reasoning__text {
+  max-height: 200px;
+  overflow: auto;
+  color: rgba(196, 214, 240, 0.66);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .model-evaluation-loading__dot {

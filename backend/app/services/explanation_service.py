@@ -484,7 +484,14 @@ class AISettingService(ServiceBase):
             })
 
 
-def _openai_stream(setting: UserAISetting, messages: list[dict[str, str]]) -> Iterable[str]:
+def _openai_stream(
+    setting: UserAISetting, messages: list[dict[str, str]]
+) -> Iterable[tuple[str, str]]:
+    """逐块产出 ``("reasoning" | "content", 文本)``。
+
+    推理型模型把思维链放在 ``delta.reasoning_content``。思维链只用来让用户看到
+    「确实在生成」，必须与正文分开返回 —— 调用方只把 ``content`` 落库。
+    """
     key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
     client = OpenAI(api_key=key, base_url=setting.base_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
     request: dict[str, Any] = {
@@ -502,13 +509,15 @@ def _openai_stream(setting: UserAISetting, messages: list[dict[str, str]]) -> It
         choices = getattr(chunk, "choices", None) or []
         if not choices:
             continue
-        # 推理型模型把思维链放在 delta.reasoning_content，绝不能混进 Markdown 结果，
-        # 因此这里只取 delta.content。
         if getattr(choices[0], "finish_reason", None):
             finish_reason = choices[0].finish_reason
-        content = getattr(getattr(choices[0], "delta", None), "content", None)
+        delta = getattr(choices[0], "delta", None)
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            yield "reasoning", str(reasoning)
+        content = getattr(delta, "content", None)
         if content:
-            yield str(content)
+            yield "content", str(content)
     # 服务端自己截断时仍然要拦下：半截正文不能当完整结果存库或展示。
     if finish_reason == "length":
         raise AIOutputTruncated(f"AI 输出在模型长度上限处中断（finish_reason={finish_reason}）")
@@ -573,9 +582,13 @@ def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterabl
             setting.model,
         )
         emitted = False
-        for chunk in _openai_stream(setting, build_prompt(facts)):
+        for kind, text in _openai_stream(setting, build_prompt(facts)):
+            if kind == "reasoning":
+                # 思维链只透传给前端做「正在生成」的反馈，不进 markdown_parts、不落库。
+                yield "reasoning", {"content": text}
+                continue
             emitted = True
-            yield "delta", {"content": chunk}
+            yield "delta", {"content": text}
         if not emitted:
             raise RuntimeError("empty AI response")
         yield "done", {"status": "完成", "source": "ai"}

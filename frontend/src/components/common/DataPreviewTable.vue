@@ -125,9 +125,10 @@ onBeforeUnmount(() => {
         </el-table>
       </div>
       <div class="data-preview__pager">
+        <span class="data-preview__pager-total">共 {{ total }} 条</span>
         <el-pagination
           v-model:current-page="currentPage"
-          layout="total, prev, pager, next"
+          layout="prev, pager, next"
           :page-size="pageSize"
           :total="total"
           background
@@ -175,7 +176,16 @@ onBeforeUnmount(() => {
 
 .data-preview__pager {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
+}
+
+/* el-pagination 默认 locale 是英文（layout 里带 total 会渲染成 "Total N"），
+   项目界面要求全中文，所以总数文案自己写。 */
+.data-preview__pager-total {
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.85rem;
 }
 </style>
 
@@ -294,8 +304,8 @@ onBeforeUnmount(() => {
 /* ---------------- 分页器（暗色） ----------------
    background 模式下页码按钮的底色来自 --el-pagination-button-bg-color（EP 默认 #f0f2f5）、
    禁用态来自 --el-pagination-button-disabled-bg-color（EP 默认 #fff），而页码文字用的是
-   我们覆盖过的浅色 —— 浅底浅字所以「看不清」；Total 文案走的是 --el-text-color-regular(#606266)，
-   深灰同样看不清。下面补齐这两组变量，并对文案/按钮做定点覆盖。 */
+   我们覆盖过的浅色 —— 浅底浅字所以「看不清」。下面补齐这组变量，并对按钮做定点覆盖。
+   （总数文案已改为自绘的「共 N 条」，见上方 .data-preview__pager-total，不再走 EP 的 total。） */
 .data-preview .el-pagination {
   --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
   --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
@@ -304,11 +314,6 @@ onBeforeUnmount(() => {
   --el-pagination-button-color: rgba(220, 234, 255, 0.75);
   --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
   --el-pagination-hover-color: #5ba6ff;
-}
-
-.data-preview .el-pagination__total,
-.data-preview .el-pagination__jump {
-  color: rgba(220, 234, 255, 0.6) !important;
 }
 
 .data-preview .el-pagination.is-background .el-pager li,

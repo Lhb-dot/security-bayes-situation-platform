@@ -135,13 +135,18 @@ class ModelEvaluationTests(unittest.TestCase):
         user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
         with patch(
             "app.services.model_evaluation_service._openai_stream",
-            return_value=["### 模型能做什么\n场景提示"],
+            return_value=[("reasoning", "先看指标。"), ("content", "### 模型能做什么\n场景提示")],
         ):
             events = list(ModelEvaluationService(db).stream(user, 34, True, "user"))
         self.assertEqual(events[-1][1]["source"], "ai")
         saved = (model.ai_evaluation or {}).get("user") or {}
         self.assertEqual(saved.get("source"), "ai")
         self.assertNotIn("training_parameters", saved.get("facts_snapshot", {}).get("model", {}))
+        # 思维链只透传给前端，不能落进保存的 markdown
+        reasoning = "".join(d["content"] for e, d in events if e == "reasoning")
+        self.assertIn("先看指标", reasoning)
+        self.assertNotIn("先看指标", saved.get("markdown", ""))
+        self.assertIn("模型能做什么", saved.get("markdown", ""))
 
     def test_model_version_serialization_hides_training_parameters_from_users(self):
         model = make_model()

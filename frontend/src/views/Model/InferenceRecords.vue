@@ -5,14 +5,14 @@
  * 需求 6.2（P0）：普通用户只能查询本人推理记录；管理员可以查询平台全部推理记录。
  * 需求 6.8.4：管理员查看单个用户数据时，可以按用户ID筛选。
  */
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import {
   getInferenceExplain,
-  getInferenceRecordList,
+  getInferenceRecordPage,
   streamInferenceExplanation,
 } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
@@ -52,6 +52,11 @@ const loading = ref(false);
 const router = useRouter();
 const userStore = useUserStore();
 
+/** 列表分页：每页 20 条，服务端分页（单条记录含 explain_data，整表拉取会到十几 MB） */
+const page = ref(1);
+const pageSize = 20;
+const total = ref(0);
+
 /** 是否管理员（决定描述文案） */
 const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
 
@@ -74,11 +79,13 @@ const algorithmShortName = (name: string | null) => {
   return matched ? matched[1] : name || '—';
 };
 
-const loadRecords = async () => {
+const loadRecords = async (targetPage: number = page.value) => {
   loading.value = true;
   try {
-    const items = await getInferenceRecordList({ page_size: 200 });
-    records.value = items as unknown as InferenceRecordItem[];
+    const data = await getInferenceRecordPage({ page: targetPage, page_size: pageSize });
+    records.value = data.items as unknown as InferenceRecordItem[];
+    total.value = data.total;
+    page.value = data.page;
   } finally {
     loading.value = false;
   }
@@ -110,6 +117,8 @@ const explanationTarget = ref<InferenceRecordItem | null>(null);
 const explanationDialogVisible = ref(false);
 const explanationLoading = ref(false);
 const explanationMarkdown = ref('');
+/** 推理型模型的思维链：只用于等待期展示「确实在生成」，正文到达即覆盖，且不落库 */
+const explanationReasoning = ref('');
 const explanationGeneratedAt = ref<string | null>(null);
 const explanationError = ref('');
 const modelEvaluationMarkdown = ref('');
@@ -118,7 +127,25 @@ const explanationGenerating = ref(false);
 /** 「模型评价」入口开关：默认关闭，只展示本条研判的 AI 评价 */
 const modelEvaluationVisible = ref(false);
 const modelEvaluationBlock = ref<HTMLElement | null>(null);
+const explanationReasoningRef = ref<HTMLElement | null>(null);
 let explanationController: AbortController | null = null;
+
+/**
+ * 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。
+ * 只在生成中生效：读快照、打开弹窗都会一次性赋正文，无条件跟随会把用户直接拽到底。
+ * 弹窗是 append-to-body，正文滚动容器挂在 body 下，只能按类名查。
+ */
+const stickExplanationToBottom = () => {
+  if (!explanationGenerating.value) return;
+  void nextTick(() => {
+    const body = document.querySelector<HTMLElement>('.inference-explanation-dialog .el-dialog__body');
+    for (const el of [body, explanationReasoningRef.value]) {
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+};
+
+watch([explanationReasoning, explanationMarkdown], stickExplanationToBottom);
 
 /** 该推理所用模型是否已保存 AI 评价（无评价时入口仍可点，面板内给出提示） */
 const hasModelEvaluation = computed(() => Boolean(modelEvaluationMarkdown.value));
@@ -168,6 +195,7 @@ const openExplanation = async (record: InferenceRecordItem) => {
   explanationDialogVisible.value = true;
   explanationLoading.value = true;
   explanationMarkdown.value = '';
+  explanationReasoning.value = '';
   explanationGeneratedAt.value = null;
   explanationError.value = '';
   modelEvaluationMarkdown.value = record.model_evaluation?.markdown ?? '';
@@ -201,6 +229,7 @@ const generateExplanation = async () => {
   explanationGenerating.value = true;
   explanationError.value = '';
   explanationMarkdown.value = '';
+  explanationReasoning.value = '';
   explanationGeneratedAt.value = null;
 
   try {
@@ -215,8 +244,16 @@ const generateExplanation = async () => {
         model_version_id: target.model_version_id,
       },
       {
-        onDelta: (content) => { explanationMarkdown.value += content; },
-        onError: (message) => { explanationError.value = message; },
+        onReasoning: (content) => { explanationReasoning.value += content; },
+        onDelta: (content) => {
+          // 正文一到就覆盖思考链：它只负责让用户看到「确实在生成」，不留在结果里。
+          if (explanationReasoning.value) explanationReasoning.value = '';
+          explanationMarkdown.value += content;
+        },
+        onError: (message) => {
+          explanationReasoning.value = '';
+          explanationError.value = message;
+        },
       },
       explanationController.signal,
     );
@@ -231,9 +268,12 @@ const generateExplanation = async () => {
     explanationWasAvailable.value = true;
   } catch (err) {
     if ((err as Error)?.name !== 'AbortError') {
+      explanationReasoning.value = '';
       explanationError.value = err instanceof Error ? err.message : 'AI评价生成失败';
     }
   } finally {
+    // 收尾再钉一次：状态行消失会让正文区高度变化。
+    stickExplanationToBottom();
     explanationLoading.value = false;
     explanationGenerating.value = false;
     explanationController = null;
@@ -246,6 +286,7 @@ const closeExplanation = () => {
   explanationDialogVisible.value = false;
   explanationTarget.value = null;
   explanationMarkdown.value = '';
+  explanationReasoning.value = '';
   modelEvaluationMarkdown.value = '';
   modelEvaluationVisible.value = false;
   explanationWasAvailable.value = false;
@@ -349,6 +390,18 @@ onMounted(() => {
         <p v-if="loading" class="records-empty">加载中...</p>
         <p v-else-if="records.length === 0" class="records-empty">暂无推理记录</p>
       </div>
+      <div v-if="total > 0" class="records-pager">
+        <span class="records-pager__total">共 {{ total }} 条</span>
+        <el-pagination
+          v-model:current-page="page"
+          layout="prev, pager, next"
+          :page-size="pageSize"
+          :total="total"
+          :disabled="loading"
+          background
+          @current-change="loadRecords"
+        />
+      </div>
     </section>
 
     <!-- 输入特征弹窗：与数据集中心的字段预览使用同一套 Element Plus 弹窗/表格样式 -->
@@ -408,11 +461,16 @@ onMounted(() => {
           </div>
         </div>
       </template>
-      <p v-if="explanationLoading" class="explanation-state">
-        {{ explanationGenerating ? '正在生成AI评价...' : '正在读取已保存解释...' }}
+      <p v-if="explanationLoading && !explanationGenerating" class="explanation-state">
+        正在读取已保存解释...
       </p>
       <template v-else>
+        <p v-if="explanationGenerating" class="explanation-state">正在生成AI评价...</p>
         <p v-if="explanationError" class="explanation-state explanation-state--error">{{ explanationError }}</p>
+        <div v-if="explanationReasoning" class="explanation-reasoning">
+          <div class="explanation-reasoning__label">模型推理中</div>
+          <div ref="explanationReasoningRef" class="explanation-reasoning__text">{{ explanationReasoning }}</div>
+        </div>
         <section
           v-if="modelEvaluationVisible"
           ref="modelEvaluationBlock"
@@ -606,6 +664,61 @@ onMounted(() => {
   color: #9ad6ff;
 }
 
+/* ---------------- 分页器（暗色） ----------------
+   与数据集中心的只读预览表保持同一套分页外观；变量挂在包裹层上，
+   由 CSS 自定义属性继承进 el-pagination 内部。 */
+.records-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
+  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
+  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
+  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
+  --el-pagination-hover-color: #5ba6ff;
+}
+
+.records-pager__total {
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.records-pager :deep(.el-pagination.is-background .el-pager li),
+.records-pager :deep(.el-pagination.is-background .btn-prev),
+.records-pager :deep(.el-pagination.is-background .btn-next) {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 6px;
+}
+
+.records-pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
+.records-pager :deep(.el-pagination.is-background .btn-prev:hover),
+.records-pager :deep(.el-pagination.is-background .btn-next:hover) {
+  background-color: rgba(20, 44, 72, 0.95) !important;
+  color: #9ad6ff !important;
+}
+
+.records-pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #3f7fd4 !important;
+  color: #ffffff !important;
+  border-color: transparent;
+}
+
+.records-pager :deep(.el-pagination.is-background .btn-prev),
+.records-pager :deep(.el-pagination.is-background .btn-next) {
+  background-color: rgba(12, 26, 46, 0.9) !important;
+  color: rgba(220, 234, 255, 0.7) !important;
+}
+
+.records-pager :deep(.el-pagination.is-background .btn-prev:disabled),
+.records-pager :deep(.el-pagination.is-background .btn-next:disabled) {
+  background-color: rgba(8, 17, 31, 0.45) !important;
+  color: rgba(180, 200, 235, 0.25) !important;
+}
+
 </style>
 
 <style>
@@ -752,6 +865,31 @@ onMounted(() => {
   display: flex;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+/* 等待期的思维链：正文一到就被清空，所以这里只求「看得出在动」，不求好读 */
+.explanation-reasoning {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 22, 40, 0.5);
+}
+
+.explanation-reasoning__label {
+  margin-bottom: 6px;
+  color: rgba(154, 214, 255, 0.72);
+  font-size: 0.78rem;
+}
+
+.explanation-reasoning__text {
+  max-height: 200px;
+  overflow: auto;
+  color: rgba(196, 214, 240, 0.66);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .linked-model-evaluation {

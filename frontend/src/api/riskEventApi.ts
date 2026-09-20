@@ -19,6 +19,34 @@ export const getRiskEventList = async (params?: {
   return data.items ?? [];
 };
 
+/** 风险事件分页列表（带 total，供列表页翻页与后端筛选用） */
+export interface RiskEventPage {
+  items: RiskEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/**
+ * 风险事件分页查询。筛选在后端执行，因此翻页时筛选条件跨全量数据生效。
+ * scenario_id 为后端场景数字 ID；status 为后端枚举；risk_level 按查看者阈值判级。
+ */
+export const getRiskEventPage = async (params?: {
+  scenario_id?: number;
+  status?: 'PENDING' | 'PROCESSING' | 'RESOLVED';
+  risk_level?: 'HIGH' | 'MEDIUM' | 'LOW';
+  page?: number;
+  page_size?: number;
+}): Promise<RiskEventPage> => {
+  const data = await unwrapData(await request.get('/api/v1/risk-events', { params }));
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    page: data.page ?? 1,
+    page_size: data.page_size ?? 20,
+  };
+};
+
 /** 风险事件详情（GET /risk-events/{event_id}，普通用户仅本人事件） */
 export const getRiskEventDetail = async (eventId: string): Promise<RiskEvent> =>
   unwrapData(await request.get(`/api/v1/risk-events/${eventId}`));

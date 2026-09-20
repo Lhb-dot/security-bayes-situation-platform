@@ -3,10 +3,13 @@
  * AlertsView - 风险事件列表页（使用 RiskEvent 统一结构）
  *
  * P0 功能：展示跨场景风险事件，支持场景/风险等级/状态筛选
- * 数据来源：getRiskEvents() 跨场景聚合
+ * 数据来源：getRiskEventPage() 跨场景聚合
+ *
+ * 筛选与分页都在后端执行（每页 20 条）：前端只持有当前页数据，
+ * 因此筛选结果跨全量事件生效，翻页也不会把页面拉长。
  */
-import { computed, onMounted, ref } from 'vue';
-import { getRiskEventList } from '@/api/riskEventApi';
+import { computed, onMounted, ref, watch } from 'vue';
+import { getRiskEventPage } from '@/api/riskEventApi';
 import { useUserStore } from '@/stores/userStore';
 
 /** 真实风险事件（后端 /api/v1/risk-events 返回结构） */
@@ -22,10 +25,13 @@ interface RiskEventItem {
   status: string; // PENDING / PROCESSING / RESOLVED
 }
 
-/** 风险事件列表 */
+/** 风险事件列表（当前页） */
 const events = ref<RiskEventItem[]>([]);
 const loading = ref(true);
 const error = ref('');
+const total = ref(0);
+const page = ref(1);
+const pageSize = 20;
 
 const userStore = useUserStore();
 
@@ -78,34 +84,43 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: '已处置',
 };
 
-/** 筛选后的风险事件 */
-const filteredEvents = computed(() => {
-  let result = events.value;
-  if (selectedScenario.value !== 'all') {
-    result = result.filter((e) => e.scenario_id === selectedScenario.value);
-  }
-  if (selectedRiskLevel.value !== 'all') {
-    result = result.filter((e) => e.risk_level === selectedRiskLevel.value);
-  }
-  if (selectedStatus.value !== 'all') {
-    result = result.filter((e) => e.status === STATUS_VALUE[selectedStatus.value]);
-  }
-  return result;
-});
+/** 当前筛选条件 → 后端查询参数（'all' 表示该维度不过滤） */
+const queryParams = computed(() => ({
+  scenario_id: selectedScenario.value === 'all' ? undefined : selectedScenario.value,
+  risk_level:
+    selectedRiskLevel.value === 'all'
+      ? undefined
+      : (selectedRiskLevel.value as 'HIGH' | 'MEDIUM' | 'LOW'),
+  status:
+    selectedStatus.value === 'all'
+      ? undefined
+      : (STATUS_VALUE[selectedStatus.value] as 'PENDING' | 'PROCESSING' | 'RESOLVED'),
+}));
 
-/** 加载数据 */
-const loadEvents = async () => {
+/** 加载数据（筛选与分页均由后端执行） */
+const loadEvents = async (targetPage: number = page.value) => {
   loading.value = true;
   error.value = '';
   try {
-    const items = await getRiskEventList({ page_size: 200 });
-    events.value = items as unknown as RiskEventItem[];
+    const data = await getRiskEventPage({
+      ...queryParams.value,
+      page: targetPage,
+      page_size: pageSize,
+    });
+    events.value = data.items as unknown as RiskEventItem[];
+    total.value = data.total;
+    page.value = data.page;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '风险事件加载失败';
   } finally {
     loading.value = false;
   }
 };
+
+/** 筛选条件变化时回到第 1 页重新查询 */
+watch([selectedScenario, selectedRiskLevel, selectedStatus], () => {
+  loadEvents(1);
+});
 
 /** 风险等级标签映射 */
 const riskLevelMap: Record<string, { label: string; type: string }> = {
@@ -115,7 +130,7 @@ const riskLevelMap: Record<string, { label: string; type: string }> = {
 };
 
 onMounted(() => {
-  loadEvents();
+  loadEvents(1);
 });
 </script>
 
@@ -127,7 +142,7 @@ onMounted(() => {
         <h2>风险事件列表</h2>
         <p class="risk-events-page__desc">跨场景统一风险事件展示，支持多维度筛选过滤</p>
       </div>
-      <span class="section-tag">{{ filteredEvents.length }} 条事件</span>
+      <span class="section-tag">{{ total }} 条事件</span>
     </div>
 
     <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉） -->
@@ -163,21 +178,22 @@ onMounted(() => {
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
-      <button class="ghost-button" @click="loadEvents">重试</button>
+      <button class="ghost-button" @click="loadEvents(1)">重试</button>
     </section>
 
     <!-- 空数据提示 -->
-    <section v-else-if="filteredEvents.length === 0" class="state-card">
+    <section v-else-if="total === 0" class="state-card">
       <p>暂无匹配的风险事件</p>
     </section>
 
     <!-- 事件列表 -->
     <div v-else class="risk-events-table-wrap">
       <el-table
-        :data="filteredEvents"
+        :data="events"
         stripe
         style="width: 100%"
         row-class-name="event-table-row"
+        empty-text="暂无匹配的风险事件"
       >
         <el-table-column prop="id" label="事件编号" width="200" show-overflow-tooltip />
 
@@ -231,6 +247,19 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+    </div>
+
+    <div v-if="!loading && !error && total > 0" class="risk-events-pager">
+      <span class="risk-events-pager__total">共 {{ total }} 条</span>
+      <el-pagination
+        v-model:current-page="page"
+        layout="prev, pager, next"
+        :page-size="pageSize"
+        :total="total"
+        :disabled="loading"
+        background
+        @current-change="loadEvents"
+      />
     </div>
   </div>
 </template>
@@ -400,6 +429,61 @@ onMounted(() => {
 .ev-status--已处置 {
   background: rgba(83, 229, 200, 0.08);
   color: rgba(83, 229, 200, 0.65);
+}
+
+/* ---------------- 分页器（暗色） ----------------
+   与数据集中心的只读预览表保持同一套分页外观；变量挂在包裹层上，
+   由 CSS 自定义属性继承进 el-pagination 内部。 */
+.risk-events-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
+  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
+  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
+  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
+  --el-pagination-hover-color: #5ba6ff;
+}
+
+.risk-events-pager__total {
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.risk-events-pager :deep(.el-pagination.is-background .el-pager li),
+.risk-events-pager :deep(.el-pagination.is-background .btn-prev),
+.risk-events-pager :deep(.el-pagination.is-background .btn-next) {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 6px;
+}
+
+.risk-events-pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
+.risk-events-pager :deep(.el-pagination.is-background .btn-prev:hover),
+.risk-events-pager :deep(.el-pagination.is-background .btn-next:hover) {
+  background-color: rgba(20, 44, 72, 0.95) !important;
+  color: #9ad6ff !important;
+}
+
+.risk-events-pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #3f7fd4 !important;
+  color: #ffffff !important;
+  border-color: transparent;
+}
+
+.risk-events-pager :deep(.el-pagination.is-background .btn-prev),
+.risk-events-pager :deep(.el-pagination.is-background .btn-next) {
+  background-color: rgba(12, 26, 46, 0.9) !important;
+  color: rgba(220, 234, 255, 0.7) !important;
+}
+
+.risk-events-pager :deep(.el-pagination.is-background .btn-prev:disabled),
+.risk-events-pager :deep(.el-pagination.is-background .btn-next:disabled) {
+  background-color: rgba(8, 17, 31, 0.45) !important;
+  color: rgba(180, 200, 235, 0.25) !important;
 }
 </style>
 

@@ -17,7 +17,9 @@ export const useInferenceStore = defineStore('inference', {
     async fetchRecords(): Promise<void> {
       this.loading = true;
       try {
-        const items = await getInferenceRecordList({ page_size: 200 });
+        // 200 条会拉到十几 MB（单条含 explain_data），这里只留最近 20 条摘要。
+        // 注意：目前没有任何页面读 this.records，这个请求纯属「执行推理后刷新列表」的历史设计。
+        const items = await getInferenceRecordList({ page_size: 20 });
         this.records = items as unknown as Array<Record<string, unknown>>;
       } finally {
         this.loading = false;

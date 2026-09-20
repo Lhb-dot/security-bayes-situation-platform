@@ -171,6 +171,8 @@ export interface ExplanationStreamParams {
 
 export interface ExplanationStreamHandlers {
   onStart?: (data: Record<string, unknown>) => void;
+  /** 推理型模型的思维链，只用于展示「确实在生成」，不落库 */
+  onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (message: string) => void;
   onDone?: (data: Record<string, unknown>) => void;
@@ -211,6 +213,7 @@ export const streamInferenceExplanation = async (
       let data: Record<string, unknown> = {};
       try { data = JSON.parse(dataText) as Record<string, unknown>; } catch { continue; }
       if (event === 'start') handlers.onStart?.(data);
+      else if (event === 'reasoning' && typeof data.content === 'string') handlers.onReasoning?.(data.content);
       else if (event === 'delta' && typeof data.content === 'string') handlers.onDelta?.(data.content);
       else if (event === 'error') handlers.onError?.(String(data.message ?? 'AI 分析失败'));
       else if (event === 'done') handlers.onDone?.(data);

@@ -9,7 +9,6 @@ import DashKpis from '@/components/dashboard/DashKpis.vue';
 import DashCard from '@/components/dashboard/DashCard.vue';
 import DashBars from '@/components/dashboard/DashBars.vue';
 import DashDonut from '@/components/dashboard/DashDonut.vue';
-import DashColumns from '@/components/dashboard/DashColumns.vue';
 import DashGauge from '@/components/dashboard/DashGauge.vue';
 import DashEvents from '@/components/dashboard/DashEvents.vue';
 
@@ -67,9 +66,11 @@ const NORMAL_BAND: Record<string, { low: number | null; high: number | null }> =
     title="设备问题类型告警构成"
     source="按设备与问题类型统计"
   >
-    <DashColumns
-      :items="data.component_issue_distribution.map((item) => ({ label: `${item.component}·${item.issue}`, value: item.count }))"
-      :height="200"
+    <DashBars
+      :items="data.component_issue_distribution.map((item) => ({ value: `${item.component}·${item.issue}`, count: item.count }))"
+      :label-width="290"
+      :columns="2"
+      suffix=" 条"
     />
   </DashCard>
 

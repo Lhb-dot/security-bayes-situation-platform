@@ -32,6 +32,9 @@ from app.services.constants import (
     DATASET_RISK_TYPES,
     DATASET_VISIBILITY_PLATFORM,
     RISK_EVENT_STATUS_PENDING,
+    RISK_LEVEL_HIGH,
+    RISK_LEVEL_LOW,
+    RISK_LEVEL_MEDIUM,
     RISK_EVENT_STATUS_TRANSITIONS,
     RISK_TYPE_FLIGHT_DECK,
     RISK_TYPE_GEOLOGICAL,
@@ -331,16 +334,29 @@ class RiskEventService(ServiceBase):
         current_user,
         scenario_id: Optional[int] = None,
         status: Optional[str] = None,
+        risk_level: Optional[str] = None,
         page: int = 1,
         page_size: int = 10,
     ):
         """风险事件列表。
 
-        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态过滤）；
+        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态/等级过滤）；
         - SCENARIO_ADMIN：自己场景内全部事件；
         - SCENARIO_USER：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
+
+        risk_level 过滤按**查看者**阈值判级（见 risk_view），等价条件随账号阈值变化，
+        无法写进 SQL，因此传了该参数时先取轻量投影在 Python 侧判级，再对命中的 id
+        切片分页；未传时仍走常规 SQL 分页，行为与之前完全一致。
         """
         self.require_login(current_user)
+        if risk_level is not None and risk_level not in (
+            RISK_LEVEL_HIGH,
+            RISK_LEVEL_MEDIUM,
+            RISK_LEVEL_LOW,
+        ):
+            raise ServiceError(400, "风险等级取值无效")
+        page = max(1, int(page or 1))
+        page_size = min(max(1, int(page_size or 10)), 200)
         role = getattr(current_user, "role", None)
         stmt = select(RiskEvent)
         if role == ROLE_SUPER_ADMIN:
@@ -364,10 +380,41 @@ class RiskEventService(ServiceBase):
                 stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         if status is not None:
             stmt = stmt.where(RiskEvent.status == status)
-        stmt = stmt.order_by(RiskEvent.occurred_at.desc())
-        result = paginate(self.db, stmt, page, page_size)
         # risk_level 按**查看者**的阈值重算：落库值是创建者视角，不能直接透传。
         thresholds = risk_view.load_thresholds(self.db, current_user)
+        if risk_level is not None:
+            rows = self.db.execute(
+                stmt.order_by(RiskEvent.occurred_at.desc()).with_only_columns(
+                    RiskEvent.id,
+                    RiskEvent.risk_score,
+                    RiskEvent.risk_level,
+                    RiskEvent.scenario_id,
+                )
+            ).all()
+            matched_ids = [
+                row.id
+                for row in rows
+                if risk_view.level_of(row, thresholds) == risk_level
+            ]
+            page_ids = matched_ids[(page - 1) * page_size : page * page_size]
+            events = (
+                list(self.db.scalars(select(RiskEvent).where(RiskEvent.id.in_(page_ids))).all())
+                if page_ids
+                else []
+            )
+            # in_() 不保证顺序，按 occurred_at desc 的切片顺序还原
+            rank = {rid: index for index, rid in enumerate(page_ids)}
+            events.sort(key=lambda event: rank.get(event.id, 0))
+            return ok(
+                data={
+                    "items": risk_view.view_events(events, thresholds),
+                    "total": len(matched_ids),
+                    "page": page,
+                    "page_size": page_size,
+                }
+            )
+        stmt = stmt.order_by(RiskEvent.occurred_at.desc())
+        result = paginate(self.db, stmt, page, page_size)
         result["items"] = risk_view.view_events(result["items"], thresholds)
         return ok(data=result)
 
