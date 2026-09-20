@@ -256,7 +256,19 @@ public final class NbAlgorithmService {
                 JSONObject spode = viewObj("SPODE 标签视图", ema.distributionForInstance2(disc), header);
                 JSONObject randomForest = viewObj("RF 标签视图", ema.distributionForInstance3(disc), header);
                 views.put(original).put(spode).put(randomForest);
-                viewWeights.put(round(ema.w_view1)).put(round(ema.w_view2)).put(round(ema.w_view3));
+                // w_view* 是近邻证据量，算法内部按乘法权重参与融合、随后整体归一化，
+                // 缩放不改变预测结果。对外必须换算成占比，否则「视图权重」不构成分布
+                // （DIWNB 的 getViewWeightsForReport 已是归一化值，此处对齐同一语义）。
+                double weightSum = ema.w_view1 + ema.w_view2 + ema.w_view3;
+                if (weightSum > 0) {
+                    viewWeights.put(round(ema.w_view1 / weightSum))
+                            .put(round(ema.w_view2 / weightSum))
+                            .put(round(ema.w_view3 / weightSum));
+                } else {
+                    // 证据量全为 0 时算法退化为三视图等权求和，占比即各 1/3。
+                    double equal = round(1.0 / 3.0);
+                    viewWeights.put(equal).put(equal).put(equal);
+                }
                 specific.put("dynamic_view_weights", viewWeights)
                         .put("before_fusion", views)
                         .put("after_fusion", viewObj("融合后", finalDistribution, header))

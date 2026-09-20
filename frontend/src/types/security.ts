@@ -401,6 +401,8 @@ export interface AlgorithmParamDef {
   step?: number;
   options?: { value: string; label: string }[];           // select 类型可选项
   description: string;
+  /** 仅对含数值特征的数据集生效；纯离散数据集上该参数不起作用，训练表单不展示。 */
+  requires_numeric_features?: boolean;
 }
 
 /** 算法注册定义（需求 6.6.2 算法接入规则） */

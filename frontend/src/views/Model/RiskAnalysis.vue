@@ -100,12 +100,33 @@ const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
           ? (item.enum_values as string[]).map((v) => ({ value: v, label: v }))
           : undefined,
       description: String(item.description ?? ''),
+      requires_numeric_features: Boolean(item.requires_numeric_features),
     };
   });
 };
 
 /** 当前算法定义 */
 const currentAlgo = computed(() => algorithms.value.find((a) => a.id === selectedAlgoId.value));
+
+/** 数据集字段结构里的数值型 type 取值（与后端 NUMERIC_FIELD_TYPES 对齐） */
+const NUMERIC_FIELD_TYPES = ['numeric', 'real', 'float', 'double', 'int', 'integer', 'number'];
+
+/** 当前所选数据集是否含数值特征：决定离散化参数是否适用 */
+const datasetHasNumericFeatures = computed(() => {
+  const ds = datasetList.value.find((d) => d.id === selectedDatasetId.value);
+  if (!ds || !Array.isArray(ds.fields_schema)) return false;
+  return ds.fields_schema.some((raw) => {
+    const f = (raw ?? {}) as Record<string, unknown>;
+    return f.role === 'feature' && NUMERIC_FIELD_TYPES.includes(String(f.type ?? '').toLowerCase());
+  });
+});
+
+/** 训练参数表单实际展示的参数：不适用于当前数据集的参数不出现 */
+const visibleParams = computed(() => {
+  const params = currentAlgo.value?.params ?? [];
+  if (datasetHasNumericFeatures.value) return params;
+  return params.filter((p) => !p.requires_numeric_features);
+});
 
 /** 训练参数表单（动态生成，默认值来自算法 param_schema，需求 6.6.3） */
 const paramForm = ref<Record<string, number | string | boolean>>({});
@@ -180,17 +201,21 @@ watch(selectedScenario, async (scenario) => {
   }
 });
 
-// ===================== 算法切换 → 重置参数表单 =====================
+// ===================== 算法/数据集切换 → 重建参数表单 =====================
+const resetParamForm = () => {
+  paramForm.value = {};
+  for (const p of visibleParams.value) {
+    paramForm.value[p.param_name] = p.default_value;
+  }
+};
+
 watch(selectedAlgoId, () => {
   trainResult.value = null;
-  paramForm.value = {};
-  const algo = currentAlgo.value;
-  if (algo) {
-    for (const p of algo.params) {
-      paramForm.value[p.param_name] = p.default_value;
-    }
-  }
+  resetParamForm();
 });
+
+// 数据集切换会改变参数的适用性（离散化参数对纯离散数据集不适用），表单需一并重建。
+watch(datasetHasNumericFeatures, resetParamForm);
 
 // ===================== 模型训练 =====================
 const handleTrain = async () => {
@@ -211,11 +236,16 @@ const handleTrain = async () => {
   trainResult.value = null;
   startTrainingTimer();
   try {
+    // 只提交表单上真实展示的参数，避免把不适用于当前数据集的参数带进训练请求。
+    const training_parameters: Record<string, number | string | boolean> = {};
+    for (const p of visibleParams.value) {
+      if (p.param_name in paramForm.value) training_parameters[p.param_name] = paramForm.value[p.param_name];
+    }
     const row = await trainModel({
       scenario_id: selectedScenario.value,
       dataset_id: selectedDatasetId.value,
       algorithm_id: selectedAlgoId.value,
-      training_parameters: { ...paramForm.value },
+      training_parameters,
     });
     trainResult.value = {
       model_version_id: String(row.id),
@@ -366,12 +396,12 @@ onBeforeUnmount(() => {
           </select>
         </div>
 
-        <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成） -->
-        <div v-if="currentAlgo" class="form-group">
+        <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成；无适用参数时整块隐藏） -->
+        <div v-if="visibleParams.length" class="form-group">
           <label class="form-label">训练参数</label>
-          <div v-if="currentAlgo.params.length" class="param-list">
+          <div class="param-list">
             <div
-              v-for="p in currentAlgo.params"
+              v-for="p in visibleParams"
               :key="p.param_name"
               class="param-item"
             >
@@ -405,9 +435,6 @@ onBeforeUnmount(() => {
               </p>
             </div>
           </div>
-          <p v-else class="form-hint">
-            当前算法没有可调整的训练参数，将使用内置默认配置训练。
-          </p>
         </div>
 
         <!-- 训练按钮 -->

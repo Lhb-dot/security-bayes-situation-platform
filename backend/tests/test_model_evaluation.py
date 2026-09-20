@@ -13,6 +13,7 @@ from app.services.model_evaluation_service import (  # noqa: E402
     build_model_evaluation_facts,
     fallback_model_evaluation,
     public_model_attributes,
+    refresh_model_attributes,
 )
 from app.services.model_version_service import ModelVersionService  # noqa: E402
 
@@ -121,13 +122,58 @@ class ModelEvaluationTests(unittest.TestCase):
     def test_cached_stream_does_not_call_ai_again(self):
         model = make_model()
         model.model_attributes = build_model_attributes(model)
-        model.ai_evaluation = {"management": {"markdown": "cached", "source": "ai"}}
+        facts = build_model_evaluation_facts(model.model_attributes, ADMIN_ROLE)
+        model.ai_evaluation = {
+            "management": {"markdown": "cached", "source": "ai", "facts_snapshot": facts}
+        }
         db = EvaluationDb(model)
         user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
         with patch("app.services.model_evaluation_service._openai_stream") as mocked:
             events = list(ModelEvaluationService(db).stream(user, 34, False))
         mocked.assert_not_called()
         self.assertEqual(events[-1], ("done", {"status": "已读取已保存模型评价", "source": "cached"}))
+
+    def test_algorithm_metadata_is_refreshed_after_snapshot_was_taken(self):
+        model = make_model()
+        model.model_attributes = build_model_attributes(model)
+        self.assertIn("test", model.model_attributes["algorithm"]["description"])
+        # 算法描述在训练后被修正：快照必须跟随实时行，而不是冻结旧文案。
+        model.algorithm.description = "动态交互加权朴素贝叶斯，KNN 生成双视图"
+        refreshed = refresh_model_attributes(model)
+        self.assertEqual(refreshed["algorithm"]["description"], "动态交互加权朴素贝叶斯，KNN 生成双视图")
+        # 模型自身的事实保持训练时快照，不被重建。
+        self.assertEqual(refreshed["training_parameters"], {"k": 5})
+        # 落库后再次读取不再产生新对象，避免每次读都写库。
+        model.model_attributes = refreshed
+        self.assertIs(refresh_model_attributes(model), model.model_attributes)
+
+    def test_stale_evaluation_is_not_served_when_facts_changed(self):
+        model = make_model()
+        model.model_attributes = build_model_attributes(model)
+        stale = build_model_evaluation_facts(model.model_attributes, ADMIN_ROLE)
+        stale["model"]["algorithm"]["description"] = "（占位训练，算法实现待算法组交付）"
+        model.ai_evaluation = {
+            "management": {"markdown": "旧结论", "source": "ai", "facts_snapshot": stale}
+        }
+        db = EvaluationDb(model, setting=SimpleNamespace(enabled=True))
+        user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
+        service = ModelEvaluationService(db)
+        # 读取时不再下发基于旧事实写出的正文。
+        payload = service.get_evaluation(user, 34).data["evaluation"]
+        self.assertFalse(payload["available"])
+        self.assertIsNone(payload["markdown"])
+        # 触发时重新生成，而不是回放缓存。
+        with patch(
+            "app.services.model_evaluation_service._openai_stream",
+            return_value=[("content", "### 模型结论\n新结论")],
+        ):
+            events = list(service.stream(user, 34, False))
+        self.assertEqual(events[-1][1]["source"], "ai")
+        saved = (model.ai_evaluation or {}).get("management") or {}
+        self.assertIn("新结论", saved.get("markdown", ""))
+        self.assertEqual(saved.get("facts_snapshot"), build_model_evaluation_facts(
+            refresh_model_attributes(model), ADMIN_ROLE
+        ))
 
     def test_management_can_prepare_a_sanitized_user_evaluation(self):
         model = make_model()

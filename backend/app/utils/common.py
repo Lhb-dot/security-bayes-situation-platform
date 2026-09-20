@@ -205,7 +205,7 @@ def validate_input_features(fields_schema: List[Dict], input_features: Any) -> O
 
 
 def validate_params_schema(
-    param_schema: Any, params: Any
+    param_schema: Any, params: Any, dataset_has_numeric: bool = True
 ) -> Optional[str]:
     """校验训练参数（需求 6.6.3：参数必须提供默认值，管理员修改须通过类型和范围校验）。
 
@@ -216,6 +216,9 @@ def validate_params_schema(
     - enum 按 enum_values 值域校验；
     - int/float 做类型转换与 min/max 范围校验；
     - bool 校验类型；str 仅做非空。
+
+    `dataset_has_numeric=False` 时，声明了 requires_numeric_features 的参数整项跳过 ——
+    它们对纯离散数据集不起作用，既不该必填，传了也不生效。
     """
     if not isinstance(params, dict):
         return "training_parameters 必须是 JSON 对象"
@@ -224,6 +227,8 @@ def validate_params_schema(
         return "param_schema 配置非法（必须是列表）"
     for item in schema:
         if not isinstance(item, dict) or not item.get("name"):
+            continue
+        if item.get("requires_numeric_features") and not dataset_has_numeric:
             continue
         name = item["name"]
         required = bool(item.get("required", False))
@@ -251,6 +256,42 @@ def validate_params_schema(
             if not isinstance(value, bool):
                 return f"训练参数 {name} 必须是布尔值"
     return None
+
+
+# 数据集字段结构里代表数值型的 type 取值（fields_schema 由 ARFF 解析产生）。
+NUMERIC_FIELD_TYPES = frozenset({"numeric", "real", "float", "double", "int", "integer", "number"})
+
+
+def dataset_has_numeric_features(fields_schema: Any) -> bool:
+    """数据集是否存在数值型输入特征。
+
+    原始研究算法按离散属性工作，平台用 Weka Discretize 把数值特征分箱后再喂给它们；
+    数据集若本身不含数值特征，分箱过滤器无从下手，相关的离散化参数不会产生任何效果。
+    """
+    for field in fields_schema or []:
+        if not isinstance(field, dict) or field.get("role") != "feature":
+            continue
+        if str(field.get("type", "")).lower() in NUMERIC_FIELD_TYPES:
+            return True
+    return False
+
+
+def strip_inapplicable_params(param_schema: Any, params: Any, dataset_has_numeric: bool) -> Any:
+    """剔除对当前数据集无作用的训练参数。
+
+    param_schema 中声明 `requires_numeric_features: true` 的参数只在数据集含数值特征
+    时才生效。剔除后既不会让填写者以为参数起了作用，模型记录的也是真实生效的参数集合。
+    """
+    if not isinstance(params, dict) or dataset_has_numeric:
+        return params
+    inapplicable = {
+        item.get("name")
+        for item in (param_schema or [])
+        if isinstance(item, dict) and item.get("requires_numeric_features")
+    }
+    if not inapplicable:
+        return params
+    return {key: value for key, value in params.items() if key not in inapplicable}
 
 
 # ---------------------------------------------------------------------------

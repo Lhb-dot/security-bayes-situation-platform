@@ -130,18 +130,13 @@ def _raw_value(sample: dict[str, Any], name: str) -> Any:
     return sample.get(name)
 
 
-def _top_features(
+def _normalize_feature_items(
+    source: list[Any],
     sample: dict[str, Any],
-    result: dict[str, Any],
     is_prediction_risk: bool,
     scenario_config: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    source = result.get("top_features") or result.get("feature_attribution") or []
-    if not source:
-        source = result.get("feature_evidence") or []
-    if not isinstance(source, list):
-        return []
-
+    """把一路特征解释归一化成统一的 top_features 结构。"""
     normalized: list[dict[str, Any]] = []
     for item in source:
         if not isinstance(item, dict):
@@ -187,7 +182,32 @@ def _top_features(
     normalized.sort(key=lambda x: x["contribution"], reverse=True)
     for rank, item in enumerate(normalized, start=1):
         item["rank"] = rank
-    return normalized[:10]
+    return normalized
+
+
+def _top_features(
+    sample: dict[str, Any],
+    result: dict[str, Any],
+    is_prediction_risk: bool,
+    scenario_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """挑一路特征解释并归一化。
+
+    优先级：算法原生的 top_features → 算法原生的 feature_evidence → 平台算的
+    feature_attribution。后者是单特征屏蔽敏感性，模型高置信时概率饱和
+    （实测 P = 1 − 2e-9），屏蔽任一特征只改变约 1e-7，Java 侧 round(…,4) 后整列塌成 0。
+    这种「非空但全 0」的列表没有信息量，必须继续往后找，否则喂给 AI 的是一列 0。
+    """
+    for key in ("top_features", "feature_evidence", "feature_attribution"):
+        source = result.get(key)
+        if not isinstance(source, list) or not source:
+            continue
+        normalized = _normalize_feature_items(
+            source, sample, is_prediction_risk, scenario_config
+        )
+        if any(item["contribution"] > 0 for item in normalized):
+            return normalized[:10]
+    return []
 
 
 def _views(result: dict[str, Any]) -> list[dict[str, Any]]:

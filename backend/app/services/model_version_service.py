@@ -52,9 +52,11 @@ from app.services.constants import (
     USER_VISIBLE_MODEL_STATUSES,
 )
 from app.utils.common import (
+    dataset_has_numeric_features,
     get_logger,
     paginate,
     row_to_dict,
+    strip_inapplicable_params,
     validate_params_schema,
 )
 logger = get_logger("model_version")
@@ -104,11 +106,13 @@ class ModelVersionService(ServiceBase):
             exclude=("model_attributes", "ai_evaluation", "training_parameters"),
         )
         from app.services.model_evaluation_service import (
-            build_model_attributes,
+            evaluation_is_current,
             public_model_attributes,
+            refresh_model_attributes,
         )
 
-        attributes = model.model_attributes or build_model_attributes(model)
+        # 状态与算法元数据不随模型冻结，读取时对齐实时值，避免下发陈旧描述。
+        attributes = refresh_model_attributes(model)
         is_management = getattr(current_user, "role", None) in (
             ROLE_SUPER_ADMIN,
             ROLE_SCENARIO_ADMIN,
@@ -145,8 +149,10 @@ class ModelVersionService(ServiceBase):
                     "feature_profile": [],
                     "evaluation_scope": attributes.get("evaluation_scope"),
                 },
-                "model_evaluation_available": bool(
-                    ((model.ai_evaluation or {}).get("management" if is_management else "user") or {}).get("markdown")
+                "model_evaluation_available": evaluation_is_current(
+                    (model.ai_evaluation or {}).get("management" if is_management else "user") or {},
+                    attributes,
+                    "management" if is_management else "user",
                 ),
             }
         )
@@ -275,10 +281,17 @@ class ModelVersionService(ServiceBase):
 
         if not isinstance(training_parameters, dict):
             raise ServiceError(400, "training_parameters 必须是 JSON 对象")
+        # 离散化参数只在数据集含数值特征时生效（见 param_schema 的
+        # requires_numeric_features）。数据集本身已是离散属性时先剔除，避免把未生效的
+        # 参数写进模型记录，也避免必填校验误拦。
+        has_numeric = dataset_has_numeric_features(dataset.fields_schema)
+        training_parameters = strip_inapplicable_params(
+            algorithm.param_schema, training_parameters, has_numeric
+        )
         # 按算法注册的 param_schema 校验必填项、类型与范围（需求 6.6.3.2/6.6.3.4）。
         # 对 param_schema 为空的算法（如 PMWNB 不暴露超参数，使用服务内置默认参数），
         # 允许传入空对象 {}。
-        err = validate_params_schema(algorithm.param_schema, training_parameters)
+        err = validate_params_schema(algorithm.param_schema, training_parameters, has_numeric)
         if err:
             raise ServiceError(400, err)
 

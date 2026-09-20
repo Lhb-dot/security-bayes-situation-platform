@@ -53,6 +53,21 @@ def _quality_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
     return {key: source.get(key) for key in keys if key in source}
 
 
+def _algorithm_reference(algorithm: Any) -> dict[str, Any]:
+    """Algorithm-owned metadata, which stays mutable after a model is trained.
+
+    The display name, description and parameter schema belong to the algorithm
+    row, not to the model version. They can legitimately be corrected later, so
+    a stored snapshot must follow the live row instead of freezing them.
+    """
+    return {
+        "code": getattr(algorithm, "code", None),
+        "name": getattr(algorithm, "display_name", None),
+        "description": getattr(algorithm, "description", None),
+        "parameter_schema": getattr(algorithm, "param_schema", None) or [],
+    }
+
+
 def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
     """Build immutable, non-secret facts attached to a model version."""
     dataset = getattr(model, "dataset", None)
@@ -97,12 +112,7 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
             "field_count": len(feature_profile),
             "visibility": getattr(dataset, "visibility", None),
         },
-        "algorithm": {
-            "code": getattr(algorithm, "code", None),
-            "name": getattr(algorithm, "display_name", None),
-            "description": getattr(algorithm, "description", None),
-            "parameter_schema": getattr(algorithm, "param_schema", None) or [],
-        },
+        "algorithm": _algorithm_reference(algorithm),
         "training_parameters": getattr(model, "training_parameters", None) or {},
         "quality_metrics": _quality_metrics(getattr(model, "evaluation_metrics", None)),
         "feature_profile": feature_profile,
@@ -112,6 +122,27 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
         },
         "evaluation_scope": "这是模型版本评价，不是某条样本的风险推理；评价不得改变模型预测结果。",
     }
+
+
+def refresh_model_attributes(model: ModelVersion) -> dict[str, Any]:
+    """Return the model snapshot with lifecycle and algorithm blocks re-read live.
+
+    Model-owned facts (training parameters, quality metrics, feature profile,
+    dataset binding) stay frozen at training time. Two blocks do not belong to
+    the model and must not be served stale: ``status``, and the algorithm-owned
+    reference block. Returns the identical object when nothing changed, so the
+    caller can detect a real update with an identity check.
+    """
+    current = getattr(model, "model_attributes", None)
+    if not isinstance(current, dict) or current.get("contract_version") != MODEL_EVALUATION_VERSION:
+        return build_model_attributes(model)
+    patch: dict[str, Any] = {}
+    if current.get("status") != model.status:
+        patch["status"] = model.status
+    reference = _algorithm_reference(getattr(model, "algorithm", None))
+    if current.get("algorithm") != reference:
+        patch["algorithm"] = reference
+    return {**current, **patch} if patch else current
 
 
 def public_model_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
@@ -149,6 +180,18 @@ def build_model_evaluation_facts(attributes: dict[str, Any], role: str) -> dict[
         "audience": "管理员" if role == ADMIN_ROLE else "场景普通用户",
         "model": facts,
     }
+
+
+def evaluation_is_current(artifact: dict[str, Any], attributes: dict[str, Any], role: str) -> bool:
+    """A saved evaluation is only valid for the exact facts it was written from.
+
+    Algorithm metadata can be corrected after an evaluation was generated, in
+    which case the stored markdown may state conclusions that no longer match
+    the model. Such an artifact is treated as absent so it gets regenerated.
+    """
+    if not artifact.get("markdown"):
+        return False
+    return artifact.get("facts_snapshot") == build_model_evaluation_facts(attributes, role)
 
 
 def fallback_model_evaluation(facts: dict[str, Any], role: str) -> str:
@@ -246,15 +289,9 @@ class ModelEvaluationService(ServiceBase):
         return model
 
     def _attributes(self, model: ModelVersion) -> dict[str, Any]:
-        current = getattr(model, "model_attributes", None)
-        if not isinstance(current, dict) or current.get("contract_version") != MODEL_EVALUATION_VERSION:
-            current = build_model_attributes(model)
-            model.model_attributes = current
-            self.commit()
-        elif current.get("status") != model.status:
-            # Status is the only lifecycle fact that changes after training.
-            # Keep the model-owned snapshot aligned without rebuilding other facts.
-            current = {**current, "status": model.status}
+        stored = getattr(model, "model_attributes", None)
+        current = refresh_model_attributes(model)
+        if current is not stored:
             model.model_attributes = current
             self.commit()
         return current
@@ -266,16 +303,19 @@ class ModelEvaluationService(ServiceBase):
         # 与 stream 共用同一套受众解析：管理员可切换查看用户视角，普通用户无法越权。
         role = self.requested_role(current_user, audience)
         artifact = (getattr(model, "ai_evaluation", None) or {}).get(role) or {}
+        # 算法描述等元数据可能在上次生成评价后被修正，此时旧正文的结论已不可信，
+        # 按「未生成」返回，由用户重新触发生成。
+        fresh = evaluation_is_current(artifact, attributes, role)
         return ok(data={
             "model_version_id": model.id,
             "status": model.status,
             "role": role,
             "model_attributes": attributes if role == ADMIN_ROLE else public_model_attributes(attributes),
             "evaluation": {
-                "available": bool(artifact.get("markdown")),
-                "source": artifact.get("source"),
-                "markdown": artifact.get("markdown"),
-                "generated_at": artifact.get("generated_at"),
+                "available": fresh,
+                "source": artifact.get("source") if fresh else None,
+                "markdown": artifact.get("markdown") if fresh else None,
+                "generated_at": artifact.get("generated_at") if fresh else None,
             },
         })
 
@@ -306,7 +346,8 @@ class ModelEvaluationService(ServiceBase):
         evaluations = getattr(model, "ai_evaluation", None) or {}
         cached = evaluations.get(role) or {}
         yield "start", {"status": "开始读取模型评价"}
-        if cached.get("markdown") and not regenerate:
+        # 事实已变（如算法描述被修正）时缓存失效，走重新生成而不是下发旧结论。
+        if not regenerate and evaluation_is_current(cached, attributes, role):
             for chunk in _chunk_text(str(cached["markdown"])):
                 yield "delta", {"content": chunk}
             yield "done", {"status": "已读取已保存模型评价", "source": "cached"}
