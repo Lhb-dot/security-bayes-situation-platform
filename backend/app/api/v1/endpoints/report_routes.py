@@ -1,11 +1,9 @@
 """报告路由（/api/v1/reports）。
 
 对应 Service：ReportService（backend/app/services/report_service.py）。
-权限（需求 6.8.5/6.2 P1）：生成/查看 → 登录用户（普通用户仅本人数据；
-管理员可全平台或指定用户）；删除 → 生成者本人或管理员。
+权限（需求 6.8.5/6.2 P1）：生成/查看 → 登录用户（场景用户仅本人数据；
+管理员可全平台/本场景聚合或本人数据，不再支持指定单个用户）；删除 → 生成者本人或管理员。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -28,16 +26,12 @@ router = APIRouter(prefix="/reports", tags=["报告管理"])
 def list_reports(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    target_user_id: Optional[int] = Query(
-        None, description="按目标用户过滤（仅管理员生效）"
-    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):
     return unwrap(
         ReportService(db).get_list(
             current_user=current_user,
-            target_user_id=target_user_id,
             page=page,
             page_size=page_size,
         )
@@ -71,7 +65,6 @@ def create_report(
             title=payload.title,
             report_type=payload.report_type,
             content=payload.content,
-            target_user_id=payload.target_user_id,
             file_path=payload.file_path,
             scenario_id=payload.scenario_id,
             format=payload.format,
@@ -97,7 +90,6 @@ def generate_report(
             title=payload.title,
             scenario_id=payload.scenario_id,
             scope=payload.scope,
-            target_user_id=payload.target_user_id,
             format=payload.format,
         )
     )

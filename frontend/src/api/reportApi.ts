@@ -2,7 +2,8 @@
  * reportApi.ts — 报告接口（与后端 /api/v1/reports 对齐）
  *
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.8.5）：普通用户仅本人数据；管理员可全平台或指定用户。
+ * 权限边界由后端强制（需求 6.8.5）：场景用户仅本人数据；
+ * 管理员可选全平台/本场景聚合数据或本人个人数据（不支持指定单个用户）。
  */
 import request, { unwrapData } from '@/utils/request';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
@@ -11,7 +12,6 @@ interface ApiReport {
   id: number;
   generated_by: number;
   title: string;
-  target_user_id: number | null;
   scenario_id: number | null;
   scenario_code?: ScenarioId;
   scenario_name?: string;
@@ -47,12 +47,10 @@ const toReport = (raw: ApiReport): Report => ({
   scheduled: raw.scheduled,
   interval_days: raw.interval_days ?? undefined,
   generated_by: String(raw.generated_by),
-  target_user_id: raw.target_user_id == null ? undefined : String(raw.target_user_id),
 });
 
-/** 报告列表（GET /reports，普通用户：本人生成或定向给自己的报告） */
+/** 报告列表（GET /reports，场景用户：本人生成的报告） */
 export const getReportList = async (params?: {
-  target_user_id?: string;
   page?: number;
   page_size?: number;
 }): Promise<Report[]> => {
@@ -68,8 +66,7 @@ export const getReportDetail = async (reportId: string): Promise<Report> =>
 export const generateReport = async (params: {
   scenario_id: ScenarioId;
   title: string;
-  scope: 'self' | 'all' | 'user';
-  target_user_id?: string;
+  scope: 'self' | 'all';
   format?: Report['format'];
   scheduled?: boolean;
   interval_days?: number;
@@ -81,7 +78,6 @@ export const generateReport = async (params: {
       title: params.title,
       scenario_id: scenarioId,
       scope: params.scope,
-      target_user_id: params.target_user_id ? Number(params.target_user_id) : undefined,
       format: params.format ?? 'markdown',
     }),
   );

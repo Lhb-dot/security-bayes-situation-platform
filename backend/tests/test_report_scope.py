@@ -1,3 +1,8 @@
+"""报告数据范围（三级角色）测试。
+
+范围规则：最外层管理员 = 全平台 / 本人；场景管理员 = 本场景全部用户 / 本人；
+场景用户 = 仅本人。已取消"指定单个用户"。
+"""
 import sys
 import unittest
 from pathlib import Path
@@ -10,54 +15,56 @@ from app.services.report_service import ReportService  # noqa: E402
 
 
 class ScopeDb:
-    def __init__(self, users):
-        self.users = users
-
     def get(self, model_type, identifier):
-        if getattr(model_type, "__name__", "") != "AppUser":
-            return None
-        return self.users.get(identifier)
+        return None
 
 
 class ReportScopeTests(unittest.TestCase):
-    def test_scenario_user_is_forced_to_own_scope_for_generated_reports(self):
-        user = SimpleNamespace(id=7, role="SCENARIO_USER", scenario_id=3)
-        service = ReportService(ScopeDb({}))
+    def setUp(self):
+        self.service = ReportService(ScopeDb())
 
-        result = service._resolve_generation_scope(
-            user,
-            scenario_id=3,
-            scope="all",
-            target_user_id=99,
-            force_user_scope=True,
+    def test_scenario_user_is_always_pinned_to_own_data(self):
+        user = SimpleNamespace(id=7, role="SCENARIO_USER", scenario_id=3)
+        self.assertEqual(
+            self.service._resolve_generation_scope(user, 3, "all"),
+            ("SCENARIO_USER", 3, "self"),
         )
 
-        self.assertEqual(result, ("SCENARIO_USER", 3, "self", 7))
+    def test_scenario_user_cannot_generate_for_another_scenario(self):
+        user = SimpleNamespace(id=7, role="SCENARIO_USER", scenario_id=3)
+        with self.assertRaisesRegex(ServiceError, "只能生成本人绑定场景的报告"):
+            self.service._resolve_generation_scope(user, 4, "self")
 
-    def test_scenario_admin_can_target_only_users_in_bound_scenario(self):
+    def test_scenario_admin_is_limited_to_bound_scenario(self):
         admin = SimpleNamespace(id=2, role="SCENARIO_ADMIN", scenario_id=3)
-        target = SimpleNamespace(id=9, scenario_id=4)
-        service = ReportService(ScopeDb({9: target}))
+        with self.assertRaisesRegex(ServiceError, "只能生成本人绑定场景的报告"):
+            self.service._resolve_generation_scope(admin, 4, "all")
+        self.assertEqual(
+            self.service._resolve_generation_scope(admin, None, "all"),
+            ("SCENARIO_ADMIN", 3, "all"),
+        )
 
-        with self.assertRaisesRegex(ServiceError, "只能指定本人绑定场景内的用户"):
-            service._resolve_generation_scope(
-                admin,
-                scenario_id=3,
-                scope="user",
-                target_user_id=9,
-            )
-
-    def test_super_admin_missing_target_is_rejected(self):
+    def test_super_admin_keeps_requested_scenario_and_scope(self):
         admin = SimpleNamespace(id=1, role="SUPER_ADMIN", scenario_id=None)
-        service = ReportService(ScopeDb({}))
+        self.assertEqual(
+            self.service._resolve_generation_scope(admin, 5, "all"),
+            ("SUPER_ADMIN", 5, "all"),
+        )
+        self.assertEqual(
+            self.service._resolve_generation_scope(admin, None, "self"),
+            ("SUPER_ADMIN", None, "self"),
+        )
 
-        with self.assertRaisesRegex(ServiceError, "目标用户不存在"):
-            service._resolve_generation_scope(
-                admin,
-                scenario_id=None,
-                scope="all",
-                target_user_id=404,
-            )
+    def test_data_scope_label_is_role_aware(self):
+        self.assertEqual(
+            ReportService._data_scope_label("SCENARIO_USER", "self"), "本人个人数据"
+        )
+        self.assertEqual(
+            ReportService._data_scope_label("SUPER_ADMIN", "all"), "全平台数据"
+        )
+        self.assertEqual(
+            ReportService._data_scope_label("SCENARIO_ADMIN", "all"), "本场景全部用户数据"
+        )
 
 
 if __name__ == "__main__":

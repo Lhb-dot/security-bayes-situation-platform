@@ -30,8 +30,10 @@ from app.services.explanation_service import (
     _openai_stream,
     get_scenario_config,
 )
+from app.utils.common import get_logger
 
 
+logger = get_logger("model_evaluation")
 MODEL_EVALUATION_VERSION = "1.0"
 ADMIN_ROLE = "management"
 USER_ROLE = "user"
@@ -330,10 +332,17 @@ class ModelEvaluationService(ServiceBase):
             self._save(model, role, markdown, "ai", facts)
             yield "done", {"status": "模型评价完成", "source": "ai"}
         except Exception as exc:  # noqa: BLE001
-            reason_code, _ = _classify_ai_error(exc)
+            reason_code, reason_message = _classify_ai_error(exc)
+            logger.warning(
+                "model evaluation fell back to rules model_version_id=%s role=%s reason=%s",
+                model_id, role, reason_code,
+            )
             markdown = fallback_model_evaluation(facts, role)
             self._save(model, role, markdown, "fallback", facts)
-            yield "error", {"message": "AI 服务不可用，已回退规则模型评价", "reason_code": reason_code}
+            yield "error", {
+                "message": f"AI 评价未生成完成，已回退规则模板：{reason_message}",
+                "reason_code": reason_code,
+            }
             for chunk in _chunk_text(markdown):
                 yield "delta", {"content": chunk}
             yield "done", {"status": "已使用规则模板完成模型评价", "source": "fallback"}

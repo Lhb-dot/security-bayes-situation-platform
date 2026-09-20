@@ -55,8 +55,18 @@ AI_REQUEST_TIMEOUT_SECONDS = _env_float("AI_EXPLANATION_TIMEOUT_SECONDS", 60.0, 
 # Some OpenAI-compatible gateways need several seconds to warm up a model.
 # Keep connectivity checks strict, but allow a normal remote first response.
 AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 30.0, 3.0)
-AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 1200, 64)
-AI_MAX_OUTPUT_CHARS = _env_int("AI_EXPLANATION_MAX_CHARS", 12000, 512)
+# 默认不下发 max_tokens，由服务端按模型自身上限决定，即不设人为上限。
+# 推理型模型（如 deepseek-v4.1-flash）的思维链与正文共享同一个输出预算，
+# 任何人为上限都可能把正文挤掉：实测 1200 时正文为空、676 字时被截断在句子中间。
+# 个别网关强制要求该字段时，用 AI_EXPLANATION_MAX_TOKENS 显式给一个正值。
+AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 0, 0)
+
+
+class AIOutputTruncated(RuntimeError):
+    """模型在自身长度上限处停下，正文并未写完。
+
+    这类输出不能当成完整结果保存或展示——半截评价既没有结论也不可复核。
+    """
 
 
 def _configs() -> dict[str, dict[str, Any]]:
@@ -477,30 +487,37 @@ class AISettingService(ServiceBase):
 def _openai_stream(setting: UserAISetting, messages: list[dict[str, str]]) -> Iterable[str]:
     key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
     client = OpenAI(api_key=key, base_url=setting.base_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
-    stream = client.chat.completions.create(
-        model=setting.model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=AI_MAX_OUTPUT_TOKENS,
-        stream=True,
-    )
-    emitted = 0
+    request: dict[str, Any] = {
+        "model": setting.model,
+        "messages": messages,
+        "temperature": 0.1,
+        "stream": True,
+    }
+    # 不设上限时不带 max_tokens 字段，避免把预算从服务端手里抢过来。
+    if AI_MAX_OUTPUT_TOKENS > 0:
+        request["max_tokens"] = AI_MAX_OUTPUT_TOKENS
+    stream = client.chat.completions.create(**request)
+    finish_reason: str | None = None
     for chunk in stream:
         choices = getattr(chunk, "choices", None) or []
-        if choices:
-            content = getattr(getattr(choices[0], "delta", None), "content", None)
-            if content:
-                remaining = AI_MAX_OUTPUT_CHARS - emitted
-                if remaining <= 0:
-                    break
-                content = str(content)[:remaining]
-                emitted += len(content)
-                if content:
-                    yield content
+        if not choices:
+            continue
+        # 推理型模型把思维链放在 delta.reasoning_content，绝不能混进 Markdown 结果，
+        # 因此这里只取 delta.content。
+        if getattr(choices[0], "finish_reason", None):
+            finish_reason = choices[0].finish_reason
+        content = getattr(getattr(choices[0], "delta", None), "content", None)
+        if content:
+            yield str(content)
+    # 服务端自己截断时仍然要拦下：半截正文不能当完整结果存库或展示。
+    if finish_reason == "length":
+        raise AIOutputTruncated(f"AI 输出在模型长度上限处中断（finish_reason={finish_reason}）")
 
 
 def _classify_ai_error(exc: Exception) -> tuple[str, str]:
     """Map provider failures to stable, non-sensitive API messages."""
+    if isinstance(exc, AIOutputTruncated):
+        return "output_truncated", "AI 输出未写完，请重试"
     if isinstance(exc, openai.APITimeoutError):
         return "timeout", "AI 服务请求超时"
     if isinstance(exc, openai.RateLimitError):

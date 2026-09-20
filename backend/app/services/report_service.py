@@ -8,17 +8,19 @@
 report 表承载，此处 ReportService 即"实验记录/报表"能力的实现。
 
 业务规则（需求 6.8.5）：
-1. 普通用户生成报告时只能使用本人数据 → target_user_id 只能为空（本人）或等于本人。
-2. 管理员生成报告时可以选择全平台（target_user_id=None）或指定用户数据。
-3. 普通用户查看报告：本人生成的或定向给自己的（target_user_id == 本人）。
-4. 管理员可查看全部报告，并按 target_user_id 过滤。
+数据范围（三级角色）：
+1. 最外层管理员（SUPER_ADMIN）：可统计全平台数据，或本人的个人数据；不支持指定单个用户。
+2. 场景管理员（SCENARIO_ADMIN）：可统计本人绑定场景下所有用户的数据，或本人的个人数据。
+3. 场景用户（SCENARIO_USER）：只能统计本人的个人数据（scope 强制为 self）。
+4. 个人数据 = 当前账号自己产生的推理记录与风险事件（scope=self）。
+5. 报告不再包含模型版本评价（模型评价在模型中心单独查看/导出），避免把缓存的 AI 评价文本混入报告。
+6. 查看范围：普通用户只能看本人生成的报告；管理员看其管理范围内的报告。
 """
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import false, or_, select
 
-from app.models.app_user import AppUser
 from app.models.dataset import Dataset
 from app.models.inference_record import InferenceRecord
 from app.models.model_version import ModelVersion
@@ -31,6 +33,7 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
     REPORT_FORMATS,
+    REPORT_SCOPES,
     REPORT_TYPES,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
@@ -97,22 +100,16 @@ class ReportService(ServiceBase):
         current_user,
         scenario_id: Optional[int],
         scope: str,
-        target_user_id: Optional[int],
-        *,
-        force_user_scope: bool = False,
-    ) -> tuple[object, Optional[int], str, Optional[int]]:
-        """Normalize report scope after applying the three-level access rules.
+    ) -> tuple[object, Optional[int], str]:
+        """Normalize the report data scope after applying the three-level access rules.
 
-        Both report creation paths use the same boundary: management roles may
-        select a user within their scope, while scenario users are always
-        restricted to their own data.  Returning normalized values keeps the
-        downstream queries independent from request-specific role branches.
+        Both report creation paths share this boundary: management roles pick an
+        aggregate scope (whole platform / whole scenario) or their own personal
+        data, while scenario users are always pinned to their own data.
         """
         role = getattr(current_user, "role", None)
         if role == ROLE_SUPER_ADMIN:
-            if target_user_id is not None and self.db.get(AppUser, target_user_id) is None:
-                raise ServiceError(404, "目标用户不存在")
-            return role, scenario_id, scope, target_user_id
+            return role, scenario_id, scope
 
         bound_scenario_id = getattr(current_user, "scenario_id", None)
         if scenario_id is not None and scenario_id != bound_scenario_id:
@@ -120,19 +117,8 @@ class ReportService(ServiceBase):
         scenario_id = bound_scenario_id
 
         if role == ROLE_SCENARIO_USER:
-            if force_user_scope:
-                return role, scenario_id, "self", current_user.id
-            if target_user_id is not None and target_user_id != current_user.id:
-                raise ServiceError(403, "普通用户只能基于本人数据生成报告")
-            return role, scenario_id, scope, target_user_id
-
-        if role == ROLE_SCENARIO_ADMIN and target_user_id is not None:
-            target = self.db.get(AppUser, target_user_id)
-            if target is None:
-                raise ServiceError(404, "目标用户不存在")
-            if target.scenario_id != scenario_id:
-                raise ServiceError(403, "只能指定本人绑定场景内的用户")
-        return role, scenario_id, scope, target_user_id
+            return role, scenario_id, "self"
+        return role, scenario_id, scope
 
     # ------------------------------------------------------------------
     # 生成（需求 6.8.5：报告数据范围）
@@ -144,7 +130,6 @@ class ReportService(ServiceBase):
         title: str,
         report_type: str,
         content: str,
-        target_user_id: Optional[int] = None,
         file_path: Optional[str] = None,
         scenario_id: Optional[int] = None,
         format: str = "markdown",
@@ -153,8 +138,7 @@ class ReportService(ServiceBase):
     ):
         """生成态势报告。
 
-        - 普通用户：只能基于本人数据（target_user_id 必须为空或本人），否则 403。
-        - 系统管理员：可生成全平台或指定用户报告，可指定任意场景。
+        - 内容由调用方给出；数据范围仅用于场景绑定校验（不指定单个用户）。
         - 场景管理员/用户：scenario_id 强制为本人绑定场景。
         - 格式 / 定时：format 取值 markdown/html/pdf；定时时 interval_days 必填。
         """
@@ -171,18 +155,13 @@ class ReportService(ServiceBase):
         if scheduled and (interval_days is None or interval_days < 1):
             raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
 
-        _, scenario_id, _, target_user_id = self._resolve_generation_scope(
-            current_user,
-            scenario_id,
-            "self",
-            target_user_id,
-        )
+        _, scenario_id, _ = self._resolve_generation_scope(current_user, scenario_id, "self")
 
         report = Report(
             generated_by=current_user.id,
             title=title.strip(),
             report_type=report_type,
-            target_user_id=target_user_id,
+            target_user_id=None,
             content=content,
             file_path=file_path,
             scenario_id=scenario_id,
@@ -205,16 +184,18 @@ class ReportService(ServiceBase):
         title: str,
         scenario_id: Optional[int] = None,
         scope: str = "self",
-        target_user_id: Optional[int] = None,
         format: str = "markdown",
     ):
         """生成态势报告：统计 + 算法多视图研判 + NL 态势分析/风险规避指导。
 
-        权限与数据范围沿用 create 的三级隔离逻辑；内容由服务端基于真实
-        RiskEvent 与推理记录（含 explain_data）组装，落库 report.content 与
-        report.report_data（结构化，供前端渲染图表）。
+        数据范围：管理员 = 全平台 / 本场景聚合 或 本人个人数据；场景用户固定为本人数据。
+        内容由服务端基于真实 RiskEvent 与推理记录（含 explain_data）组装，
+        落库 report.content 与 report.report_data（结构化，供前端渲染图表）。
         """
         self.require_login(current_user)
+        err = validate_enum(scope, REPORT_SCOPES, "scope")
+        if err:
+            raise ServiceError(400, err)
         err = validate_enum(format, REPORT_FORMATS, "format")
         if err:
             raise ServiceError(400, err)
@@ -222,23 +203,20 @@ class ReportService(ServiceBase):
         if err:
             raise ServiceError(400, err)
 
-        role, scenario_id, scope, target_user_id = self._resolve_generation_scope(
-            current_user,
-            scenario_id,
-            scope,
-            target_user_id,
-            force_user_scope=True,
+        role, scenario_id, scope = self._resolve_generation_scope(
+            current_user, scenario_id, scope
         )
 
-        # 1) 汇总真实数据（风险事件 + 推理记录，按 6.10.1 三级角色隔离）
-        events = self._gather_events(current_user, role, scenario_id, scope, target_user_id)
-        records = self._gather_records(current_user, role, scenario_id, scope, target_user_id)
+        # 1) 汇总真实数据（风险事件 + 推理记录，按三级角色 + 数据范围隔离）
+        events = self._gather_events(current_user, role, scenario_id, scope)
+        records = self._gather_records(current_user, role, scenario_id, scope)
 
-        # 2) 组装 6.10.2 定义的完整 report_data（九大部分）
+        # 2) 组装 report_data（不含模型版本评价，模型评价在模型中心单独导出）
         report_data = self._build_report_data(
             title=title,
             scenario_id=scenario_id,
             scope=scope,
+            role=role,
             current_user=current_user,
             events=events,
             records=records,
@@ -257,7 +235,7 @@ class ReportService(ServiceBase):
             generated_by=current_user.id,
             title=title.strip(),
             report_type="USER_SNAPSHOT" if scope == "self" else "SCENE_SNAPSHOT",
-            target_user_id=target_user_id if scope == "user" else None,
+            target_user_id=None,
             scenario_id=scenario_id,
             content=content,
             report_data=report_data,
@@ -271,9 +249,15 @@ class ReportService(ServiceBase):
         return ok(data=self._serialize(report, include_report_data=True), message="报告已生成")
 
     # ------------------------------------------------------------------
-    # 数据汇总（6.10.1 三级角色隔离口径）
+    # 数据汇总（三级角色 + 数据范围隔离口径）
     # ------------------------------------------------------------------
-    def _gather_events(self, current_user, role, scenario_id, scope, target_user_id):
+    def _gather_events(self, current_user, role, scenario_id, scope):
+        """汇总风险事件。
+
+        - SUPER_ADMIN：仅平台数据集派生的风险事件（公司/个人数据集对超管不可见）；
+        - SCENARIO_ADMIN：绑定场景内全部风险事件；
+        - scope=self（个人数据）：额外限定为当前账号本人创建的事件。
+        """
         stmt = select(RiskEvent)
         if scenario_id is not None:
             stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
@@ -281,14 +265,19 @@ class ReportService(ServiceBase):
             stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
                 Dataset.visibility == DATASET_VISIBILITY_PLATFORM
             )
-        elif role == ROLE_SCENARIO_USER:
+        if scope == "self":
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
-        if scope == "user" and target_user_id is not None:
-            stmt = stmt.where(RiskEvent.created_by_user_id == target_user_id)
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())
         return self.db.scalars(stmt).all()
 
-    def _gather_records(self, current_user, role, scenario_id, scope, target_user_id):
+    def _gather_records(self, current_user, role, scenario_id, scope):
+        """汇总推理记录（含所属模型版本）。
+
+        - SUPER_ADMIN：仅平台数据集训练出的模型版本；
+        - SCENARIO_ADMIN：绑定场景内全部记录（含未发布模型）；
+        - 场景用户：仅已发布模型；
+        - scope=self（个人数据）：额外限定为当前账号本人的推理记录。
+        """
         stmt = (
             select(InferenceRecord, ModelVersion)
             .join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id)
@@ -301,18 +290,19 @@ class ReportService(ServiceBase):
             )
         elif role == ROLE_SCENARIO_USER:
             stmt = stmt.where(
-                InferenceRecord.user_id == current_user.id,
                 ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES),
             )
-        if scope == "user" and target_user_id is not None:
-            stmt = stmt.where(InferenceRecord.user_id == target_user_id)
+        if scope == "self":
+            stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
         return self.db.execute(stmt).all()
 
     # ------------------------------------------------------------------
-    # 组装 6.10.2 定义的完整 report_data
+    # 组装报告结构化数据 report_data（不含模型版本评价）
     # ------------------------------------------------------------------
-    def _build_report_data(self, title, scenario_id, scope, current_user, events, records):
+    def _build_report_data(
+        self, title, scenario_id, scope, role, current_user, events, records
+    ):
         scenario = self.db.get(Scenario, scenario_id) if scenario_id else None
 
         times = [r.executed_at for r, _m in records if r.executed_at]
@@ -335,9 +325,7 @@ class ReportService(ServiceBase):
             or getattr(current_user, "username", ""),
             "scenario_name": scenario.name if scenario else None,
             "scenario_code": scenario.code if scenario else None,
-            "data_scope": {"self": "本人数据", "all": "全平台/本场景数据", "user": "指定用户数据"}.get(
-                scope, scope
-            ),
+            "data_scope": self._data_scope_label(role, scope),
             "datasets": [{"logical_id": k, "version": v} for k, v in datasets.items()],
             "algorithms": [{"code": k, "name": v} for k, v in algorithms.items()],
             "model_versions": [{"id": k, "algorithm_code": v} for k, v in models.items()],
@@ -347,14 +335,12 @@ class ReportService(ServiceBase):
             events, records, risk_view.load_thresholds(self.db, current_user)
         )
         model_analysis = self._model_analysis(records)
-        model_evaluations = self._model_evaluations(current_user, records)
 
         return {
             "report_info": report_info,
             "overview": overview,
             "prediction": self._prediction(records),
             "model_analysis": model_analysis,
-            "model_evaluations": model_evaluations,
             "feature_analysis": self._feature_analysis(records),
             "trend": self._trend(records),
             "key_events": self._key_events(
@@ -364,34 +350,13 @@ class ReportService(ServiceBase):
         }
 
     @staticmethod
-    def _model_evaluations(current_user, records):
-        """Reuse saved model wording without making an AI call during reports."""
-        management = getattr(current_user, "role", None) in (
-            ROLE_SUPER_ADMIN,
-            ROLE_SCENARIO_ADMIN,
-        )
-        role_key = "management" if management else "user"
-        result = []
-        seen = set()
-        for _record, model in records:
-            if model.id in seen:
-                continue
-            seen.add(model.id)
-            # Ordinary-user reports must never expose a disabled model's
-            # evaluation, even when an old inference record still exists.
-            if not management and model.status not in USER_VISIBLE_MODEL_STATUSES:
-                continue
-            artifact = (model.ai_evaluation or {}).get(role_key) or {}
-            result.append({
-                "model_version_id": model.id,
-                "algorithm_code": model.algorithm.code if model.algorithm else None,
-                "algorithm_name": model.algorithm.display_name if model.algorithm else None,
-                "available": bool(artifact.get("markdown")),
-                "source": artifact.get("source"),
-                "markdown": str(artifact["markdown"]) if artifact.get("markdown") else None,
-                "generated_at": artifact.get("generated_at"),
-            })
-        return result
+    def _data_scope_label(role, scope) -> str:
+        """数据范围的中文口径，供报告正文与详情页展示。"""
+        if scope == "self":
+            return "本人个人数据"
+        if role == ROLE_SUPER_ADMIN:
+            return "全平台数据"
+        return "本场景全部用户数据"
 
     @staticmethod
     def _period(times):
@@ -766,28 +731,15 @@ class ReportService(ServiceBase):
             for e in report_data["key_events"]:
                 lines.append(f"- [{e['risk_level']}] {e['time']} · 概率 {e['probability']} · {e['status']}")
 
-        lines += ["", "## 七、模型版本评价"]
-        evaluations = report_data.get("model_evaluations") or []
-        if evaluations:
-            for evaluation in evaluations:
-                name = evaluation.get("algorithm_name") or evaluation.get("algorithm_code") or "模型"
-                lines.append(f"### {name}（模型 {evaluation.get('model_version_id')}）")
-                if evaluation.get("markdown"):
-                    lines.append(str(evaluation["markdown"]))
-                else:
-                    lines.append("该模型暂无已保存评价文本。")
-        else:
-            lines.append("本报告范围内暂无已保存的模型评价。")
-
         lines += [
             "",
-            "## 八、态势分析",
+            "## 七、态势分析",
             report_data.get("analysis_nl", ""),
             "",
-            "## 九、风险规避指导",
+            "## 八、风险规避指导",
             report_data.get("guidance_nl", ""),
             "",
-            "## 十、数据说明",
+            "## 九、数据说明",
             report_data.get("data_notes", ""),
             "",
             "---",
@@ -802,29 +754,25 @@ class ReportService(ServiceBase):
     def get_list(
         self,
         current_user,
-        target_user_id: Optional[int] = None,
         page: int = 1,
         page_size: int = 10,
     ):
         """报告列表（按三级角色隔离）。
 
-        系统管理员：全部报告，可按 target_user_id 过滤；
+        系统管理员：全部报告；
         场景管理员：自己绑定场景下的报告；
-        场景用户：本人生成的或定向给自己的报告。
+        场景用户：本人生成的报告。
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
         stmt = select(Report)
-        if role == ROLE_SUPER_ADMIN:
-            if target_user_id is not None:
-                stmt = stmt.where(Report.target_user_id == target_user_id)
-        elif role == ROLE_SCENARIO_ADMIN:
+        if role == ROLE_SCENARIO_ADMIN:
             scid = getattr(current_user, "scenario_id", None)
             if scid is None:
                 stmt = stmt.where(false())  # 未绑定场景：看不到任何报告
             else:
                 stmt = stmt.where(Report.scenario_id == scid)
-        else:
+        elif role != ROLE_SUPER_ADMIN:
             stmt = stmt.where(
                 or_(
                     Report.generated_by == current_user.id,

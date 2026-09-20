@@ -17,9 +17,6 @@ class ReportCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=128, description="报告标题")
     report_type: ReportType = Field(..., description="报告类型")
     content: str = Field(..., min_length=1, description="报告内容")
-    target_user_id: Optional[int] = Field(
-        None, description="目标用户 ID（普通用户只能为空或本人）"
-    )
     file_path: Optional[str] = Field(None, description="报告文件路径")
     scenario_id: Optional[int] = Field(None, description="所属场景 ID（用于场景隔离）")
     format: ReportFormat = Field("markdown", description="报告格式")
@@ -39,14 +36,16 @@ class ReportScheduleUpdate(BaseModel):
 
 
 class ReportGenerate(BaseModel):
-    """自动生成态势报告（服务端基于真实数据 + 算法解释组装内容）。"""
+    """自动生成态势报告（服务端基于真实数据 + 算法解释组装内容）。
+
+    数据范围只区分聚合数据与本人个人数据，不再支持指定单个用户。
+    """
 
     title: str = Field(..., min_length=1, max_length=128, description="报告标题")
     scenario_id: Optional[int] = Field(
         None, description="所属场景 ID（非超管强制为本人绑定场景）"
     )
-    scope: Literal["self", "all", "user"] = Field("self", description="数据范围")
-    target_user_id: Optional[int] = Field(
-        None, description="目标用户 ID（scope=user 时，仅管理员生效）"
+    scope: Literal["self", "all"] = Field(
+        "self", description="数据范围：self=本人个人数据；all=全平台/本场景聚合数据"
     )
     format: ReportFormat = Field("markdown", description="报告格式")

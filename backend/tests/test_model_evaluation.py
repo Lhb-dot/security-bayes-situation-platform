@@ -15,7 +15,6 @@ from app.services.model_evaluation_service import (  # noqa: E402
     public_model_attributes,
 )
 from app.services.model_version_service import ModelVersionService  # noqa: E402
-from app.services.report_service import ReportService  # noqa: E402
 
 
 class EvaluationDb:
@@ -155,38 +154,6 @@ class ModelEvaluationTests(unittest.TestCase):
             user_data = service._to_dict(model, user)
         self.assertEqual(admin_data["training_parameters"], {"k": 5})
         self.assertEqual(user_data["training_parameters"], {})
-
-    def test_report_reuses_role_scoped_evaluation_text_only(self):
-        model = make_model()
-        model.ai_evaluation = {
-            "management": {
-                "source": "ai",
-                "markdown": "管理员诊断",
-                "generated_at": "2026-09-14T00:00:00+00:00",
-                "facts_snapshot": {"model": {"training_parameters": {"k": 5}}},
-            },
-            "user": {
-                "source": "ai",
-                "markdown": "用户提示",
-                "generated_at": "2026-09-14T00:00:00+00:00",
-                "facts_snapshot": {"model": {"quality_metrics": {"f1": 0.8}}},
-            },
-        }
-        admin = SimpleNamespace(id=1, role="SUPER_ADMIN")
-        user = SimpleNamespace(id=2, role="SCENARIO_USER")
-        admin_result = ReportService._model_evaluations(admin, [(None, model)])
-        user_result = ReportService._model_evaluations(user, [(None, model)])
-        self.assertEqual(admin_result[0]["markdown"], "管理员诊断")
-        self.assertEqual(user_result[0]["markdown"], "用户提示")
-        self.assertNotIn("facts_snapshot", admin_result[0])
-        self.assertNotIn("facts_snapshot", user_result[0])
-
-    def test_user_report_omits_non_published_model_evaluation(self):
-        model = make_model(status="DISABLED")
-        model.ai_evaluation = {"user": {"source": "ai", "markdown": "旧评价"}}
-        user = SimpleNamespace(id=2, role="SCENARIO_USER")
-        self.assertEqual(ReportService._model_evaluations(user, [(None, model)]), [])
-
 
 if __name__ == "__main__":
     unittest.main()

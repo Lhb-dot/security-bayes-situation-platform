@@ -25,8 +25,7 @@ export const useReportStore = defineStore('report', {
     async generateReport(params: {
       scenario_id: ScenarioId;
       title: string;
-      scope: 'self' | 'all' | 'user';
-      target_user_id?: string;
+      scope: 'self' | 'all';
       format?: Report['format'];
       scheduled?: boolean;
       interval_days?: number;

@@ -350,6 +350,8 @@ const generateModelEvaluation = async (
       onDelta: (content) => { bucket.markdown += content; },
       onError: (data) => {
         bucket.error = String(data.message || 'AI 服务不可用');
+        // 流式中途失败时先丢弃半截正文，避免「半句 AI 文本 + 规则模板」拼在一起。
+        bucket.markdown = '';
       },
       onDone: () => {
         // 生成结束即清空状态条，正文自己会呈现结果。
@@ -368,6 +370,23 @@ const generateModelEvaluation = async (
     evaluationLoading.value = false;
     evaluationAbort = null;
   }
+};
+
+/** 导出当前视角的模型评价为 Markdown 文件（内容与弹窗中展示的一致） */
+const exportModelEvaluation = () => {
+  const target = evaluationTarget.value;
+  const markdown = evaluationMarkdown.value;
+  if (!target || !markdown) return;
+  const audienceLabel = evaluationAudience.value === 'user' ? '用户视角' : '管理员视角';
+  const content = `# 模型 #${target.id} 评价（${audienceLabel}）\n\n${markdown}\n`;
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `model-${target.id}-evaluation-${evaluationAudience.value}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  ElMessage.success('模型评价已导出');
 };
 
 /** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
@@ -490,6 +509,14 @@ onMounted(async () => {
               </div>
             </div>
             <div class="model-evaluation-modal__head-actions">
+              <button
+                class="op-btn op-btn--quiet"
+                type="button"
+                :disabled="!evaluationMarkdown"
+                @click="exportModelEvaluation"
+              >
+                导出
+              </button>
               <button
                 class="op-btn"
                 :disabled="evaluationLoading || (evaluationAudience === 'user' && evaluationTarget.status !== 'PUBLISHED')"

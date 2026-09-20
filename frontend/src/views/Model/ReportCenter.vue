@@ -6,9 +6,7 @@
  * 操作：查看、下载、重新生成
  */
 import { computed, onMounted, ref } from 'vue';
-import DOMPurify from 'dompurify';
-import { marked } from 'marked';
-import type { Report, ReportData, ScenarioId, UserAccount } from '@/types/security';
+import type { Report, ReportData, ScenarioId } from '@/types/security';
 import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
 import { useScenarioStore } from '@/stores/scenarioStore';
@@ -19,7 +17,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 const reports = ref<Report[]>([]);
 const loading = ref(true);
 const error = ref('');
-const users = ref<UserAccount[]>([]);
 const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
 
@@ -82,8 +79,7 @@ const handleRegenerate = async (report: Report) => {
     await generateReport({
       scenario_id: report.scenario_id,
       title: report.title,
-      scope: report.target_user_id ? 'user' : isAdmin.value ? 'all' : 'self',
-      target_user_id: report.target_user_id,
+      scope: isAdmin.value ? 'all' : 'self',
       format: report.format,
       scheduled: report.scheduled,
       interval_days: report.interval_days,
@@ -120,8 +116,7 @@ const genVisible = ref(false);
 const genForm = ref({
   title: '',
   scenario_id: '' as ScenarioId | '',
-  scope: 'self' as 'self' | 'all' | 'user',
-  target_user_id: '',
+  scope: 'self' as 'self' | 'all',
   format: 'markdown' as 'markdown' | 'html' | 'pdf',
   scheduled: false,
   interval_days: 7,
@@ -131,7 +126,7 @@ const viewVisible = ref(false);
 const viewTarget = ref<Report | null>(null);
 
 const openGenerate = () => {
-  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: isAdmin.value ? 'all' : 'self', target_user_id: '', format: 'markdown', scheduled: false, interval_days: 7 };
+  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: isAdmin.value ? 'all' : 'self', format: 'markdown', scheduled: false, interval_days: 7 };
   genVisible.value = true;
 };
 
@@ -144,16 +139,11 @@ const submitGenerate = async () => {
     ElMessage.warning('请选择报告场景');
     return;
   }
-  if (genForm.value.scope === 'user' && !genForm.value.target_user_id) {
-    ElMessage.warning('请选择目标用户');
-    return;
-  }
   try {
     const created = await generateReport({
       scenario_id: genForm.value.scenario_id as ScenarioId,
       title: genForm.value.title.trim(),
       scope: genForm.value.scope,
-      target_user_id: genForm.value.target_user_id || undefined,
       format: genForm.value.format,
       scheduled: genForm.value.scheduled,
       interval_days: genForm.value.scheduled ? genForm.value.interval_days : undefined,
@@ -245,9 +235,6 @@ const viewReportData = computed<ReportData | undefined>(() => {
 
 const pctText = (v: number | null | undefined): string => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
 
-const safeReportMarkdown = (value: string | null | undefined) =>
-  value ? DOMPurify.sanitize(marked.parse(value, { async: false }) as string) : '';
-
 /** 态势核心指标卡 */
 const overviewMetrics = computed(() => {
   const o = viewReportData.value?.overview;
@@ -324,10 +311,6 @@ const keyEvents = computed(() => viewReportData.value?.key_events ?? []);
 onMounted(async () => {
   if (!userStore.initialized) await userStore.bootstrap();
   await scenarioStore.fetchScenarioList();
-  if (isAdmin.value) {
-    await userStore.fetchUsers({ page: 1, page_size: 200 });
-    users.value = userStore.users;
-  }
   await loadReports();
 });
 </script>
@@ -339,7 +322,9 @@ onMounted(async () => {
         <p class="eyebrow">Report Center</p>
         <h2>报告中心</h2>
         <p class="report-center__desc">
-          {{ isAdmin ? '可基于全平台或指定用户数据生成报告并导出' : '仅可基于本人数据生成报告并导出' }}
+          {{ isSuperAdmin ? '可基于全平台聚合数据或本人个人数据生成报告并导出'
+            : isAdmin ? '可基于本场景聚合数据或本人个人数据生成报告并导出'
+            : '仅可基于本人个人数据生成报告并导出' }}
         </p>
       </div>
       <button class="gen-btn" @click="openGenerate">+ 生成报告</button>
@@ -455,16 +440,8 @@ onMounted(async () => {
         <div class="gen-field">
           <label class="gen-field__label">数据范围</label>
           <select v-model="genForm.scope" class="gen-field__input" :disabled="!isAdmin">
-            <option value="self">本人数据</option>
-            <option v-if="isAdmin" value="all">全平台数据</option>
-            <option v-if="isAdmin" value="user">指定用户数据</option>
-          </select>
-        </div>
-        <div v-if="isAdmin && genForm.scope === 'user'" class="gen-field">
-          <label class="gen-field__label">目标用户<span class="required">*</span></label>
-          <select v-model="genForm.target_user_id" class="gen-field__input">
-            <option value="" disabled>-- 请选择用户 --</option>
-            <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}（{{ u.display_name }}）</option>
+            <option value="self">本人个人数据</option>
+            <option v-if="isAdmin" value="all">聚合数据</option>
           </select>
         </div>
         <div class="gen-field">
@@ -586,26 +563,6 @@ onMounted(async () => {
           <p v-if="singleViewModels.length" class="report-section__hint">
             无独立视图：{{ singleViewModels.map((m) => m.algorithm_name ?? m.algorithm_code).join('、') }}
           </p>
-        </section>
-
-        <!-- 模型评价来自报告生成时保存的模型快照，不重新调用 AI。 -->
-        <section v-if="viewReportData.model_evaluations?.length" class="report-section">
-          <h3 class="report-section__title">模型版本评价</h3>
-          <div
-            v-for="evaluation in viewReportData.model_evaluations"
-            :key="evaluation.model_version_id"
-            class="model-evaluation-report-block"
-          >
-            <p class="report-section__hint">
-              <b>{{ evaluation.algorithm_name ?? evaluation.algorithm_code ?? '模型' }}</b>
-              · {{ evaluation.available ? '评价已生成' : '暂无已保存评价' }}
-            </p>
-            <div
-              v-if="evaluation.markdown"
-              class="report-nl model-evaluation-report-markdown"
-              v-html="safeReportMarkdown(evaluation.markdown)"
-            ></div>
-          </div>
         </section>
 
         <!-- 五、特征加权条件概率 -->
@@ -1123,20 +1080,6 @@ onMounted(async () => {
 
 .report-nl--guidance {
   color: #cfe2ff;
-}
-
-.model-evaluation-report-block {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-left: 2px solid rgba(83, 229, 200, 0.35);
-  background: rgba(8, 17, 31, 0.28);
-}
-
-.model-evaluation-report-markdown :deep(h1),
-.model-evaluation-report-markdown :deep(h2),
-.model-evaluation-report-markdown :deep(h3) {
-  margin: 10px 0 6px;
-  font-size: 0.95rem;
 }
 
 /* 6.10.3 报告可视化补充样式 */

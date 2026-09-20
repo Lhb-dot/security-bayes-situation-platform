@@ -72,7 +72,7 @@ const radarSeries = () => [
     <DashCard title="最小间距分布" source="按最小间距分箱统计">
       <DashColumns :items="data.distance_distribution" :height="190" axis-unit="单位：条" />
     </DashCard>
-    <DashCard title="近 7 天推理活动趋势（条）" source="近 7 天按日聚合">
+    <DashCard title="近 10 天推理活动趋势（条）" source="近 10 天按日聚合">
       <DashLine
         :points="data.activity_trend.map((item) => ({ label: fmtDate(item.date), value: item.total, value2: item.risk }))"
         name="推理总数"

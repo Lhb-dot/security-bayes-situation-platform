@@ -124,6 +124,9 @@ EVENT_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOL
 #: 风险分固定分箱（下限由「只在判风险时建事件」决定，恒 ≥0.5）
 SCORE_BINS = (("0.5-0.7", 0.5, 0.7), ("0.7-0.9", 0.7, 0.9), ("0.9-1.0", 0.9, 1.01))
 
+#: 工作台「推理活动趋势」的统计窗口天数（前端标题需同步）
+ACTIVITY_TREND_DAYS = 10
+
 # 注：原 HIGH_CONFIDENCE = 0.8 已删除。它是写死的「高置信告警」线，与账号阈值并存
 # 会导致同一页面上「高风险事件数」和「高置信告警数」用两套口径。
 # 现在统一走 risk_view：按当前账号在该场景的高风险阈值判定，生效阈值随 summary 下发。
@@ -1315,9 +1318,10 @@ class DashboardService(ServiceBase):
         return ok(data=data)
 
     def _activity_trend(self, current_user, dataset: Dataset | None) -> list[dict[str, Any]]:
-        """近 7 天推理活动趋势（occurred_at = 推理时间，代表使用量）。"""
+        """近 ACTIVITY_TREND_DAYS 天推理活动趋势（occurred_at = 推理时间，代表使用量）。"""
+        days = ACTIVITY_TREND_DAYS
         today = datetime.now(timezone.utc).date()
-        start = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc)
+        start = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(), tzinfo=timezone.utc)
         stmt = select(InferenceRecord).where(InferenceRecord.executed_at >= start)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_USER:
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
@@ -1328,7 +1332,7 @@ class DashboardService(ServiceBase):
         records = self.db.scalars(stmt).all()
         buckets = {
             (today - timedelta(days=offset)).isoformat(): {"total": 0, "risk": 0}
-            for offset in range(6, -1, -1)
+            for offset in range(days - 1, -1, -1)
         }
         for record in records:
             if not record.executed_at:

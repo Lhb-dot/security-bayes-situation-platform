@@ -314,4 +314,6 @@ HANDLING_ACTION_MAX_LEN = 32
 # ---------------------------------------------------------------------------
 REPORT_TYPES = ("SCENE_SNAPSHOT", "USER_SNAPSHOT")
 REPORT_FORMATS = ("markdown", "html", "pdf")
+#: 报告数据范围：self=本人个人数据；all=管理员管理范围内的聚合数据（全平台 / 本场景）；已取消“指定单个用户”。
+REPORT_SCOPES = ("self", "all")
 REPORT_TYPE_MAX_LEN = 16

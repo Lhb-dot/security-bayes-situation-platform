@@ -319,15 +319,6 @@ export interface ReportData {
     calculation_method: string | null;
     has_views: boolean;
   }>;
-  model_evaluations?: Array<{
-    model_version_id: number;
-    algorithm_code: string | null;
-    algorithm_name: string | null;
-    available: boolean;
-    source: 'ai' | 'fallback' | null;
-    markdown: string | null;
-    generated_at: string | null;
-  }>;
   feature_analysis: {
     calculation_method: string | null;
     top_features: Array<ReportFeature>;
@@ -373,7 +364,6 @@ export interface Report {
   interval_days?: number;
   /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
   generated_by?: string;
-  target_user_id?: string;
 }
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================

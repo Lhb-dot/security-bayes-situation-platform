@@ -310,6 +310,8 @@ const generateExplanation = async (result: PredictResult) => {
           explanationError.value = message;
           explanationFallback.value = true;
           explanationStatus.value = 'fallback';
+          // 流式中途失败时先丢弃半截正文，避免「半句 AI 文本 + 规则模板」拼在一起。
+          explanationMarkdown.value = '';
         },
         onDone: (data) => {
           explanationLoading.value = false;
