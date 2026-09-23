@@ -56,7 +56,6 @@ from app.services.constants import (
     dataset_display_name_of,
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
-    RISK_LEVEL_MEDIUM,
     RISK_EVENT_STATUS_PENDING,
     RISK_EVENT_STATUS_PROCESSING,
     RISK_EVENT_STATUS_RESOLVED,
@@ -331,6 +330,38 @@ def _risk_score(scores: list[float]) -> int:
 
 def _percent(part: int, total: int) -> float:
     return round(part / total, 4) if total else 0.0
+
+
+# ---------------------------------------------------------------------------
+# 场景风险等级：按「风险样本占比」判档
+# ---------------------------------------------------------------------------
+#
+# 旧口径 `"high" if high_count else ...` 只看**有没有**高危事件：场景里存在 1 条就整体
+# 标高危，与样本量、与风险占比都无关。实测四个场景全部落在高危，标签没有区分度。
+#
+# 现改为按 risk_sample_rate（风险样本量 / 有效样本量）判档。该值由 _effective_counts
+# 全量统计数据集标签列得出，与卡片上「有效样本量」同源，口径自洽。
+#
+# 边界：无样本（分母为 0）时 _percent 返回 0.0 → 落到低危。这与旧口径的兜底一致，
+# 不额外引入「无数据」等级（前端 risk_level 契约只有 high/medium/low 三档）。
+
+#: 风险样本占比 >= 该值判为高危
+SCENARIO_HIGH_RATE = 0.50
+#: 风险样本占比 >= 该值判为中危；低于该值判为低危
+SCENARIO_MEDIUM_RATE = 0.25
+
+
+def _risk_level_of_rate(rate: float) -> str:
+    """按风险样本占比判级（rate 为 0~1 的小数）。
+
+    返回**小写**等级：本接口的对外契约一直是小写（改动前就是字面量 ``"high"``），
+    与 ``risk_view`` 那套大写枚举不同，前端 ``Scenario.risk_level`` 按小写取值。
+    """
+    if rate >= SCENARIO_HIGH_RATE:
+        return "high"
+    if rate >= SCENARIO_MEDIUM_RATE:
+        return "medium"
+    return "low"
 
 
 def _scenario_key(scenario_code: str | None, risk_type: str | None) -> str:
@@ -943,7 +974,7 @@ class DashboardService(ServiceBase):
         thresholds = risk_view.load_thresholds(self.db, current_user)
 
         cards: list[dict[str, Any]] = []
-        total_datasets = total_samples = total_models = total_events = total_high = total_medium = 0
+        total_datasets = total_samples = total_models = total_events = total_high = total_risk = 0
         all_scores: list[float] = []
         for scenario in scenarios:
             scene_datasets = [item for item in datasets if item.scenario_id == scenario.id]
@@ -952,18 +983,17 @@ class DashboardService(ServiceBase):
             high_count = sum(
                 1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_HIGH
             )
-            medium_count = sum(
-                1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_MEDIUM
-            )
             published = published_by_scenario.get(scenario.id, 0)
             scores = [float(event.risk_score or 0) for event in scene_events]
+            # 场景等级判定依据：风险样本占比（与卡片「有效样本量」同源）
+            risk_rate = _percent(risk_samples, samples)
 
             total_datasets += dataset_count
             total_samples += samples
             total_models += published
             total_events += len(scene_events)
             total_high += high_count
-            total_medium += medium_count
+            total_risk += risk_samples
             all_scores.extend(scores)
 
             cards.append(
@@ -976,13 +1006,13 @@ class DashboardService(ServiceBase):
                     "dataset_count": dataset_count,  # 去重口径
                     "sample_count": samples,  # 去重口径有效样本量
                     "risk_sample_count": risk_samples,
-                    "risk_sample_rate": _percent(risk_samples, samples),
+                    "risk_sample_rate": risk_rate,
                     "published_model_count": published,
                     "event_count": len(scene_events),
                     "high_risk_count": high_count,
                     # 风险分 = 该场景真实风险事件 risk_score 均值 ×100（无事件记 0）
                     "risk_score": _risk_score(scores),
-                    "risk_level": "high" if high_count else ("medium" if medium_count else "low"),
+                    "risk_level": _risk_level_of_rate(risk_rate),
                 }
             )
 
@@ -997,7 +1027,7 @@ class DashboardService(ServiceBase):
                     "event_count": total_events,
                     "high_risk_count": total_high,
                     "risk_score": _risk_score(all_scores),
-                    "risk_level": "high" if total_high else ("medium" if total_medium else "low"),
+                    "risk_level": _risk_level_of_rate(_percent(total_risk, total_samples)),
                 },
             }
         )

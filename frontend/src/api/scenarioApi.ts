@@ -33,7 +33,7 @@ export interface ApiScenarioOverviewCard {
   sample_count: number;
   /** 标签判定为风险的样本数 */
   risk_sample_count: number;
-  /** 风险样本占比（百分数，如 14.2） */
+  /** 风险样本占比（0~1 的小数，如 0.142 即 14.2%） */
   risk_sample_rate: number;
   /** 已发布（PUBLISHED）模型版本数 */
   published_model_count: number;
@@ -41,6 +41,7 @@ export interface ApiScenarioOverviewCard {
   high_risk_count: number;
   /** 风险分 0-100（所辖事件 risk_score 均值 ×100，无事件记 0） */
   risk_score: number;
+  /** 场景等级：由 risk_sample_rate 分档（>=0.50 high / >=0.25 medium / 其余 low），小写 */
   risk_level: 'high' | 'medium' | 'low';
 }
 
