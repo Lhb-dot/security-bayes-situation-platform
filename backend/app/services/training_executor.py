@@ -39,6 +39,7 @@ def _request_train(
         resp = requests.post(
             f"{url}/train",
             json={
+                "algorithm_code": algorithm_code,
                 "dataset_path": dataset_path,
                 "model_save_path": model_save_path,
                 "training_parameters": training_parameters or {},
@@ -116,6 +117,7 @@ def build_model_save_path(model_id: int, algorithm_code: str = "PMWNB") -> str:
 
 def _request_predict(
     url: str,
+    algorithm_code: str,
     model_path: str,
     arff_path: str,
     features: dict,
@@ -129,6 +131,7 @@ def _request_predict(
         resp = requests.post(
             f"{url}/predict",
             json={
+                "algorithm_code": algorithm_code,
                 "model_path": model_path,
                 "arff_path": arff_path,
                 "features": features,
@@ -156,7 +159,7 @@ def execute_algorithm_predict(
     url = PREDICT_SERVICE_URL if code == "PMWNB" else ALGORITHM_SERVICE_URLS.get(code)
     if not url:
         raise RuntimeError(f"未配置 {code} 算法服务")
-    return _request_predict(url, model_path, arff_path, features, risk_labels)
+    return _request_predict(url, code, model_path, arff_path, features, risk_labels)
 
 
 def execute_pmwnb_predict(

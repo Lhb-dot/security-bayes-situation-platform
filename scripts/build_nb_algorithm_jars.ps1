@@ -33,42 +33,25 @@ $manifest = Join-Path $buildRoot "MANIFEST.MF"
     ""
 ) | Set-Content -LiteralPath $manifest -Encoding ascii
 
-function New-AlgorithmJar {
-    param(
-        [string]$Name,
-        [string[]]$Entries
-    )
-    $target = Join-Path $lib $Name
-    if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
-    # Each service JAR is self-contained with the four compiled algorithm families.
-    # The second startup argument selects the active classifier implementation.
-    & jar cfm $target $manifest -C $classes .
-    if ($LASTEXITCODE -ne 0) { throw "jar 打包失败: $Name" }
-    Write-Host "Created $target"
+# 单个服务 JAR：5 个算法（A2WNB/CAVWNB/DIWNB/MAWNB/EMAWNB）由同一个进程提供，
+# 算法随请求体的 algorithm_code 指定，因此只需要一个包含全部算法类的 JAR。
+# 合并前这里是 5 个 JAR，但打包命令始终用 -C $classes .（整个目录），
+# 传入的 $Entries 从未被使用，5 个文件因此字节完全相同——本次一并去掉这个死参数。
+$jarName = "nb-algorithm-service.jar"
+$target = Join-Path $lib $jarName
+if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
+& jar cfm $target $manifest -C $classes .
+if ($LASTEXITCODE -ne 0) { throw "jar 打包失败: $jarName" }
+Write-Host "Created $target"
+
+# 清掉合并前遗留的 5 个同名异构 JAR，避免"到底跑的是哪个"的混淆
+$legacyJars = @(
+    "a2wnb-service.jar", "cavwnb-service.jar", "diwnb-service.jar",
+    "emawnb-service.jar", "mawnb-service.jar"
+)
+foreach ($name in $legacyJars) {
+    $stale = Join-Path $lib $name
+    if (Test-Path $stale) { Remove-Item -LiteralPath $stale -Force; Write-Host "Removed legacy $stale" }
 }
 
-New-AlgorithmJar "a2wnb-service.jar" @(
-    "weka/classifiers/zh/A2WNB",
-    "weka/classifiers/bayes/WANBIA",
-    "weka/estimators/DiscreteEstimator.class"
-)
-New-AlgorithmJar "cavwnb-service.jar" @(
-    "weka/classifiers/zh/CAVWNB",
-    "weka/estimators/DiscreteEstimator.class"
-)
-New-AlgorithmJar "diwnb-service.jar" @(
-    "weka/classifiers/mkx/DIWNB",
-    "weka/estimators/DiscreteEstimator.class"
-)
-New-AlgorithmJar "emawnb-service.jar" @(
-    "weka/classifiers/zh/MVCAVWNB",
-    "weka/classifiers/zh/CAVWNB",
-    "weka/estimators/DiscreteEstimator.class"
-)
-New-AlgorithmJar "mawnb-service.jar" @(
-    "weka/classifiers/zh/MVCAVWNB",
-    "weka/classifiers/zh/CAVWNB",
-    "weka/estimators/DiscreteEstimator.class"
-)
-
-Write-Host "All NB algorithm JARs built successfully."
+Write-Host "NB algorithm service JAR built successfully."

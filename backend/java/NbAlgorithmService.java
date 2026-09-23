@@ -33,6 +33,7 @@ import java.util.Random;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -45,14 +46,32 @@ import java.util.concurrent.Executors;
  */
 public final class NbAlgorithmService {
     private static final ConcurrentHashMap<String, Classifier> MODEL_CACHE = new ConcurrentHashMap<>();
-    private static String algorithmCode;
+
+    /** 本服务支持的算法（同一个进程同时服务全部算法，5 个算法共用同一份字节码）。 */
+    private static final String[] SUPPORTED_ALGORITHMS = {
+            "A2WNB", "CAVWNB", "DIWNB", "MAWNB", "EMAWNB"
+    };
+
+    /**
+     * 启动参数指定的默认算法。
+     * 合并为单进程后由请求体的 algorithm_code 指定；保留启动参数是为了兼容
+     * 单算法部署方式（一个进程只服务一个算法时不必每次传 algorithm_code）。
+     * 为空表示必须随请求提供。
+     */
+    private static String defaultAlgorithmCode = "";
 
     private NbAlgorithmService() {}
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 12315;
-        algorithmCode = args.length > 1 ? args[1].toUpperCase() : "A2WNB";
-        Class.forName(classNameFor(algorithmCode));
+        defaultAlgorithmCode = args.length > 1 ? args[1].toUpperCase(Locale.ROOT) : "";
+        if (!defaultAlgorithmCode.isEmpty()) {
+            classNameFor(defaultAlgorithmCode);
+        }
+        // 预热全部算法类：合并后任一算法缺类都应在启动时暴露，而不是首个请求才失败。
+        for (String code : SUPPORTED_ALGORITHMS) {
+            Class.forName(classNameFor(code));
+        }
 
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/health", NbAlgorithmService::handleHealth);
@@ -61,7 +80,28 @@ public final class NbAlgorithmService {
         server.createContext("/shutdown", NbAlgorithmService::handleShutdown);
         server.setExecutor(Executors.newFixedThreadPool(4));
         server.start();
-        System.out.println("[NbAlgorithmService] " + algorithmCode + " listening on 127.0.0.1:" + port);
+        System.out.println("[NbAlgorithmService] "
+                + (defaultAlgorithmCode.isEmpty() ? "多算法模式" : defaultAlgorithmCode)
+                + " listening on 127.0.0.1:" + port);
+    }
+
+    /**
+     * 解析本次请求使用的算法。
+     * 请求体的 algorithm_code 优先；缺省时回落到启动参数（单算法模式）。
+     * 该值只在请求内传递，不写静态字段——服务用 4 线程池并发处理请求，
+     * 静态可变字段会让并发请求互相串改算法。
+     */
+    private static String resolveAlgorithmCode(JSONObject req) {
+        String code = req.optString("algorithm_code", "").trim();
+        if (code.isEmpty()) {
+            code = defaultAlgorithmCode;
+        }
+        if (code.isEmpty()) {
+            throw new IllegalArgumentException("缺少 algorithm_code");
+        }
+        code = code.toUpperCase(Locale.ROOT);
+        classNameFor(code);
+        return code;
     }
 
     private static String classNameFor(String code) {
@@ -76,13 +116,21 @@ public final class NbAlgorithmService {
     }
 
     private static void handleHealth(HttpExchange ex) throws IOException {
-        respond(ex, 200, new JSONObject().put("status", "ok").put("algorithm", algorithmCode)
+        JSONArray algorithms = new JSONArray();
+        for (String code : SUPPORTED_ALGORITHMS) {
+            algorithms.put(code);
+        }
+        respond(ex, 200, new JSONObject()
+                .put("status", "ok")
+                .put("algorithm", defaultAlgorithmCode.isEmpty() ? "MULTI" : defaultAlgorithmCode)
+                .put("algorithms", algorithms)
                 .put("model_cache", MODEL_CACHE.size()));
     }
 
     private static void handleTrain(HttpExchange ex) throws IOException {
         try {
             JSONObject req = new JSONObject(readBody(ex));
+            String algorithmCode = resolveAlgorithmCode(req);
             String datasetPath = req.getString("dataset_path");
             String modelSavePath = req.optString("model_save_path", "");
             if (modelSavePath.isEmpty()) {
@@ -92,7 +140,8 @@ public final class NbAlgorithmService {
             long started = System.nanoTime();
             Instances data = loadDataset(datasetPath);
             JSONObject parameters = req.optJSONObject("training_parameters");
-            Classifier classifier = createClassifier(parameters == null ? new JSONObject() : parameters);
+            Classifier classifier = createClassifier(
+                    parameters == null ? new JSONObject() : parameters, algorithmCode);
             classifier.buildClassifier(data);
             SerializationHelper.write(modelSavePath, classifier);
             MODEL_CACHE.put(modelSavePath, classifier);
@@ -138,6 +187,7 @@ public final class NbAlgorithmService {
     private static void handlePredict(HttpExchange ex) throws IOException {
         try {
             JSONObject req = new JSONObject(readBody(ex));
+            String algorithmCode = resolveAlgorithmCode(req);
             String modelPath = req.getString("model_path");
             String arffPath = req.getString("arff_path");
             JSONObject features = req.optJSONObject("features");
@@ -169,7 +219,8 @@ public final class NbAlgorithmService {
             }
             // 追加多视图预测 / 视图权重 / 特征加权条件概率（未接入算法返回空数组）
             JSONObject explain = buildExplain(
-                    classifier, instance, header, req.optJSONArray("risk_labels"), dist);
+                    classifier, instance, header, req.optJSONArray("risk_labels"), dist,
+                    algorithmCode);
             data.put("views", explain.getJSONArray("views"));
             data.put("view_weights", explain.getJSONArray("view_weights"));
             data.put("feature_evidence", explain.getJSONArray("feature_evidence"));
@@ -193,7 +244,7 @@ public final class NbAlgorithmService {
      */
     private static JSONObject buildExplain(
             Classifier classifier, Instance instance, Instances header,
-            JSONArray riskLabels, double[] finalDistribution) {
+            JSONArray riskLabels, double[] finalDistribution, String algorithmCode) {
         JSONObject explain = new JSONObject();
         explain.put("views", new JSONArray());
         explain.put("view_weights", new JSONArray());
@@ -698,8 +749,10 @@ public final class NbAlgorithmService {
         return data;
     }
 
-    private static Classifier createClassifier(JSONObject parameters) throws Exception {
-        Classifier base = (Classifier) Class.forName(classNameFor(algorithmCode)).getDeclaredConstructor().newInstance();
+    private static Classifier createClassifier(JSONObject parameters, String algorithmCode)
+            throws Exception {
+        Classifier base = (Classifier) Class.forName(classNameFor(algorithmCode))
+                .getDeclaredConstructor().newInstance();
         applyAlgorithmParameters(base, parameters);
         // 原始研究算法按离散属性工作；FilteredClassifier 使其可以训练平台中的数值数据，
         // 同时把 schema 中的离散化参数真正应用到训练数据。
