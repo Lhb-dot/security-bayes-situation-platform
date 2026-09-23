@@ -29,13 +29,15 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.Random;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
 /**
@@ -45,7 +47,26 @@ import java.util.concurrent.Executors;
  * /train 对数据执行交叉验证、全量训练并保存 Weka 模型；/predict 加载模型执行真实预测。
  */
 public final class NbAlgorithmService {
-    private static final ConcurrentHashMap<String, Classifier> MODEL_CACHE = new ConcurrentHashMap<>();
+    /** 模型缓存上限：超过后按最久未使用（LRU）淘汰。 */
+    private static final int MODEL_CACHE_CAPACITY = 4;
+
+    /**
+     * 模型缓存（LRU，上限见 MODEL_CACHE_CAPACITY）。
+     * 反序列化一个模型要读几百 MB 文件，所以缓存结果；但必须有上限，否则读过的模型
+     * 会一直常驻堆内，内存随「历史上访问过多少个模型」无限增长。
+     * 访问顺序由 LinkedHashMap(accessOrder=true) 维护，get/put 由 synchronizedMap 保证原子。
+     */
+    private static final Map<String, Classifier> MODEL_CACHE =
+            Collections.synchronizedMap(new LinkedHashMap<String, Classifier>(MODEL_CACHE_CAPACITY, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Classifier> eldest) {
+                    if (size() > MODEL_CACHE_CAPACITY) {
+                        System.out.println("[NbAlgorithmService] 缓存已满，淘汰最久未使用的模型: " + eldest.getKey());
+                        return true;
+                    }
+                    return false;
+                }
+            });
 
     /** 本服务支持的算法（同一个进程同时服务全部算法，5 个算法共用同一份字节码）。 */
     private static final String[] SUPPORTED_ALGORITHMS = {
