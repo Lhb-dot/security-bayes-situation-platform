@@ -355,7 +355,6 @@ onMounted(async () => {
           <template #default="{ row }: { row: Report }">
             <div class="report-table__title-cell">
               <span class="report-table__title">{{ row.title }}</span>
-              <span class="report-table__summary">{{ row.summary }}</span>
             </div>
           </template>
         </el-table-column>
@@ -706,9 +705,6 @@ onMounted(async () => {
 }
 
 .report-table__title-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   padding: 6px 0;
 }
 
@@ -716,14 +712,6 @@ onMounted(async () => {
   font-weight: 600;
   color: #e8f1ff;
   font-size: 0.95rem;
-}
-
-.report-table__summary {
-  font-size: 0.8rem;
-  color: rgba(220, 234, 255, 0.55);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .report-table__scenario-tag {
