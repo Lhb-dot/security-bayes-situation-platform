@@ -366,7 +366,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="格式" width="100" align="center">
+        <el-table-column label="格式" width="120" align="center">
           <template #default="{ row }: { row: Report }">
             <span
               class="report-table__format-badge"
