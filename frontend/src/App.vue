@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 // 路由实例
@@ -127,15 +127,9 @@ const goAlertsList = () => {
 // 不再渲染页面大标题——bar 下方的各页面自带标题/说明，避免重复。
 // 浏览器标签页标题全站统一为品牌名，由 index.html 的 <title> 静态提供，不随路由变化。
 
-onMounted(async () => {
-  // 落地页由路由 '/' 重定向处理（SUPER_ADMIN → /overview；管理员/用户 → 自己场景）
-  if (route.path === '/') {
-    if (isSuperAdmin.value) router.push('/overview');
-    else if (userStore.currentUser?.scenario_code) {
-      router.push(`/scenarios/${userStore.currentUser.scenario_code}/dashboard`);
-    } else router.push('/scenarios');
-  }
-});
+// 落地页跳转不在这里做：路由 '/' 的 redirect 与 guards.ts 的 to.path === '/' 分支已覆盖。
+// 此前这里另有一份 onMounted 跳转，它在 vue-router 首次导航 resolve 之前执行，
+// 此时 route.path 仍是 '/'，于是把用户请求的深链（如 #/reports）顶成角色落地页 —— 已移除。
 
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');

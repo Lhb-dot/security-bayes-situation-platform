@@ -18,7 +18,13 @@ import 'element-plus/theme-chalk/el-message-box.css';
 
 const app = createApp(App);
 const pinia = createPinia();
-app.use(pinia).use(router);
+app.use(pinia);
 
+// 顺序要紧：vue-router 在 install 时就会发起首次导航，守卫要读 userStore.currentUser。
+// 若先 use(router) 再 bootstrap，首次导航跑在会话恢复完成之前，守卫读到 null，
+// 于是把用户直接请求的深链（如 #/reports）改写成 /login —— 所以必须等 bootstrap 落地后再装路由。
 const userStore = useUserStore(pinia);
-userStore.bootstrap().finally(() => app.mount('#app'));
+userStore.bootstrap().finally(() => {
+  app.use(router);
+  app.mount('#app');
+});
