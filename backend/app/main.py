@@ -116,6 +116,13 @@ def _start_export_job_runner() -> None:
     start()
 
 
+def _start_report_generate_runner() -> None:
+    """Start the background runner that generates submitted reports."""
+    from app.services.report_generate_runner import start
+
+    start()
+
+
 def create_app() -> FastAPI:
     """Create the HTTP application and register routes in one place."""
     app = FastAPI()
@@ -134,6 +141,7 @@ def create_app() -> FastAPI:
     _start_training_runner()
     _start_batch_inference_runner()
     _start_export_job_runner()
+    _start_report_generate_runner()
     app.mount("/", SPAStaticFiles(directory=str(SITE_ROOT), html=True), name="web")
     return app
 

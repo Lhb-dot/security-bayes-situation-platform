@@ -135,6 +135,62 @@ def download_export_job_file(
     )
 
 
+@router.post(
+    "/generate/jobs",
+    response_model=ResponseModel,
+    summary="提交报告生成任务（后台线程生成，完成后前端收通知）",
+)
+def submit_generate_job(
+    payload: ReportGenerate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """生成改为「提交 → 轮询 → 通知」：POST 立刻返回 job_id，用户不必干等在弹窗里。
+
+    生成一份报告要做数据聚合 + 多视图研判 + NL 分析，慢的时候十几秒起步，同步返回会把
+    请求线程和界面一起钉住。老接口 POST /reports/generate 一行未改，出问题可一键回退。
+    """
+    return unwrap(
+        ReportService(db).submit_generate(
+            current_user=current_user,
+            title=payload.title,
+            scenario_id=payload.scenario_id,
+            scope=payload.scope,
+            format=payload.format,
+            scheduled=payload.scheduled,
+            interval_days=payload.interval_days,
+        )
+    )
+
+
+@router.get(
+    "/generate/jobs",
+    response_model=ResponseModel,
+    summary="我的生成任务列表（刷新/切页回来能恢复「还在跑」的状态）",
+)
+def list_generate_jobs(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    # 必须声明在 /{report_id} 之前：否则 "generate" 会被当成 report_id 去做整型校验
+    return unwrap(ReportService(db).list_generate_jobs(current_user=current_user))
+
+
+@router.get(
+    "/generate/jobs/{job_id}",
+    response_model=ResponseModel,
+    summary="生成任务进度（仅发起人）",
+)
+def get_generate_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        ReportService(db).get_generate_job(current_user=current_user, job_id=job_id)
+    )
+
+
 @router.get(
     "/{report_id}", response_model=ResponseModel, summary="报告详情"
 )

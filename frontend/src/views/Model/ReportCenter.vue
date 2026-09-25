@@ -6,23 +6,24 @@
  * 操作：查看、下载、重新生成、删除（所有行一致）
  * 定时报告：「定时报告」按钮只做查看与删除，跟随账号；新建走「生成报告」并打开定时生成。
  *          到期由服务端调度器原地重新生成，前端不做调度。
+ *
+ * 生成与导出都是服务端后台任务：提交后立刻返回，页面不等结果（详见 reportJobStore）。
+ * 在途任务显示在标题下方的任务条上，完成 / 失败由 store 弹通知。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
 import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
+import { useReportJobStore } from '@/stores/reportJobStore';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { useUserStore } from '@/stores/userStore';
 import {
-  EXPORT_EXT,
-  downloadReportExportFile,
-  generateReport,
   getReportDetail,
-  getReportExportJob,
   getReportPage,
   getScheduledReports,
   removeReport,
   submitReportExport,
+  submitReportGenerateJob,
 } from '@/api/reportApi';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
@@ -31,6 +32,7 @@ const loading = ref(true);
 const error = ref('');
 const scenarioStore = useScenarioStore();
 const userStore = useUserStore();
+const jobStore = useReportJobStore();
 
 const currentUser = computed(() => userStore.currentUser);
 const isAdmin = computed(() => userStore.isManagement);
@@ -90,82 +92,32 @@ const handleView = async (report: Report) => {
   }
 };
 
-/** 下载文件名：去掉文件系统不接受的字符（规则与后端 report_export.safe_filename 一致） */
-const safeFileName = (title: string, reportId: string) => {
-  const cleaned = (title ?? '')
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
-    .replace(/^[.\s]+|[.\s]+$/g, '')
-    .slice(0, 60);
-  return cleaned || `report_${reportId}`;
-};
-
 // ===== 操作中的 UI 状态 =====
-// 这四个动作都要等：生成走同步接口（数据组装 + 多视图研判 + NL 分析），
-// 导出要等后台渲染再轮询，重新生成等同生成，删除要等库写完再刷新。
-// 点完不给反馈，用户不知道点没点上，还会连点导致重复提交 —— 统一用
-// 「按钮转圈 + 文案切换」，等待期间锁住入口。
-const generating = ref(false);                    // 生成报告（弹窗内，最慢）
-const generatingElapsed = ref(0);                 // 生成已用秒数
-const downloadingId = ref<string | null>(null);   // 正在导出的报告
-const regeneratingId = ref<string | null>(null);  // 正在重新生成的报告
-const deletingId = ref<string | null>(null);      // 正在删除的报告
+// 提交本身是毫秒级的，这几个状态只覆盖「POST 在途」这一小段，防止连点重复提交；
+// 真正的等待由后台任务承担，进度看标题下方那条任务条。
+const submittingGenerate = ref(false);                // 生成弹窗提交中
+const exportSubmittingId = ref<string | null>(null);  // 正在提交导出的报告
+const regeneratingId = ref<string | null>(null);      // 正在提交重新生成的报告
+const deletingId = ref<string | null>(null);          // 正在删除的报告
 
-let generatingTimer: number | null = null;
+/** 该报告的导出是否在途（提交中，或后台任务还没跑完） */
+const exportBusy = (report: Report) =>
+  exportSubmittingId.value === report.report_id || jobStore.runningExportIds.has(report.report_id);
 
-const stopGeneratingClock = () => {
-  if (generatingTimer !== null) {
-    window.clearInterval(generatingTimer);
-    generatingTimer = null;
-  }
-};
+/** 该标题是否有生成任务在跑（「重新生成」据此置灰；标题重名时一并置灰，无害） */
+const generateBusy = (report: Report) => jobStore.runningTitles.has(report.title);
 
-const startGeneratingClock = () => {
-  stopGeneratingClock();
-  generatingElapsed.value = 0;
-  generatingTimer = window.setInterval(() => {
-    generatingElapsed.value += 1;
-  }, 1000);
-};
-
-// ===== 导出任务轮询（pdf 由后台线程渲染） =====
-// 后端单次渲染上限 120 秒，留足余量；超时后任务仍在后台，重新点一次导出即可。
-const EXPORT_POLL_INTERVAL_MS = 1000;
-const EXPORT_POLL_TIMEOUT_MS = 3 * 60 * 1000;
-let exportPollAbort = false;
-
-/** 轮询导出任务直到产物就绪；离开页面返回 null，任务失败或超时抛错。 */
-const waitForExportJob = async (jobId: string) => {
-  const deadline = Date.now() + EXPORT_POLL_TIMEOUT_MS;
-  let job = await getReportExportJob(jobId);
-  while (!job.ready && job.status !== 'FAILED') {
-    if (exportPollAbort) return null;
-    if (Date.now() >= deadline) throw new Error('导出仍在进行，请稍后重新导出');
-    await new Promise((resolve) => window.setTimeout(resolve, EXPORT_POLL_INTERVAL_MS));
-    job = await getReportExportJob(jobId);
-  }
-  if (job.status === 'FAILED') throw new Error(job.error || '导出失败');
-  return job;
-};
-
-/** 导出报告：由服务端后台产出文件（pdf 走异步渲染），就绪后下载 */
+/** 导出报告：提交后台任务，产物就绪后由 store 自动下载并通知 */
 const handleDownload = async (report: Report) => {
-  downloadingId.value = report.report_id;
+  exportSubmittingId.value = report.report_id;
   try {
     const receipt = await submitReportExport(report.report_id, report.format);
-    const job = await waitForExportJob(receipt.job_id);
-    if (!job) return;   // 已离开页面：后台继续，静默收尾
-    const blob = await downloadReportExportFile(receipt.job_id);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${safeFileName(report.title, report.report_id)}.${EXPORT_EXT[report.format] ?? 'txt'}`;
-    a.click();
-    URL.revokeObjectURL(url);
-    ElMessage.success(`已导出报告：${report.title}`);
+    jobStore.trackExport(receipt.job_id, report);
+    ElMessage.success('导出任务已提交');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '导出失败');
   } finally {
-    downloadingId.value = null;
+    exportSubmittingId.value = null;
   }
 };
 
@@ -174,14 +126,14 @@ const handleRegenerate = async (report: Report) => {
   regeneratingId.value = report.report_id;
   try {
     // 不带 scheduled：重新生成只产出一份快照，不复制定时任务（否则每次点一下多一条定时）
-    await generateReport({
+    const receipt = await submitReportGenerateJob({
       scenario_id: report.scenario_id,
       title: report.title,
       scope: isAdmin.value ? 'all' : 'self',
       format: report.format,
     });
-    ElMessage.success(`已重新生成报告：${report.title}`);
-    await reloadAll();
+    jobStore.trackGenerate(receipt.job_id, report.title);
+    ElMessage.success('重新生成任务已提交');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
   } finally {
@@ -243,7 +195,7 @@ const openGenerate = () => {
 };
 
 const submitGenerate = async () => {
-  if (generating.value) return;   // 按钮已禁用，这里再兜一道，防止回车/连点
+  if (submittingGenerate.value) return;   // 按钮已禁用，这里再兜一道，防止回车/连点
   if (!genForm.value.title.trim()) {
     ElMessage.warning('请填写报告标题');
     return;
@@ -256,31 +208,26 @@ const submitGenerate = async () => {
     ElMessage.warning('请填写正确的生成周期（至少 1 天）');
     return;
   }
-  // 这是同步接口：请求线程里要做数据组装 + 多视图研判 + NL 分析，慢的时候十几秒起步，
-  // 所以必须把「正在生成」显式画出来，否则点完到弹窗关闭之间界面毫无变化。
-  generating.value = true;
-  startGeneratingClock();
+  // 提交后立刻关弹窗：真正的生成在服务端后台跑，用户可以接着做别的事，
+  // 完成后由 store 弹通知并刷新列表 —— 这里只等 POST 这一个来回。
+  submittingGenerate.value = true;
+  const title = genForm.value.title.trim();
   try {
-    const created = await generateReport({
+    const receipt = await submitReportGenerateJob({
       scenario_id: genForm.value.scenario_id as ScenarioId,
-      title: genForm.value.title.trim(),
+      title,
       scope: genForm.value.scope,
       format: genForm.value.format,
       scheduled: genForm.value.scheduled,
       interval_days: genForm.value.scheduled ? genForm.value.interval_days : undefined,
     });
-    ElMessage.success(
-      created.scheduled
-        ? `定时报告已创建，下次生成：${created.next_run_at ?? '—'}`
-        : `报告生成成功：${created.report_id}`,
-    );
+    jobStore.trackGenerate(receipt.job_id, title);
     genVisible.value = false;
-    await reloadAll();
+    ElMessage.success('生成任务已提交');
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '生成失败');
+    ElMessage.error(err instanceof Error ? err.message : '提交失败');
   } finally {
-    generating.value = false;
-    stopGeneratingClock();
+    submittingGenerate.value = false;
   }
 };
 
@@ -401,11 +348,13 @@ onMounted(async () => {
   await loadReports();
 });
 
-// 离开页面时停止轮询，防止内存泄漏（后台导出不受影响，继续执行）
-onBeforeUnmount(() => {
-  exportPollAbort = true;
-  stopGeneratingClock();
-});
+// 后台任务完成 → 重新拉列表（生成与重新生成都会新增一条报告记录）
+watch(
+  () => jobStore.completedTick,
+  () => {
+    void reloadAll();
+  },
+);
 </script>
 
 <template>
@@ -420,6 +369,17 @@ onBeforeUnmount(() => {
         <button class="gen-btn gen-btn--ghost" @click="openScheduleList">定时报告</button>
       </div>
     </div>
+
+    <!-- 后台任务条：提交后弹窗就关了，进度在这里持续可见（完成时另外弹通知） -->
+    <section v-if="jobStore.runningJobs.length" class="job-strip">
+      <div v-for="job in jobStore.runningJobs" :key="job.jobId" class="job-strip__item">
+        <span class="job-strip__spinner"></span>
+        <span class="job-strip__label">
+          {{ job.kind === 'generate' ? '生成' : '导出' }}《{{ job.title }}》
+        </span>
+        <span class="job-strip__time">{{ job.elapsed }} 秒</span>
+      </div>
+    </section>
 
     <!-- 加载状态 -->
     <section v-if="loading" class="state-card">
@@ -507,16 +467,18 @@ onBeforeUnmount(() => {
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
               <el-button
                 size="small"
-                :loading="downloadingId === row.report_id"
+                :loading="exportSubmittingId === row.report_id"
+                :disabled="exportBusy(row)"
                 @click="handleDownload(row)"
-              >{{ downloadingId === row.report_id ? '导出中' : '下载' }}</el-button>
+              >{{ exportBusy(row) ? '导出中' : '下载' }}</el-button>
               <el-button
                 size="small"
                 type="warning"
                 plain
                 :loading="regeneratingId === row.report_id"
+                :disabled="generateBusy(row)"
                 @click="handleRegenerate(row)"
-              >{{ regeneratingId === row.report_id ? '生成中' : '重新生成' }}</el-button>
+              >{{ generateBusy(row) ? '生成中' : '重新生成' }}</el-button>
               <el-button
                 size="small"
                 type="danger"
@@ -567,8 +529,8 @@ onBeforeUnmount(() => {
       top="6vh"
       append-to-body
       :close-on-click-modal="false"
-      :close-on-press-escape="!generating"
-      :show-close="!generating"
+      :close-on-press-escape="!submittingGenerate"
+      :show-close="!submittingGenerate"
     >
       <div class="gen-form">
         <div class="gen-field">
@@ -614,10 +576,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <template #footer>
-        <button class="gen-btn gen-btn--ghost" :disabled="generating" @click="genVisible = false">取消</button>
-        <button class="gen-btn" :disabled="generating" @click="submitGenerate">
-          <span v-if="generating" class="gen-spinner"></span>
-          {{ generating ? `生成中… 已用 ${generatingElapsed} 秒` : '生成报告' }}
+        <button class="gen-btn gen-btn--ghost" :disabled="submittingGenerate" @click="genVisible = false">取消</button>
+        <button class="gen-btn" :disabled="submittingGenerate" @click="submitGenerate">
+          <span v-if="submittingGenerate" class="gen-spinner"></span>
+          {{ submittingGenerate ? '提交中…' : '生成报告' }}
         </button>
       </template>
     </el-dialog>
@@ -880,6 +842,50 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   overflow: hidden;
   background: rgba(8, 18, 34, 0.7);
+}
+
+/* ---------------- 后台任务条 ----------------
+   提交后弹窗即关，进度在这里持续可见；完成 / 失败走 ElNotification。 */
+.job-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.job-strip__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  background: rgba(91, 166, 255, 0.08);
+  font-size: 0.86rem;
+  color: #cfe2ff;
+}
+
+.job-strip__spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(91, 166, 255, 0.3);
+  border-top-color: #5ba6ff;
+  border-radius: 50%;
+  animation: gen-spin 0.6s linear infinite;
+}
+
+.job-strip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-strip__time {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: rgba(154, 214, 255, 0.8);
+  font-size: 0.8rem;
 }
 
 /* ---------------- 页码条（暗色） ----------------

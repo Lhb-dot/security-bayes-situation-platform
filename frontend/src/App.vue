@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 // 路由实例
@@ -8,12 +8,27 @@ const route = useRoute();
 
 import type { UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
+import { useReportJobStore } from './stores/reportJobStore';
 
 // ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
 // 登录/登出统一走 userStore，避免页面复制认证状态
 const userStore = useUserStore();
 const currentUser = computed(() => userStore.currentUser);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
+
+// ===================== 恢复报告后台任务 =====================
+// 生成 / 导出任务在前端是「进程内」状态，刷新就没了（详见 reportJobStore）。
+// 会话恢复或登录成功时拉一次本账号的任务列表，把还在跑的接回来继续轮询 ——
+// 这样任务完成时不论用户停在哪个页面都能弹通知，刷新过也不会丢。
+// 放在 App 层而不是报告中心：离开报告中心同样应该收到完成通知。
+const reportJobStore = useReportJobStore();
+watch(
+  () => userStore.currentUser,
+  (user) => {
+    if (user) void reportJobStore.resumePending();
+  },
+  { immediate: true },
+);
 
 /** 当前角色中文名 */
 const roleLabel = computed(() => {

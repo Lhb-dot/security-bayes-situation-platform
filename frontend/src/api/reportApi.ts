@@ -91,33 +91,79 @@ export const getScheduledReports = async (): Promise<Report[]> => {
 export const getReportDetail = async (reportId: string): Promise<Report> =>
   toReport(await unwrapData(await request.get(`/api/v1/reports/${reportId}`)) as ApiReport);
 
-/** 生成态势报告（POST /reports/generate，服务端基于真实数据 + 算法解释自动组装内容）
- *
- * scheduled=true 时同一条报告会登记为定时报告：立刻产出内容并记录下次生成时间，
- * 到期由服务端调度器原地重新生成。
- */
-export const generateReport = async (params: {
+/** 生成入参（同步接口与后台任务提交共用） */
+export interface ReportGenerateParams {
   scenario_id: ScenarioId;
   title: string;
   scope: 'self' | 'all';
   format?: Report['format'];
   scheduled?: boolean;
   interval_days?: number;
-}): Promise<Report> => {
+}
+
+/** 场景 code → 后端整型 scenario_id，并补齐默认值。两个生成入口共用这一条组装。 */
+const buildGeneratePayload = async (params: ReportGenerateParams) => {
   const { resolveScenarioId } = await import('@/api/scenarioApi');
-  const scenarioId = await resolveScenarioId(params.scenario_id);
+  return {
+    title: params.title,
+    scenario_id: await resolveScenarioId(params.scenario_id),
+    scope: params.scope,
+    format: params.format ?? 'markdown',
+    scheduled: params.scheduled ?? false,
+    interval_days: params.scheduled ? params.interval_days : undefined,
+  };
+};
+
+/** 生成态势报告（POST /reports/generate，同步；服务端基于真实数据 + 算法解释自动组装内容）
+ *
+ * scheduled=true 时同一条报告会登记为定时报告：立刻产出内容并记录下次生成时间，
+ * 到期由服务端调度器原地重新生成。
+ *
+ * 页面已改走下面的任务接口（生成要十几秒起步，同步会把界面钉住）；
+ * 这个同步封装保留作回退用。
+ */
+export const generateReport = async (params: ReportGenerateParams): Promise<Report> => {
   const raw = await unwrapData(
-    await request.post('/api/v1/reports/generate', {
-      title: params.title,
-      scenario_id: scenarioId,
-      scope: params.scope,
-      format: params.format ?? 'markdown',
-      scheduled: params.scheduled ?? false,
-      interval_days: params.scheduled ? params.interval_days : undefined,
-    }),
+    await request.post('/api/v1/reports/generate', await buildGeneratePayload(params)),
   );
   return toReport(raw as ApiReport);
 };
+
+/** 生成任务提交回执（POST /reports/generate/jobs） */
+export interface ReportGenerateReceipt {
+  job_id: string;
+}
+
+/** 生成任务视图（GET /reports/generate/jobs[/{job_id}]） */
+export interface ReportGenerateJob {
+  job_id: string;
+  title: string;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  error: string | null;
+  /** 生成完成后的报告 id，未完成时为 null */
+  report_id: string | null;
+  /** 产物就绪 */
+  ready: boolean;
+}
+
+/**
+ * 提交后台生成任务（POST /reports/generate/jobs）。
+ *
+ * POST 立刻返回 job_id，真正的生成（数据聚合 + 多视图研判 + NL 分析）由服务端后台线程串行执行；
+ * 入参校验仍在提交时同步完成，参数不对照常抛 400 / 403，不会把注定失败的任务丢进队列。
+ */
+export const submitReportGenerateJob = async (
+  params: ReportGenerateParams,
+): Promise<ReportGenerateReceipt> =>
+  unwrapData(await request.post('/api/v1/reports/generate/jobs', await buildGeneratePayload(params)));
+
+/** 生成任务进度（GET /reports/generate/jobs/{job_id}，仅发起人） */
+export const getReportGenerateJob = async (jobId: string): Promise<ReportGenerateJob> =>
+  unwrapData(await request.get(`/api/v1/reports/generate/jobs/${jobId}`));
+
+/** 我的生成任务列表（GET /reports/generate/jobs，最近的在前；供刷新后恢复在途状态） */
+export const listReportGenerateJobs = async (): Promise<ReportGenerateJob[]> =>
+  ((await unwrapData(await request.get('/api/v1/reports/generate/jobs'))) ?? []) as ReportGenerateJob[];
 
 /** 删除报告（DELETE /reports/{report_id}，生成者本人或管理员） */
 export const removeReport = async (reportId: string): Promise<void> =>

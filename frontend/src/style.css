@@ -1250,6 +1250,42 @@ button {
   --el-messagebox-color: #9ad6ff;
 }
 
+/* 后台任务完成通知（ElNotification）
+   处境与 ElMessageBox 相同：EP 样式在 main.ts 里显式引入、加载在本文件之后，同权重会被压掉。
+   两点要注意：
+   1) 背景取的是 --el-bg-color-overlay（不是 notification 专属变量），所以必须直接写
+      background-color，光改变量不管用；
+   2) 这里没有 .el-overlay 之类的包裹层可用，只能把选择器自身叠一次（.el-notification.el-notification，
+      权重 0,2,0）来压过 EP 的 .el-notification（0,1,0）。类型图标同理 ——
+      EP 把它写在 `.el-notification .el-notification--success` 上，得再补一个类凑到 0,3,0。 */
+.el-notification.el-notification {
+  --el-notification-radius: 14px;
+  --el-notification-title-color: #e8f1ff;
+  --el-notification-content-color: rgba(217, 232, 255, 0.88);
+  --el-notification-close-color: rgba(217, 232, 255, 0.55);
+  --el-notification-close-hover-color: #fff;
+  --el-notification-border-color: rgba(91, 166, 255, 0.3);
+  --el-notification-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  background-color: rgba(13, 26, 46, 0.98);
+}
+
+.el-notification .el-notification__title {
+  font-weight: 600;
+}
+
+.el-notification .el-notification--success.el-notification--success {
+  --el-notification-icon-color: #6ef0c4;
+}
+.el-notification .el-notification--error.el-notification--error {
+  --el-notification-icon-color: #ff9a92;
+}
+.el-notification .el-notification--warning.el-notification--warning {
+  --el-notification-icon-color: #ffc37d;
+}
+.el-notification .el-notification--info.el-notification--info {
+  --el-notification-icon-color: #9ad6ff;
+}
+
 /* 表格（暗色） */
 .el-overlay .el-table {
   --el-table-border-color: rgba(125, 201, 255, 0.12);

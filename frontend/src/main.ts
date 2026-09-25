@@ -10,12 +10,13 @@ import { setUnauthorizedHandler } from '@/utils/request';
 // 组件与其样式由 unplugin-vue-components 在编译期自动注入，这里不再
 // `app.use(ElementPlus)`，也不再引入 element-plus/dist/index.css 全量样式。
 //
-// 但 ElMessage / ElMessageBox 在 11 个文件里是**显式 import** 的服务式调用，
+// 但 ElMessage / ElMessageBox / ElNotification 在若干文件里是**显式 import** 的服务式调用，
 // 不会被 AutoImport 接管，样式也不会被自动注入 —— 必须在此显式引入，
-// 否则消息提示与确认弹窗会变成无样式裸文本。
+// 否则消息提示、确认弹窗与后台任务完成通知会变成无样式裸文本。
 import 'element-plus/theme-chalk/base.css';
 import 'element-plus/theme-chalk/el-message.css';
 import 'element-plus/theme-chalk/el-message-box.css';
+import 'element-plus/theme-chalk/el-notification.css';
 
 const app = createApp(App);
 const pinia = createPinia();

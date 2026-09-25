@@ -129,6 +129,35 @@ class ReportService(ServiceBase):
             return role, scenario_id, "self"
         return role, scenario_id, scope
 
+    def _validate_generate_inputs(
+        self,
+        current_user,
+        title: str,
+        scenario_id: Optional[int],
+        scope: str,
+        format: str,
+        scheduled: bool,
+        interval_days: Optional[int],
+    ) -> tuple[object, Optional[int], str]:
+        """生成入参校验 + 数据范围归一，返回 (role, scenario_id, scope)。
+
+        同步接口与异步提交共用这一条边界：异步提交要在 POST 时就返回 400 / 403，
+        而不是等后台线程跑起来才发现参数不对，所以单独抽出来给两处调用。
+        """
+        self.require_login(current_user)
+        err = validate_enum(scope, REPORT_SCOPES, "scope")
+        if err:
+            raise ServiceError(400, err)
+        err = validate_enum(format, REPORT_FORMATS, "format")
+        if err:
+            raise ServiceError(400, err)
+        err = validate_required({"title": title}, ("title",))
+        if err:
+            raise ServiceError(400, err)
+        if scheduled and (interval_days is None or interval_days < 1):
+            raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
+        return self._resolve_generation_scope(current_user, scenario_id, scope)
+
     # ------------------------------------------------------------------
     # 生成（需求 6.8.5：报告数据范围）
     # ------------------------------------------------------------------
@@ -207,21 +236,8 @@ class ReportService(ServiceBase):
         生成时立刻产出一份内容，并把 next_run_at 推到下一个周期，
         到期由后台调度器原地重新生成（见 run_due_scheduled_reports）。
         """
-        self.require_login(current_user)
-        err = validate_enum(scope, REPORT_SCOPES, "scope")
-        if err:
-            raise ServiceError(400, err)
-        err = validate_enum(format, REPORT_FORMATS, "format")
-        if err:
-            raise ServiceError(400, err)
-        err = validate_required({"title": title}, ("title",))
-        if err:
-            raise ServiceError(400, err)
-        if scheduled and (interval_days is None or interval_days < 1):
-            raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
-
-        role, scenario_id, scope = self._resolve_generation_scope(
-            current_user, scenario_id, scope
+        role, scenario_id, scope = self._validate_generate_inputs(
+            current_user, title, scenario_id, scope, format, scheduled, interval_days
         )
 
         now = datetime.now(timezone.utc)
@@ -936,6 +952,65 @@ class ReportService(ServiceBase):
     def list_export_jobs(self, current_user):
         """当前用户的导出任务列表（刷新/切页回来能恢复「已经好了」的状态）。"""
         from app.services.export_job_service import list_jobs
+
+        self.require_login(current_user)
+        return ok(data=list_jobs(current_user.id))
+
+    # ------------------------------------------------------------------
+    # 异步生成（提交 → 轮询 → 通知；见 app/services/report_generate_runner.py）
+    # ------------------------------------------------------------------
+
+    @service_call
+    def submit_generate(
+        self,
+        current_user,
+        title: str,
+        scenario_id: Optional[int] = None,
+        scope: str = "self",
+        format: str = "markdown",
+        scheduled: bool = False,
+        interval_days: Optional[int] = None,
+    ):
+        """提交异步生成任务：立刻返回 job_id，真正的生成交给后台线程。
+
+        入参校验走与 generate() 同一条边界，参数不对仍然在 POST 时就报 400 / 403，
+        不会把一个注定失败的任务丢进队列。执行器未启动时 503（与导出同一套语义）。
+        """
+        from app.services.report_generate_runner import create_job, is_running
+
+        self._validate_generate_inputs(
+            current_user, title, scenario_id, scope, format, scheduled, interval_days
+        )
+        if not is_running():
+            raise ServiceError(503, "报告生成执行器未启用，无法提交后台生成")
+        job_id = create_job(
+            user_id=current_user.id,
+            title=title.strip(),
+            params={
+                "scenario_id": scenario_id,
+                "scope": scope,
+                "format": format,
+                "scheduled": scheduled,
+                "interval_days": interval_days,
+            },
+        )
+        return ok(data={"job_id": job_id}, message="生成任务已提交")
+
+    @service_call
+    def get_generate_job(self, current_user, job_id: str):
+        """查询生成任务进度；任务不存在、已过期或不属于当前用户时 404。"""
+        from app.services.report_generate_runner import get_job
+
+        self.require_login(current_user)
+        view = get_job(job_id, current_user.id)
+        if view is None:
+            raise ServiceError(404, "生成任务不存在或已过期")
+        return ok(data=view)
+
+    @service_call
+    def list_generate_jobs(self, current_user):
+        """当前用户的生成任务列表（刷新 / 切页回来能恢复「还在跑」的状态）。"""
+        from app.services.report_generate_runner import list_jobs
 
         self.require_login(current_user)
         return ok(data=list_jobs(current_user.id))
