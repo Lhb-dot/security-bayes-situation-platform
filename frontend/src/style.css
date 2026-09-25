@@ -1201,6 +1201,55 @@ button {
   border-top: 1px solid rgba(125, 201, 255, 0.12);
 }
 
+/* 确认弹窗（ElMessageBox）
+   EP 默认是亮色：容器取 --el-bg-color（白底）、标题取 --el-text-color-primary（深灰字），
+   在暗色界面上会突兀地白一块，跟 el-dialog 完全两个风格。
+   这里先改它自己的变量（子元素都读这些变量，改一处全跟着变），再补几条结构色。
+   同样用 .el-overlay 前缀 —— EP 的 message-box 样式在 main.ts 里显式引入，加载在本文件之后，
+   同权重会被它压掉。 */
+.el-overlay .el-message-box {
+  --el-messagebox-border-radius: 16px;
+  --el-messagebox-padding-primary: 18px;
+  --el-messagebox-box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --el-messagebox-font-size: 1.05rem;
+  --el-messagebox-content-font-size: 0.9rem;
+  --el-messagebox-title-color: #e8f1ff;
+  --el-messagebox-content-color: rgba(217, 232, 255, 0.9);
+  background: linear-gradient(165deg, rgba(16, 30, 54, 0.98), rgba(8, 17, 31, 0.98));
+  border: 1px solid rgba(91, 166, 255, 0.28);
+}
+
+.el-overlay .el-message-box__header {
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.14);
+}
+
+.el-overlay .el-message-box__title {
+  font-weight: 600;
+}
+
+.el-overlay .el-message-box__headerbtn .el-message-box__close {
+  color: rgba(217, 232, 255, 0.7);
+}
+.el-overlay .el-message-box__headerbtn:hover .el-message-box__close {
+  color: #fff;
+}
+
+/* 类型图标按语义取站内色，别沿用 EP 的默认亮色系 */
+.el-overlay .el-message-box__status.el-message-box-icon--warning {
+  --el-messagebox-color: #ffc37d;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--error {
+  --el-messagebox-color: #ff9a92;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--success {
+  --el-messagebox-color: #6ef0c4;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--info,
+.el-overlay .el-message-box__status.el-message-box-icon--primary {
+  --el-messagebox-color: #9ad6ff;
+}
+
 /* 表格（暗色） */
 .el-overlay .el-table {
   --el-table-border-color: rgba(125, 201, 255, 0.12);
