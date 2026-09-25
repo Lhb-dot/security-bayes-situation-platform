@@ -99,6 +99,34 @@ const safeFileName = (title: string, reportId: string) => {
   return cleaned || `report_${reportId}`;
 };
 
+// ===== 操作中的 UI 状态 =====
+// 这四个动作都要等：生成走同步接口（数据组装 + 多视图研判 + NL 分析），
+// 导出要等后台渲染再轮询，重新生成等同生成，删除要等库写完再刷新。
+// 点完不给反馈，用户不知道点没点上，还会连点导致重复提交 —— 统一用
+// 「按钮转圈 + 文案切换」，等待期间锁住入口。
+const generating = ref(false);                    // 生成报告（弹窗内，最慢）
+const generatingElapsed = ref(0);                 // 生成已用秒数
+const downloadingId = ref<string | null>(null);   // 正在导出的报告
+const regeneratingId = ref<string | null>(null);  // 正在重新生成的报告
+const deletingId = ref<string | null>(null);      // 正在删除的报告
+
+let generatingTimer: number | null = null;
+
+const stopGeneratingClock = () => {
+  if (generatingTimer !== null) {
+    window.clearInterval(generatingTimer);
+    generatingTimer = null;
+  }
+};
+
+const startGeneratingClock = () => {
+  stopGeneratingClock();
+  generatingElapsed.value = 0;
+  generatingTimer = window.setInterval(() => {
+    generatingElapsed.value += 1;
+  }, 1000);
+};
+
 // ===== 导出任务轮询（pdf 由后台线程渲染） =====
 // 后端单次渲染上限 120 秒，留足余量；超时后任务仍在后台，重新点一次导出即可。
 const EXPORT_POLL_INTERVAL_MS = 1000;
@@ -121,6 +149,7 @@ const waitForExportJob = async (jobId: string) => {
 
 /** 导出报告：由服务端后台产出文件（pdf 走异步渲染），就绪后下载 */
 const handleDownload = async (report: Report) => {
+  downloadingId.value = report.report_id;
   try {
     const receipt = await submitReportExport(report.report_id, report.format);
     const job = await waitForExportJob(receipt.job_id);
@@ -135,11 +164,14 @@ const handleDownload = async (report: Report) => {
     ElMessage.success(`已导出报告：${report.title}`);
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '导出失败');
+  } finally {
+    downloadingId.value = null;
   }
 };
 
 /** 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告） */
 const handleRegenerate = async (report: Report) => {
+  regeneratingId.value = report.report_id;
   try {
     // 不带 scheduled：重新生成只产出一份快照，不复制定时任务（否则每次点一下多一条定时）
     await generateReport({
@@ -152,6 +184,8 @@ const handleRegenerate = async (report: Report) => {
     await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
+  } finally {
+    regeneratingId.value = null;
   }
 };
 
@@ -166,6 +200,7 @@ const handleDelete = async (report: Report) => {
   } catch {
     return; // 用户取消
   }
+  deletingId.value = report.report_id;
   try {
     await removeReport(report.report_id);
     ElMessage.success('报告已删除');
@@ -174,6 +209,8 @@ const handleDelete = async (report: Report) => {
     await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');
+  } finally {
+    deletingId.value = null;
   }
 };
 
@@ -206,6 +243,7 @@ const openGenerate = () => {
 };
 
 const submitGenerate = async () => {
+  if (generating.value) return;   // 按钮已禁用，这里再兜一道，防止回车/连点
   if (!genForm.value.title.trim()) {
     ElMessage.warning('请填写报告标题');
     return;
@@ -218,6 +256,10 @@ const submitGenerate = async () => {
     ElMessage.warning('请填写正确的生成周期（至少 1 天）');
     return;
   }
+  // 这是同步接口：请求线程里要做数据组装 + 多视图研判 + NL 分析，慢的时候十几秒起步，
+  // 所以必须把「正在生成」显式画出来，否则点完到弹窗关闭之间界面毫无变化。
+  generating.value = true;
+  startGeneratingClock();
   try {
     const created = await generateReport({
       scenario_id: genForm.value.scenario_id as ScenarioId,
@@ -236,6 +278,9 @@ const submitGenerate = async () => {
     await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '生成失败');
+  } finally {
+    generating.value = false;
+    stopGeneratingClock();
   }
 };
 
@@ -359,6 +404,7 @@ onMounted(async () => {
 // 离开页面时停止轮询，防止内存泄漏（后台导出不受影响，继续执行）
 onBeforeUnmount(() => {
   exportPollAbort = true;
+  stopGeneratingClock();
 });
 </script>
 
@@ -455,13 +501,29 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="300" align="center" fixed="right">
+        <el-table-column label="操作" width="340" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
-              <el-button size="small" @click="handleDownload(row)">下载</el-button>
-              <el-button size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
-              <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
+              <el-button
+                size="small"
+                :loading="downloadingId === row.report_id"
+                @click="handleDownload(row)"
+              >{{ downloadingId === row.report_id ? '导出中' : '下载' }}</el-button>
+              <el-button
+                size="small"
+                type="warning"
+                plain
+                :loading="regeneratingId === row.report_id"
+                @click="handleRegenerate(row)"
+              >{{ regeneratingId === row.report_id ? '生成中' : '重新生成' }}</el-button>
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :loading="deletingId === row.report_id"
+                @click="handleDelete(row)"
+              >{{ deletingId === row.report_id ? '删除中' : '删除' }}</el-button>
             </div>
           </template>
         </el-table-column>
@@ -505,6 +567,8 @@ onBeforeUnmount(() => {
       top="6vh"
       append-to-body
       :close-on-click-modal="false"
+      :close-on-press-escape="!generating"
+      :show-close="!generating"
     >
       <div class="gen-form">
         <div class="gen-field">
@@ -550,8 +614,11 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <template #footer>
-        <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
-        <button class="gen-btn" @click="submitGenerate">生成报告</button>
+        <button class="gen-btn gen-btn--ghost" :disabled="generating" @click="genVisible = false">取消</button>
+        <button class="gen-btn" :disabled="generating" @click="submitGenerate">
+          <span v-if="generating" class="gen-spinner"></span>
+          {{ generating ? `生成中… 已用 ${generatingElapsed} 秒` : '生成报告' }}
+        </button>
       </template>
     </el-dialog>
 
@@ -598,11 +665,17 @@ onBeforeUnmount(() => {
         <el-table-column label="下次生成" width="160" align="center">
           <template #default="{ row }: { row: Report }">{{ row.next_run_at ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="130" align="center">
+        <el-table-column label="操作" width="160" align="center">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
-              <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :loading="deletingId === row.report_id"
+                @click="handleDelete(row)"
+              >{{ deletingId === row.report_id ? '删除中' : '删除' }}</el-button>
             </div>
           </template>
         </el-table-column>
@@ -994,10 +1067,33 @@ onBeforeUnmount(() => {
   opacity: 0.9;
 }
 
+.gen-btn:disabled,
+.gen-btn:disabled:hover {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .gen-btn--ghost {
   background: rgba(91, 166, 255, 0.1);
   color: #9ad6ff;
   border: 1px solid rgba(125, 201, 255, 0.25);
+}
+
+/* 生成中的转圈：.gen-btn 是实底渐变配白字，所以用白色环 */
+.gen-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: gen-spin 0.6s linear infinite;
+}
+
+@keyframes gen-spin {
+  to { transform: rotate(360deg); }
 }
 
 .gen-form {
