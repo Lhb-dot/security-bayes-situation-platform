@@ -131,6 +131,27 @@ def train_model_version(
     )
 
 
+@router.post(
+    "/train-async",
+    response_model=ResponseModel,
+    summary="提交异步训练（仅管理员）：立刻返回 TRAINING 版本，后台线程执行真实训练",
+)
+def train_model_version_async(
+    payload: ModelVersionCreate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    return unwrap(
+        ModelVersionService(db).train_and_save_async(
+            current_user=current_user,
+            scenario_id=payload.scenario_id,
+            dataset_id=payload.dataset_id,
+            algorithm_id=payload.algorithm_id,
+            training_parameters=payload.training_parameters,
+        )
+    )
+
+
 @router.get(
     "/{model_id}", response_model=ResponseModel, summary="模型版本详情（含评估指标）"
 )

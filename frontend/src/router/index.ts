@@ -1,6 +1,12 @@
-import { createRouter, createWebHashHistory } from 'vue-router';
+import { createRouter, createWebHistory } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';
+import type { UserRole } from '@/types/security';
 import { setupRouterGuards } from './guards';
+
+// 角色白名单常量。写成 UserRole[] 而不是内联数组字面量：
+// routes 的类型是独立推断的，内联字面量会退化成 string[]，传给 createRouter 时报类型错。
+const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
+const SUPER_ADMIN_ROLES: UserRole[] = ['SUPER_ADMIN'];
 
 const routes = [
   {
@@ -35,7 +41,7 @@ const routes = [
     // 拖慢首屏（首页 / 场景中心）的加载。
     component: () => import('@/views/Model/RiskAnalysis.vue'),
     // 管理级角色（最外层 + 场景管理员）可训练；场景管理员由后端校验仅自己场景
-    meta: { title: 'AI模型训练预测' },
+    meta: { title: 'AI模型训练预测', roles: MGMT_ROLES },
   },
   // ===================== 多场景架构新增路由 =====================
   {
@@ -43,7 +49,7 @@ const routes = [
     name: '管理员首页',
     component: () => import('@/views/Home/dashboard/DashboardHomeView.vue'),
     // 首页按角色分发：最外层管理员=平台总览；场景管理员=数据画像；场景用户=我的工作台
-    meta: { title: '平台运行总览', requiresAdmin: true, hiddenForUser: true },
+    meta: { title: '平台运行总览', roles: SUPER_ADMIN_ROLES, hiddenForUser: true },
   },
   {
     path: '/scenarios',
@@ -105,7 +111,7 @@ const routes = [
     name: '用户管理',
     component: () => import('@/views/Model/UserManagement.vue'),
     // 管理级角色（最外层管场景管理员/用户；场景管理员管自己场景用户）；权限由后端校验
-    meta: { title: '用户管理' },
+    meta: { title: '用户管理', roles: MGMT_ROLES },
   },
   {
     path: '/events/:eventId',
@@ -113,10 +119,31 @@ const routes = [
     component: () => import('@/views/Event/RiskEventDetailView.vue'),
     meta: { title: '风险事件详情' },
   },
+  {
+    // 兜底：history 模式下用户可以直接手敲任意地址，未匹配时必须给出页面。
+    // 此前没有这条，未知地址会渲染出「顶栏在、内容区空白」。必须放在最后，按顺序匹配。
+    path: '/:pathMatch(.*)*',
+    name: '页面不存在',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { title: '页面不存在' },
+  },
 ];
 
+// 旧 hash 链接迁移：此前地址形如 /#/reports，切到 history 模式后这类地址会落到
+// 404 兜底页。装路由之前原地改写成 /reports，让已分享出去的链接继续可用。
+//
+// 位置很关键：createWebHistory() 在**创建时**就读取 window.location 并缓存当前位置，
+// 所以这段必须跑在 createRouter() 之前。放在 main.ts 里已经晚了 —— router 模块
+// 先执行完，路由拿到的仍是带 hash 的旧地址（实测会跳成 /login?redirect=/scenarios#/reports）。
+// 用 replaceState 而不是赋值 location.pathname —— 后者会真的发起一次整页请求。
+if (window.location.hash.startsWith('#/')) {
+  window.history.replaceState(null, '', window.location.hash.slice(1));
+}
+
 const router = createRouter({
-  history: createWebHashHistory(),
+  // history 模式：地址里不再有 #。深链由服务端兜底到 index.html
+  // （nginx 的 try_files，以及后端 main.py 的 SPAStaticFiles）。
+  history: createWebHistory(),
   routes,
 });
 

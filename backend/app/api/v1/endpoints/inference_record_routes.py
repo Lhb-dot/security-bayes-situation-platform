@@ -101,6 +101,75 @@ async def predict_batch_upload(
     )
 
 
+@router.post(
+    "/predict-batch/jobs",
+    response_model=ResponseModel,
+    summary="提交异步批量研判（登录用户）：立刻返回 job_id，后台逐条执行",
+)
+def predict_batch_submit(
+    payload: InferenceBatchPredict,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """异步批量研判：校验与同步 /predict-batch 一致，只是不在请求线程里跑。
+
+    200 条最坏可跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒）；
+    同步返回会让前端拿到 504 而实际已经落了一半记录，所以页面走这条。
+
+    必须注册在 ``/{record_id}`` 之前 —— 否则 "predict-batch" 会被当成
+    路径参数解析而返回 422。
+    """
+    service = InferenceRecordService(db)
+    if payload.source == "dataset":
+        return service.submit_batch_from_dataset(
+            current_user=current_user,
+            model_version_id=payload.model_version_id,
+            offset=payload.offset,
+            limit=payload.limit,
+        )
+    return service.submit_batch_inference(
+        current_user=current_user,
+        model_version_id=payload.model_version_id,
+        samples=payload.samples or [],
+    )
+
+
+@router.post(
+    "/predict-batch/upload/jobs",
+    response_model=ResponseModel,
+    summary="上传 CSV 并提交异步批量研判（表头需覆盖数据集全部输入特征）",
+)
+async def predict_batch_upload_submit(
+    file: UploadFile = File(..., description="CSV 文件"),
+    model_version_id: int = Form(..., description="模型版本 ID"),
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """上传 CSV 后立刻返回 job_id；解析/列名错误仍同步返回，便于前端即时提示。"""
+    file_bytes = await file.read()
+    return unwrap(
+        InferenceRecordService(db).submit_batch_from_csv(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            filename=file.filename or "",
+            file_bytes=file_bytes,
+        )
+    )
+
+
+@router.get(
+    "/predict-batch/jobs/{job_id}",
+    response_model=ResponseModel,
+    summary="查询批量研判任务进度（仅发起人）",
+)
+def get_predict_batch_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(InferenceRecordService(db).get_batch_job(current_user, job_id))
+
+
 @router.get(
     "",
     response_model=ResponseModel,

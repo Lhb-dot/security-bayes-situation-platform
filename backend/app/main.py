@@ -8,6 +8,9 @@ import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 # Support both ``python app/main.py`` and ``python -m app.main`` from backend/.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +25,39 @@ logger = logging.getLogger(__name__)
 WEB_ROOT = PROJECT_ROOT / "frontend"
 DIST_ROOT = WEB_ROOT / "dist"
 SITE_ROOT = DIST_ROOT if (DIST_ROOT / "index.html").exists() else WEB_ROOT
+
+
+class SPAStaticFiles(StaticFiles):
+    """Static files plus an SPA fallback for client-side routes.
+
+    ``StaticFiles(html=True)`` only serves ``index.html`` for *directory*
+    requests (``/``). A deep link such as ``/reports`` is neither a file nor a
+    directory, so it 404s — which is why the frontend historically ran in hash
+    mode. Now that vue-router uses history mode, the shell must answer those
+    paths and let the router resolve them.
+
+    Two exclusions keep genuine 404s intact:
+    * ``/api/`` — an unknown endpoint must stay a JSON 404, never become HTML.
+    * last path segment containing ``.`` — a missing asset must stay 404.
+    """
+
+    def __init__(self, *, api_prefixes: tuple[str, ...] = ("/api/",), **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._api_prefixes = api_prefixes
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # Starlette's HTTPException, not FastAPI's — the latter subclasses it,
+            # so catching the FastAPI one here would never fire.
+            if exc.status_code != 404:
+                raise
+            if scope.get("path", "").startswith(self._api_prefixes):
+                raise
+            if "." in path.rsplit("/", 1)[-1]:
+                raise
+            return await super().get_response("index.html", scope)
 
 
 def _warm_dataset_caches_async() -> None:
@@ -52,6 +88,34 @@ def _warm_dataset_caches_async() -> None:
     threading.Thread(target=warm, name="dataset-cache-warmup", daemon=True).start()
 
 
+def _start_report_scheduler() -> None:
+    """Start the background scheduler that refreshes due scheduled reports."""
+    from app.services.report_scheduler import start
+
+    start()
+
+
+def _start_training_runner() -> None:
+    """Start the background runner that executes submitted training jobs."""
+    from app.services.training_runner import start
+
+    start()
+
+
+def _start_batch_inference_runner() -> None:
+    """Start the background runner that executes submitted batch inference jobs."""
+    from app.services.batch_inference_runner import start
+
+    start()
+
+
+def _start_export_job_runner() -> None:
+    """Start the background runner that renders submitted report export jobs."""
+    from app.services.export_job_service import start
+
+    start()
+
+
 def create_app() -> FastAPI:
     """Create the HTTP application and register routes in one place."""
     app = FastAPI()
@@ -66,7 +130,11 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(legacy_model_router)
     _warm_dataset_caches_async()
-    app.mount("/", StaticFiles(directory=str(SITE_ROOT), html=True), name="web")
+    _start_report_scheduler()
+    _start_training_runner()
+    _start_batch_inference_runner()
+    _start_export_job_runner()
+    app.mount("/", SPAStaticFiles(directory=str(SITE_ROOT), html=True), name="web")
     return app
 
 

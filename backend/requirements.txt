@@ -44,3 +44,8 @@ fastapi
 uvicorn
 openai>=1.0.0
 cryptography>=42.0.0
+
+# 报告导出：markdown 转 HTML，再由 Playwright 的 Chromium 转 PDF
+# 部署后还需执行一次：playwright install chromium（服务器缺中文字体时另装 fonts-noto-cjk）
+markdown-it-py>=3.0
+playwright>=1.40

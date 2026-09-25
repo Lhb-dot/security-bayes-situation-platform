@@ -27,7 +27,7 @@ class ReportCreate(BaseModel):
 
 
 class ReportScheduleUpdate(BaseModel):
-    """只保存定时配置；具体调度执行暂不在本接口实现。"""
+    """只保存定时配置；到期后由后台调度器原地重新生成该报告。"""
 
     scheduled: bool = Field(..., description="是否启用定时配置")
     interval_days: Optional[int] = Field(
@@ -39,6 +39,8 @@ class ReportGenerate(BaseModel):
     """自动生成态势报告（服务端基于真实数据 + 算法解释组装内容）。
 
     数据范围只区分聚合数据与本人个人数据，不再支持指定单个用户。
+    scheduled=True 时这条报告同时登记为定时报告：立刻产出内容，
+    并把下次生成时刻写入 next_run_at，到期由后台调度器重新生成。
     """
 
     title: str = Field(..., min_length=1, max_length=128, description="报告标题")
@@ -49,3 +51,7 @@ class ReportGenerate(BaseModel):
         "self", description="数据范围：self=本人个人数据；all=全平台/本场景聚合数据"
     )
     format: ReportFormat = Field("markdown", description="报告格式")
+    scheduled: bool = Field(False, description="是否登记为定时报告")
+    interval_days: Optional[int] = Field(
+        None, ge=1, description="定时周期（天），scheduled=True 时必填"
+    )

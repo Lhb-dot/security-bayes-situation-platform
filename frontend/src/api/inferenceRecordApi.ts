@@ -104,6 +104,62 @@ export const predictInferenceBatchUpload = async (params: {
   );
 };
 
+/** 异步批量研判的提交回执 */
+export interface BatchJobReceipt {
+  job_id: string;
+  total: number;
+  /** 样本数超过单批上限、只提交了前面部分时为 true */
+  truncated: boolean;
+}
+
+/** 批量研判任务视图（GET /inference-records/predict-batch/jobs/{job_id}） */
+export interface BatchInferenceJob extends BatchJobReceipt {
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  model_version_id: number;
+  /** 已处理条数，用于进度展示 */
+  processed: number;
+  succeeded: number;
+  failed: number;
+  risk_count: number;
+  /** 任务整体失败时的原因 */
+  error: string | null;
+  /** 终态（DONE / FAILED）才有；进行中为 null */
+  result: BatchInferenceResult | null;
+}
+
+/**
+ * 提交异步批量研判（POST /inference-records/predict-batch/jobs）
+ *
+ * 200 条最坏可跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒）：同步接口会让
+ * 前端拿到 504 而实际已经落了一半记录，所以页面走这条。模型可见性、数据集区间、
+ * CSV 列名等校验仍在提交时同步完成，错误照常抛出。
+ */
+export const submitInferenceBatch = async (params: {
+  model_version_id: string | number;
+  source: 'dataset' | 'samples';
+  offset?: number;
+  limit?: number;
+  samples?: Record<string, unknown>[];
+}): Promise<BatchJobReceipt> =>
+  unwrapData(await request.post('/api/v1/inference-records/predict-batch/jobs', params));
+
+/** 上传 CSV 并提交异步批量研判 */
+export const submitInferenceBatchUpload = async (params: {
+  model_version_id: string | number;
+  file: File;
+}): Promise<BatchJobReceipt> => {
+  const form = new FormData();
+  form.append('file', params.file);
+  form.append('model_version_id', String(params.model_version_id));
+  return unwrapData(
+    await request.post('/api/v1/inference-records/predict-batch/upload/jobs', form),
+  );
+};
+
+/** 批量研判任务进度（GET /inference-records/predict-batch/jobs/{job_id}，仅发起人） */
+export const getInferenceBatchJob = async (jobId: string): Promise<BatchInferenceJob> =>
+  unwrapData(await request.get(`/api/v1/inference-records/predict-batch/jobs/${jobId}`));
+
 /** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */
 export const getInferenceRecordList = async (params?: {
   model_version_id?: string;

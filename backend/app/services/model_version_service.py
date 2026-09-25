@@ -346,17 +346,85 @@ class ModelVersionService(ServiceBase):
             metrics = self._run_algorithm_training(
                 model, algorithm.code, model.training_parameters or {}
             )
-            self._transition(model, MODEL_STATUS_DRAFT)
-            model.evaluation_metrics = metrics
-            from app.services.model_evaluation_service import build_model_attributes
-            model.model_attributes = build_model_attributes(model)
-            self.commit()
+            self.apply_training_success(model, metrics)
         except Exception as exc:
-            self._transition(model, MODEL_STATUS_FAILED)
-            model.evaluation_metrics = {"source": "error", "error": str(exc)}
-            self.commit()
+            self.apply_training_failure(model, exc)
             raise ServiceError(500, f"训练失败：{exc}")
         return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
+
+    @service_call
+    def train_and_save_async(
+        self,
+        current_user,
+        scenario_id: int,
+        dataset_id: int,
+        algorithm_id: int,
+        training_parameters: Dict[str, Any],
+    ):
+        """提交异步训练：立刻返回 TRAINING 版本，真实训练在后台线程执行。
+
+        校验、建版本、参数落库与 train_and_save 完全一致（复用 create()），区别只是
+        不在请求线程里等训练结束 —— 同步路径最长会占住一个线程池 worker 到
+        TRAIN_TIMEOUT（600 秒）。
+
+        训练结果由 training_runner 写回：成功 → DRAFT，失败 → FAILED，字段与同步路径相同。
+        """
+        from app.services.training_runner import is_running, submit
+
+        if not is_running():
+            raise ServiceError(503, "训练执行器未启用，无法提交后台训练")
+
+        created = self.create(
+            current_user, scenario_id, dataset_id, algorithm_id, training_parameters
+        )
+        if created.code != 0:
+            # create() 内部把 ServiceError 转成了 fail 响应（不抛出），此处重新抛出让本
+            # 方法的 @service_call 按统一语义返回 HTTP 状态码。
+            raise ServiceError(created.code, created.message)
+
+        if not submit(created.data["id"]):
+            raise ServiceError(503, "训练执行器未启用，无法提交后台训练")
+        return ok(data=created.data, message="训练已提交，模型版本进入 TRAINING")
+
+    def apply_training_success(self, model: ModelVersion, metrics: dict) -> None:
+        """训练成功落库：TRAINING → DRAFT，写评估指标与模型属性。"""
+        self._transition(model, MODEL_STATUS_DRAFT)
+        model.evaluation_metrics = metrics
+        from app.services.model_evaluation_service import build_model_attributes
+        model.model_attributes = build_model_attributes(model)
+        self.commit()
+
+    def apply_training_failure(self, model: ModelVersion, error: object) -> None:
+        """训练失败落库：TRAINING → FAILED。
+
+        ``source="error"`` 是前端 isRealTrain（读 metrics.source 是否以 java_ 开头）的
+        判定依据，必须保留；现成的 fail_training() 只写 error 字段，不能直接复用。
+        """
+        self._transition(model, MODEL_STATUS_FAILED)
+        model.evaluation_metrics = {"source": "error", "error": str(error)}
+        self.commit()
+
+    def run_training_job(self, model: ModelVersion) -> None:
+        """后台执行一次训练并流转状态（供 training_runner 调用）。
+
+        与 train_and_save 的区别只有一处：不向调用方抛异常 —— 后台线程没有请求上下文，
+        失败只能体现在模型状态上（TRAINING → FAILED）。
+        """
+        model_id = model.id
+        try:
+            algorithm = self.db.get(Algorithm, model.algorithm_id)
+            metrics = self._run_algorithm_training(
+                model, algorithm.code, model.training_parameters or {}
+            )
+            self.apply_training_success(model, metrics)
+        except Exception as exc:  # noqa: BLE001 - 失败必须落到模型状态上
+            try:
+                self.apply_training_failure(model, exc)
+            except Exception:  # noqa: BLE001 - 状态已无法流转（例如被人工改过）
+                self.db.rollback()
+                logger.exception("训练任务 #%s 标记失败时再次异常", model_id)
+            else:
+                logger.warning("训练任务 #%s 失败：%s", model_id, exc)
 
     def _run_algorithm_training(
         self, model: ModelVersion, algorithm_code: str, training_parameters: dict

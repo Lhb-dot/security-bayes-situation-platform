@@ -9,14 +9,15 @@
  * 需求 6.7.2：训练成功生成 DRAFT 模型版本（待管理员在模型中心审核发布）
  * 需求 6.5.2：仅管理员可训练；普通用户只能使用已发布模型执行推理
  *
- * 训练执行策略（后端 /api/v1/model-versions/train）：所有已注册算法均调用真实 Java/Weka 服务；
+ * 训练执行策略（后端 /api/v1/model-versions/train-async）：提交后立刻返回 TRAINING 版本，
+ * 后台线程调用真实 Java/Weka 服务；页面轮询模型版本详情，状态转为 DRAFT / FAILED 即结束。
  * 页面参数来自 algorithm.param_schema，并随训练请求传入服务。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { AlgorithmParamDef, UserAccount } from '@/types/security';
 import { useUserStore } from '@/stores/userStore';
-import { getScenarios, getDatasets, getAlgorithms, trainModel } from '@/api/trainingApi';
+import { getScenarios, getDatasets, getAlgorithms, trainModelAsync, getModelVersionDetail } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -165,6 +166,37 @@ const stopTrainingTimer = () => {
   }
 };
 
+// ===== 训练状态轮询（异步训练：提交后轮询直到 DRAFT / FAILED） =====
+// 后端 TRAIN_TIMEOUT 为 600 秒，留 1 分钟余量后放弃等待；此时后台训练仍在继续，
+// 结果可在模型中心查看。
+const TRAIN_POLL_INTERVAL_MS = 2000;
+const TRAIN_POLL_TIMEOUT_MS = 11 * 60 * 1000;
+let trainPollAbort = false;
+
+/** 模型版本行（trainingApi 为 JS 模块无类型，此处显式声明用到的字段） */
+interface ModelVersionRow {
+  id: number;
+  status: string;
+  scenario_id: number;
+  dataset_id: number;
+  algorithm_id: number;
+  evaluation_metrics?: Record<string, unknown>;
+  training_parameters?: Record<string, unknown>;
+}
+
+/** 轮询训练结果：离开页面返回 null（静默收尾），超时抛错。 */
+const waitForTrainingResult = async (submitted: ModelVersionRow): Promise<ModelVersionRow | null> => {
+  const deadline = Date.now() + TRAIN_POLL_TIMEOUT_MS;
+  let current = submitted;
+  while (current.status === 'TRAINING') {
+    if (trainPollAbort) return null;
+    if (Date.now() >= deadline) throw new Error('训练仍在进行，请稍后在模型中心查看结果');
+    await new Promise((resolve) => window.setTimeout(resolve, TRAIN_POLL_INTERVAL_MS));
+    current = await getModelVersionDetail(current.id);
+  }
+  return current;
+};
+
 const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
 const isRealTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('java_'));
 
@@ -235,18 +267,21 @@ const handleTrain = async () => {
   training.value = true;
   trainResult.value = null;
   startTrainingTimer();
+  trainPollAbort = false;
   try {
     // 只提交表单上真实展示的参数，避免把不适用于当前数据集的参数带进训练请求。
     const training_parameters: Record<string, number | string | boolean> = {};
     for (const p of visibleParams.value) {
       if (p.param_name in paramForm.value) training_parameters[p.param_name] = paramForm.value[p.param_name];
     }
-    const row = await trainModel({
+    const submitted: ModelVersionRow = await trainModelAsync({
       scenario_id: selectedScenario.value,
       dataset_id: selectedDatasetId.value,
       algorithm_id: selectedAlgoId.value,
       training_parameters,
     });
+    const row = await waitForTrainingResult(submitted);
+    if (!row) return;   // 已离开页面：训练在后台继续，静默收尾
     trainResult.value = {
       model_version_id: String(row.id),
       status: row.status,
@@ -256,8 +291,12 @@ const handleTrain = async () => {
       evaluation_metrics: row.evaluation_metrics ?? {},
       training_parameters: row.training_parameters ?? {},
     };
-    const done = row.status === 'DRAFT';
-    ElMessage.success(done ? '训练完成，已生成待发布模型版本，请在模型中心审核发布' : `训练状态：${row.status}`);
+    if (row.status === 'DRAFT') {
+      ElMessage.success('训练完成，已生成待发布模型版本，请在模型中心审核发布');
+    } else {
+      const reason = String(trainResult.value.evaluation_metrics.error ?? '');
+      ElMessage.error(reason ? `训练失败：${reason}` : `训练状态：${row.status}`);
+    }
   } catch (err) {
     const e = err as { response?: { data?: { message?: string } }; message?: string };
     ElMessage.error(e.response?.data?.message || e.message || '模型训练失败');
@@ -304,8 +343,9 @@ onMounted(async () => {
   selectedAlgoId.value = algorithms.value.find((a) => a.available)?.id ?? '';
 });
 
-// 离开页面时清理训练计时器，防止内存泄漏
+// 离开页面时清理训练计时器与轮询，防止内存泄漏（后台训练不受影响，继续执行）
 onBeforeUnmount(() => {
+  trainPollAbort = true;
   stopTrainingTimer();
 });
 </script>
@@ -463,7 +503,7 @@ onBeforeUnmount(() => {
           <p>
             {{
               training
-              ? '正在执行模型训练，大样本数据集可能需要数十秒。'
+              ? '正在执行模型训练，大样本数据集可能需要数分钟。'
                 : '完成左侧配置后启动训练。训练成功的模型将进入待发布状态，可在模型中心审核发布。'
             }}
           </p>

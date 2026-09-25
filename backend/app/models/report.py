@@ -33,6 +33,10 @@ class Report(Base):
     format: Mapped[str] = mapped_column(String(16), nullable=False, default="markdown")
     scheduled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     interval_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 定时报告的下次生成时刻（UTC）。仅 scheduled=True 时有值，由后台调度器消费。
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     generator: Mapped["AppUser"] = relationship(

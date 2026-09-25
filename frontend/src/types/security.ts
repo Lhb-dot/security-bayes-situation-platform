@@ -362,6 +362,8 @@ export interface Report {
   scheduled?: boolean;
   /** 定时生成周期（天） */
   interval_days?: number;
+  /** 定时报告的下次生成时间（后端按北京时间下发，仅 scheduled=true 时有值） */
+  next_run_at?: string;
   /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
   generated_by?: string;
 }

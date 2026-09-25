@@ -19,7 +19,6 @@
 """
 import argparse
 import os
-import re
 import shutil
 import stat
 import sys
@@ -141,83 +140,19 @@ TEST_USERS = [
 # ---------------------------------------------------------------------------
 # ARFF 解析
 # ---------------------------------------------------------------------------
-_ATTR_RE = re.compile(r"@ATTRIBUTE\s+(.+)$", re.IGNORECASE)
-
-
-def _split_arff_values(content: str):
-    """按逗号切分 {..} 内的枚举值，正确处理引号与 \\' 转义。"""
-    vals, cur, in_q = [], [], False
-    i = 0
-    while i < len(content):
-        ch = content[i]
-        if ch == "\\" and i + 1 < len(content) and content[i + 1] == "'":
-            cur.append("'")
-            i += 2
-            continue
-        if ch == "'":
-            in_q = not in_q
-            i += 1
-            continue
-        if ch == "," and not in_q:
-            vals.append("".join(cur).strip())
-            cur = []
-            i += 1
-            continue
-        cur.append(ch)
-        i += 1
-    if cur:
-        vals.append("".join(cur).strip())
-    return [v.strip("'") for v in vals if v.strip()]
-
-
 def parse_arff_fields(path: str, label_field: str):
-    """解析 ARFF，返回 (fields_schema, rows)。rows 为 @data 后非空行数。"""
-    fields, rows, in_data = [], 0, False
-    for raw in open(path, encoding="utf-8-sig", errors="replace"):
-        line = raw.strip()
-        upper = line.upper()
-        if upper.startswith("@ATTRIBUTE"):
-            body = line[len("@ATTRIBUTE"):].strip()
-            m = _ATTR_RE.match(line)
-            if not m:
-                continue
-            body = m.group(1).strip()
-            if body.startswith("'") or body.startswith('"'):
-                # 带引号字段名：@attribute 'name' type
-                name, _, typ = body[1:].partition(body[0])
-                typ = typ.strip()
-            else:
-                parts = body.split(None, 1)
-                if len(parts) != 2:
-                    continue
-                name, typ = parts[0], parts[1].strip()
-            name = name.lstrip("\ufeff").strip()
-            if typ.lower().startswith("{"):
-                enum_values = _split_arff_values(typ.strip("{}"))
-                field_type = "enum"
-            else:
-                enum_values = []
-                field_type = typ.lower().split()[0] if typ.lower().split()[0] in ("numeric", "string", "date", "real", "integer") else "numeric"
-            fields.append({
-                "name": name,
-                "type": field_type,
-                "role": "label" if name == label_field else "feature",
-                "enum_values": enum_values,
-                "sample_values": [],
-            })
-        elif upper.startswith("@DATA"):
-            in_data = True
-        elif in_data and line and not line.startswith("%") and not line.startswith("@"):
-            rows += 1
-            values = [v.strip().strip("'\"") for v in line.split(",")]
-            for i, v in enumerate(values):
-                if i >= len(fields):
-                    break
-                if len(fields[i]["sample_values"]) >= 2:
-                    continue
-                if v and v != "?" and v not in fields[i]["sample_values"]:
-                    fields[i]["sample_values"].append(v)
-    return fields, rows
+    """解析 ARFF，返回 (fields_schema, rows)。rows 为 @data 后非空行数。
+
+    复用 `app.utils.arff_reader`（上传登记 / 数据预览 / 样例值回填走的都是这一套），
+    不再自己实现一遍。原先的本地实现会把 ARFF 里的转义引号（`\\'...\\'`）剥掉，
+    而 Weka 实际认的枚举值是**带引号**的 —— 入库值域和样本库取值因此对不上，
+    推理输入校验（common.py:203）必然报「不在枚举值域内」。
+    """
+    from app.utils.arff_reader import count_arff_rows, read_arff
+    from app.utils.dataset_file_reader import build_fields_schema
+
+    fields, _ = read_arff(path, max_rows=50)  # 前 50 行足够取每字段的样例值
+    return build_fields_schema(fields, label_field), count_arff_rows(path)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@
  * 因此筛选结果跨全量事件生效，翻页也不会把页面拉长。
  */
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { getRiskEventPage } from '@/api/riskEventApi';
 import { useUserStore } from '@/stores/userStore';
 
@@ -34,6 +35,7 @@ const page = ref(1);
 const pageSize = 20;
 
 const userStore = useUserStore();
+const router = useRouter();
 
 /** 是否系统管理员（管理员/用户固定自己场景） */
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
@@ -129,6 +131,11 @@ const riskLevelMap: Record<string, { label: string; type: string }> = {
   LOW: { label: '低危', type: 'info' },
 };
 
+/** 行内「查看」→ 风险事件详情页 */
+const goEventDetail = (row: RiskEventItem) => {
+  router.push({ path: `/events/${row.id}` });
+};
+
 onMounted(() => {
   loadEvents(1);
 });
@@ -195,7 +202,7 @@ onMounted(() => {
         row-class-name="event-table-row"
         empty-text="暂无匹配的风险事件"
       >
-        <el-table-column prop="id" label="事件编号" width="200" show-overflow-tooltip />
+        <el-table-column prop="id" label="事件编号" width="96" align="center" show-overflow-tooltip />
 
         <el-table-column label="所属场景" width="110" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
@@ -244,6 +251,12 @@ onMounted(() => {
             >
               {{ STATUS_LABEL[row.status] ?? row.status }}
             </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="110" align="center" fixed="right">
+          <template #default="{ row }: { row: RiskEventItem }">
+            <el-button size="small" type="primary" plain @click="goEventDetail(row)">查看</el-button>
           </template>
         </el-table-column>
       </el-table>

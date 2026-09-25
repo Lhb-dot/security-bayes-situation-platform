@@ -399,6 +399,35 @@ class InferenceRecordService(ServiceBase):
         if not samples:
             raise ServiceError(400, "没有可研判的样本")
 
+        succeeded, failed, risk_count, items = self._run_batch(
+            current_user, model_version_id, dataset, samples
+        )
+        return ok(
+            data={
+                "total": len(samples),
+                "succeeded": succeeded,
+                "failed": failed,
+                "risk_count": risk_count,
+                "items": items,
+            },
+            message=(
+                f"批量研判完成：成功 {succeeded} 条、风险 {risk_count} 条"
+                + (f"、失败 {failed} 条" if failed else "")
+            ),
+        )
+
+    def _run_batch(
+        self,
+        current_user,
+        model_version_id: int,
+        dataset,
+        samples: List[Dict[str, Any]],
+        on_progress=None,
+    ):
+        """逐条执行批量推理，返回 (succeeded, failed, risk_count, items)。
+
+        单条失败不影响整批（沿用原语义）；on_progress 仅供后台任务汇报进度。
+        """
         items: List[Dict[str, Any]] = []
         succeeded = failed = risk_count = 0
 
@@ -451,20 +480,10 @@ class InferenceRecordService(ServiceBase):
                     "error": None,
                 }
             )
+            if on_progress is not None:
+                on_progress(index + 1, succeeded, failed, risk_count)
 
-        return ok(
-            data={
-                "total": len(samples),
-                "succeeded": succeeded,
-                "failed": failed,
-                "risk_count": risk_count,
-                "items": items,
-            },
-            message=(
-                f"批量研判完成：成功 {succeeded} 条、风险 {risk_count} 条"
-                + (f"、失败 {failed} 条" if failed else "")
-            ),
-        )
+        return succeeded, failed, risk_count, items
 
     @service_call
     def create_batch_from_dataset(
@@ -511,6 +530,25 @@ class InferenceRecordService(ServiceBase):
         """
         model, dataset = self._resolve_target(current_user, model_version_id)
 
+        samples = self._parse_csv_samples(dataset, filename, file_bytes, limit)
+
+        result = self.create_batch_inference(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            samples=samples,
+        )
+        if result.code == 0 and result.data:
+            result.data["truncated"] = len(samples) >= limit
+        return result
+
+    def _parse_csv_samples(
+        self, dataset, filename: str, file_bytes: bytes, limit: int
+    ) -> List[Dict[str, Any]]:
+        """把上传的 CSV 解析为样本列表（最多 limit 条）。
+
+        列名必须覆盖数据集全部输入特征（顺序任意，多余列忽略，标签列可有可无）。
+        列名对不上时直接给出缺哪几列，不把解析细节抛给用户。
+        """
         if not str(filename).lower().endswith(".csv"):
             raise ServiceError(400, "仅支持 .csv 文件")
         try:
@@ -546,15 +584,127 @@ class InferenceRecordService(ServiceBase):
             )
         if not samples:
             raise ServiceError(400, "CSV 中没有数据行")
+        return samples
 
-        result = self.create_batch_inference(
+    # ------------------------------------------------------------------
+    # 批量推理（异步：提交任务 + 轮询进度；页面「批量研判」默认走这条）
+    # ------------------------------------------------------------------
+    def run_batch_job(
+        self,
+        current_user,
+        model_version_id: int,
+        samples: List[Dict[str, Any]],
+        on_progress=None,
+    ) -> Dict[str, Any]:
+        """后台执行一次批量研判（供 batch_inference_runner 调用），返回汇总。
+
+        不返回 ResponseModel、也不吞异常：调用方是后台线程，异常由它写进任务表。
+        """
+        model, dataset = self._resolve_target(current_user, model_version_id)
+        if not samples:
+            raise ServiceError(400, "没有可研判的样本")
+        succeeded, failed, risk_count, items = self._run_batch(
+            current_user, model_version_id, dataset, samples, on_progress
+        )
+        return {
+            "total": len(samples),
+            "succeeded": succeeded,
+            "failed": failed,
+            "risk_count": risk_count,
+            "items": items,
+        }
+
+    @service_call
+    def submit_batch_inference(
+        self,
+        current_user,
+        model_version_id: int,
+        samples: List[Dict[str, Any]],
+        truncated: bool = False,
+    ):
+        """登记后台批量研判任务并立刻返回 job_id（进度用 get_batch_job 查）。
+
+        校验与同步路径同一套（复用 _resolve_target）；样本已由调用方解析完毕，
+        所以这里只判断「能不能跑」，不占请求线程。
+        """
+        from app.services.batch_inference_runner import create_job, is_running
+
+        if not is_running():
+            raise ServiceError(503, "批量研判执行器未启用，无法提交后台任务")
+        self._resolve_target(current_user, model_version_id)
+        if not samples:
+            raise ServiceError(400, "没有可研判的样本")
+
+        job_id = create_job(
+            user_id=current_user.id,
+            model_version_id=model_version_id,
+            samples=samples,
+            truncated=truncated,
+        )
+        return ok(
+            data={"job_id": job_id, "total": len(samples), "truncated": truncated},
+            message=f"批量研判已提交，共 {len(samples)} 条",
+        )
+
+    @service_call
+    def get_batch_job(self, current_user, job_id: str):
+        """查询批量研判任务进度；任务不存在、已过期或不属于当前用户时 404。"""
+        from app.services.batch_inference_runner import get_job
+
+        self.require_login(current_user)
+        view = get_job(job_id, current_user.id)
+        if view is None:
+            raise ServiceError(404, "批量研判任务不存在或已过期")
+        return ok(data=view)
+
+    @service_call
+    def submit_batch_from_dataset(
+        self,
+        current_user,
+        model_version_id: int,
+        offset: int = 0,
+        limit: int = 50,
+    ):
+        """从模型绑定数据集读取 offset..offset+limit 条样本并提交后台研判。
+
+        样本读取走 ``read_sample_rows``（与数据预览同一口径），ARFF / CSV 都支持。
+        """
+        model, dataset = self._resolve_target(current_user, model_version_id)
+
+        from app.services.training_executor import resolve_dataset_path
+        from app.utils.dataset_file_reader import read_sample_rows
+
+        path = resolve_dataset_path(dataset.file_path)
+        if not os.path.exists(path):
+            raise ServiceError(404, f"数据集文件不存在: {path}")
+        samples = read_sample_rows(path, dataset.fields_schema, offset, limit)
+        if not samples:
+            raise ServiceError(400, "指定区间内没有样本")
+        return self.submit_batch_inference(
             current_user=current_user,
             model_version_id=model_version_id,
             samples=samples,
         )
-        if result.code == 0 and result.data:
-            result.data["truncated"] = len(samples) >= limit
-        return result
+
+    @service_call
+    def submit_batch_from_csv(
+        self,
+        current_user,
+        model_version_id: int,
+        filename: str,
+        file_bytes: bytes,
+        limit: int = 200,
+    ):
+        """解析上传的 CSV 并提交后台研判（列名必须覆盖数据集全部输入特征）。"""
+        model, dataset = self._resolve_target(current_user, model_version_id)
+
+        samples = self._parse_csv_samples(dataset, filename, file_bytes, limit)
+        return self.submit_batch_inference(
+            current_user=current_user,
+            model_version_id=model_version_id,
+            samples=samples,
+            truncated=len(samples) >= limit,
+        )
 
     # ------------------------------------------------------------------
     # 查询（需求 6.8：USER 仅本人；ADMIN 全部）

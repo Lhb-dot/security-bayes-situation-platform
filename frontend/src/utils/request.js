@@ -34,8 +34,31 @@ const currentCsrfToken = () =>
 
 export const getCsrfToken = () => currentCsrfToken();
 
-const extractErrorMessage = (error) => {
-  const data = error?.response?.data;
+/**
+ * 401 的跳转由路由层接管（main.ts 在装好 router 后注册）。
+ *
+ * 这里不直接改 window.location：history 模式下 vue-router 只监听 popstate，
+ * 改 hash 既不触发导航，还会把地址污染成 /reports#/login。
+ * 会话恢复期间（handler 尚未注册）只清凭据，随后的路由守卫会把用户送去
+ * /login?redirect=<原目标>。
+ */
+let unauthorizedHandler = null;
+
+export const setUnauthorizedHandler = (handler) => {
+  unauthorizedHandler = handler;
+};
+
+const extractErrorMessage = async (error) => {
+  let data = error?.response?.data;
+  // responseType: 'blob' 的请求失败时，服务端回的是 JSON，但被 axios 包成了 Blob，
+  // 不解开就只能报「Request failed with status code 500」这种没用的话
+  if (data instanceof Blob) {
+    try {
+      data = JSON.parse(await data.text());
+    } catch {
+      data = null;
+    }
+  }
   if (!data) return error?.message || '请求失败';
   if (typeof data.message === 'string' && data.message) return data.message;
   if (typeof data.detail === 'string' && data.detail) return data.detail;
@@ -64,15 +87,13 @@ service.interceptors.request.use((config) => {
 
 service.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
       setCsrfToken(null);
       window.localStorage.removeItem('bayes_session_user_id');
-      if (window.location.hash !== '#/login') {
-        window.location.hash = '#/login';
-      }
+      if (unauthorizedHandler) unauthorizedHandler();
     }
-    return Promise.reject(new Error(extractErrorMessage(error)));
+    return Promise.reject(new Error(await extractErrorMessage(error)));
   },
 );
 

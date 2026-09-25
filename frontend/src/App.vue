@@ -141,16 +141,11 @@ const isDatasetCenterPage = computed(() => route.path === '/datasets');
 const isModelCenterPage = computed(() => route.path === '/models');
 const isRiskInferencePage = computed(() => route.path === '/inference');
 const isInferenceRecordsPage = computed(() => route.path === '/inference-records');
-const isSituationPage = computed(() => route.path === '/situation');
 const isReportCenterPage = computed(() => route.path === '/reports');
 const isUsersPage = computed(() => route.path === '/users');
 const isSettingsPage = computed(() => route.path === '/settings');
-const isNewRoutePage = computed(() => {
-  const path = route.path;
-  return path === '/overview' || path === '/scenarios' || path.startsWith('/scenarios/') || path === '/datasets' || path.startsWith('/datasets/')
-    || path === '/models' || path === '/inference' || path === '/inference-records' || path === '/situation'
-    || path === '/reports' || path === '/users' || path === '/settings' || path === '/alerts' || path.startsWith('/events/');
-});
+// 内容区渲染不再维护「新页面白名单」：模板用 v-else 兜住所有非 /risk 路由。
+// 原先的白名单漏掉一条就会白屏（/situation 就这么烂了两年），且新增路由必须记得补。
 
 // ===================== 顶部导航（三级角色驱动渲染） =====================
 // 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
@@ -201,7 +196,6 @@ const isNavActive = (item: NavItem): boolean => {
     case '/models': return isModelCenterPage.value;
     case '/inference': return isRiskInferencePage.value;
     case '/inference-records': return isInferenceRecordsPage.value;
-    case '/situation': return isSituationPage.value;
     case '/reports': return isReportCenterPage.value;
     case '/users': return isUsersPage.value;
     case '/settings': return isSettingsPage.value;
@@ -257,8 +251,8 @@ const handleNavClick = (item: NavItem): void => {
       <router-view />
     </div>
 
-    <!-- 多场景新页面 路由视图渲染 -->
-    <div v-else-if="isNewRoutePage" class="new-page-wrap">
+    <!-- 其余页面（含 404 兜底）统一渲染，不再依赖白名单 -->
+    <div v-else class="new-page-wrap">
       <router-view />
     </div>
 

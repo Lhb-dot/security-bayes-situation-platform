@@ -12,7 +12,9 @@
 import hashlib
 import hmac
 import logging
+import os
 import secrets
+import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -27,6 +29,21 @@ logger = logging.getLogger("app.services")
 def get_logger(name: str) -> logging.Logger:
     """获取带统一前缀的日志记录器。"""
     return logging.getLogger(f"app.services.{name}")
+
+
+def running_under_test_runner() -> bool:
+    """当前进程是否由测试框架启动（``python -m unittest`` / ``python -m pytest``）。
+
+    后台守护线程（调度器 / 执行器）在测试里不该起来：它们会连数据库、可能改数据。
+    判定**不能**只看 ``sys.modules`` 里有没有 ``unittest`` —— ``sklearn`` 会把它
+    import 进来，生产环境同样命中，那样执行器会被静默关掉。所以认 ``__main__`` 的 spec。
+    """
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    if getattr(spec, "name", None) in ("unittest.__main__", "pytest", "pytest.__main__"):
+        return True
+    # 直接执行 tests/test_xxx.py 时 __spec__ 为 None，按文件名兜底
+    argv0 = os.path.basename(sys.argv[0] or "")
+    return argv0.startswith("test_") and argv0.endswith(".py")
 
 
 # ---------------------------------------------------------------------------

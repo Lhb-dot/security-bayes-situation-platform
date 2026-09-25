@@ -15,7 +15,7 @@
  *
  * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
@@ -28,8 +28,9 @@ import { getDatasetPreview } from '@/api/datasetApi';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
 import {
-  predictInferenceBatch,
-  predictInferenceBatchUpload,
+  submitInferenceBatch,
+  submitInferenceBatchUpload,
+  getInferenceBatchJob,
   streamInferenceExplanation,
   type BatchInferenceResult,
   type PredictResult,
@@ -116,6 +117,18 @@ const labelField = computed(
 const batchLimit = ref(50);
 const batchRunning = ref(false);
 const batchResult = ref<BatchInferenceResult | null>(null);
+
+// ===== 批量研判任务轮询（提交后轮询直到 DONE / FAILED） =====
+// 200 条最坏约 16 分钟，留足余量；超时后任务仍在后台继续，结果可在推理记录里查看。
+const BATCH_POLL_INTERVAL_MS = 2000;
+const BATCH_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+let batchPollAbort = false;
+const batchProgress = ref({ processed: 0, total: 0 });
+const batchProgressText = computed(() =>
+  batchProgress.value.total
+    ? `研判中… ${batchProgress.value.processed}/${batchProgress.value.total}`
+    : '研判中…'
+);
 const uploadFile = ref<File | null>(null);
 
 // ===================== 3 单条推理结果 =====================
@@ -394,17 +407,48 @@ const batchDone = async (res: BatchInferenceResult) => {
   );
 };
 
+/** 轮询批量研判任务：离开页面返回 null（静默收尾），超时或任务失败抛错。 */
+const waitForBatchJob = async (jobId: string): Promise<BatchInferenceResult | null> => {
+  const deadline = Date.now() + BATCH_POLL_TIMEOUT_MS;
+  let job = await getInferenceBatchJob(jobId);
+  batchProgress.value = { processed: job.processed, total: job.total };
+  while (job.status === 'PENDING' || job.status === 'RUNNING') {
+    if (batchPollAbort) return null;
+    if (Date.now() >= deadline) throw new Error('研判仍在进行，请稍后在推理记录中查看结果');
+    await new Promise((resolve) => window.setTimeout(resolve, BATCH_POLL_INTERVAL_MS));
+    job = await getInferenceBatchJob(jobId);
+    batchProgress.value = { processed: job.processed, total: job.total };
+  }
+  if (job.status === 'FAILED') throw new Error(job.error || '批量研判失败');
+  return job.result;
+};
+
+/** 提交后的公共收尾：提交 → 轮询 → 展示（离开页面则静默结束） */
+const runBatchJob = async (submit: () => Promise<{ job_id: string; total: number }>) => {
+  batchRunning.value = true;
+  batchResult.value = null;
+  inferResult.value = null;
+  hasInferred.value = false;
+  batchPollAbort = false;
+  batchProgress.value = { processed: 0, total: 0 };
+  try {
+    const receipt = await submit();
+    batchProgress.value = { processed: 0, total: receipt.total };
+    const res = await waitForBatchJob(receipt.job_id);
+    if (!res) return;   // 已离开页面：后台继续，静默收尾
+    await batchDone(res);
+  } finally {
+    batchRunning.value = false;
+  }
+};
+
 const handleBatch = async () => {
   if (!selectedModelId.value) {
     ElMessage.warning('请先选择一个已发布模型');
     return;
   }
-  batchRunning.value = true;
-  batchResult.value = null;
-  inferResult.value = null;
-  hasInferred.value = false;
   try {
-    await batchDone(await predictInferenceBatch({
+    await runBatchJob(() => submitInferenceBatch({
       model_version_id: selectedModelId.value,
       source: 'dataset',
       offset: 0,
@@ -412,8 +456,6 @@ const handleBatch = async () => {
     }));
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '批量研判失败');
-  } finally {
-    batchRunning.value = false;
   }
 };
 
@@ -431,19 +473,13 @@ const handleUpload = async () => {
     ElMessage.warning('请先选择 CSV 文件');
     return;
   }
-  batchRunning.value = true;
-  batchResult.value = null;
-  inferResult.value = null;
-  hasInferred.value = false;
   try {
-    await batchDone(await predictInferenceBatchUpload({
+    await runBatchJob(() => submitInferenceBatchUpload({
       model_version_id: selectedModelId.value,
-      file: uploadFile.value,
+      file: uploadFile.value as File,
     }));
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'CSV 批量研判失败');
-  } finally {
-    batchRunning.value = false;
   }
 };
 
@@ -569,6 +605,11 @@ onMounted(async () => {
   if (!selectedScenario.value && scenarioOptions.value.length) {
     selectedScenario.value = scenarioOptions.value[0].value;
   }
+});
+
+// 离开页面时停止轮询，防止内存泄漏（后台任务不受影响，继续执行）
+onBeforeUnmount(() => {
+  batchPollAbort = true;
 });
 </script>
 
@@ -746,7 +787,7 @@ onMounted(async () => {
           <input v-model.number="batchLimit" type="number" min="1" max="200" class="form-input batch-row__num" />
           <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
             <span v-if="batchRunning" class="btn-spinner"></span>
-            {{ batchRunning ? '研判中…' : '批量研判' }}
+            {{ batchRunning ? batchProgressText : '批量研判' }}
           </button>
         </div>
         <div class="batch-row">
@@ -754,7 +795,7 @@ onMounted(async () => {
           <input type="file" accept=".csv" class="batch-row__file" @change="onFileChange" />
           <button class="infer-btn" :disabled="!canBatch || !uploadFile" @click="handleUpload">
             <span v-if="batchRunning" class="btn-spinner"></span>
-            {{ batchRunning ? '研判中…' : '上传并研判' }}
+            {{ batchRunning ? batchProgressText : '上传并研判' }}
           </button>
         </div>
       </div>

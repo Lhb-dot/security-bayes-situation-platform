@@ -2,16 +2,28 @@
 /**
  * ReportCenter - 报告中心页面
  *
- * 报告列表：名称、场景、创建时间、状态
- * 操作：查看、下载、重新生成
+ * 报告列表：名称（定时报告带闹钟标志）、场景、格式、创建时间、状态
+ * 操作：查看、下载、重新生成、删除（所有行一致）
+ * 定时报告：「定时报告」按钮只做查看与删除，跟随账号；新建走「生成报告」并打开定时生成。
+ *          到期由服务端调度器原地重新生成，前端不做调度。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
 import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import { useUserStore } from '@/stores/userStore';
-import { getReportList, getReportDetail, generateReport, updateReportSchedule, removeReport } from '@/api/reportApi';
+import {
+  EXPORT_EXT,
+  downloadReportExportFile,
+  generateReport,
+  getReportDetail,
+  getReportExportJob,
+  getReportPage,
+  getScheduledReports,
+  removeReport,
+  submitReportExport,
+} from '@/api/reportApi';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 const reports = ref<Report[]>([]);
@@ -24,16 +36,47 @@ const currentUser = computed(() => userStore.currentUser);
 const isAdmin = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
-const loadReports = async () => {
+// ===================== 列表分页 =====================
+const page = ref(1);
+const pageSize = 10;
+const total = ref(0);
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
+
+const loadReports = async (targetPage: number = page.value) => {
   loading.value = true;
   error.value = '';
   try {
-    reports.value = await getReportList({ page: 1, page_size: 200 });
+    const data = await getReportPage({ page: targetPage, page_size: pageSize });
+    reports.value = data.items;
+    total.value = data.total;
+    page.value = data.page;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告数据加载失败';
   } finally {
     loading.value = false;
   }
+};
+
+const goPage = (target: number) => {
+  if (target < 1 || target > totalPages.value || target === page.value) return;
+  loadReports(target);
+};
+
+/** 本账号配置的定时报告（「定时报告」弹窗用，跟随账号，只看本人生成的） */
+const scheduledReports = ref<Report[]>([]);
+
+const loadScheduled = async () => {
+  try {
+    scheduledReports.value = await getScheduledReports();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '定时报告加载失败');
+  }
+};
+
+/** 两个列表共用同一批记录，增删改后一起刷新，避免弹窗里留下已删除的条目 */
+const reloadAll = async () => {
+  await loadReports();
+  await loadScheduled();
 };
 
 const handleView = async (report: Report) => {
@@ -47,45 +90,66 @@ const handleView = async (report: Report) => {
   }
 };
 
-/** 导出报告：生成 Markdown 文本下载（需求 6.2 P1 支持导出） */
-const handleDownload = (report: Report) => {
-  const content = [
-    `# ${report.title}`,
-    '',
-    `- 场景：${scenarioLabel[report.scenario_id] ?? report.scenario_id}`,
-    `- 生成时间：${report.created_at}`,
-    `- 格式：${formatLabel[report.format] ?? report.format}`,
-    '',
-    '## 摘要',
-    '',
-    report.content ?? report.summary,
-    '',
-    '---',
-    '由多场景贝叶斯分类态势感知系统自动生成',
-  ].join('\n');
-  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${report.report_id}.md`;
-  a.click();
-  URL.revokeObjectURL(url);
-  ElMessage.success(`已导出报告：${report.title}`);
+/** 下载文件名：去掉文件系统不接受的字符（规则与后端 report_export.safe_filename 一致） */
+const safeFileName = (title: string, reportId: string) => {
+  const cleaned = (title ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .slice(0, 60);
+  return cleaned || `report_${reportId}`;
 };
 
-/** 重新生成报告（基于当前用户数据范围） */
+// ===== 导出任务轮询（pdf 由后台线程渲染） =====
+// 后端单次渲染上限 120 秒，留足余量；超时后任务仍在后台，重新点一次导出即可。
+const EXPORT_POLL_INTERVAL_MS = 1000;
+const EXPORT_POLL_TIMEOUT_MS = 3 * 60 * 1000;
+let exportPollAbort = false;
+
+/** 轮询导出任务直到产物就绪；离开页面返回 null，任务失败或超时抛错。 */
+const waitForExportJob = async (jobId: string) => {
+  const deadline = Date.now() + EXPORT_POLL_TIMEOUT_MS;
+  let job = await getReportExportJob(jobId);
+  while (!job.ready && job.status !== 'FAILED') {
+    if (exportPollAbort) return null;
+    if (Date.now() >= deadline) throw new Error('导出仍在进行，请稍后重新导出');
+    await new Promise((resolve) => window.setTimeout(resolve, EXPORT_POLL_INTERVAL_MS));
+    job = await getReportExportJob(jobId);
+  }
+  if (job.status === 'FAILED') throw new Error(job.error || '导出失败');
+  return job;
+};
+
+/** 导出报告：由服务端后台产出文件（pdf 走异步渲染），就绪后下载 */
+const handleDownload = async (report: Report) => {
+  try {
+    const receipt = await submitReportExport(report.report_id, report.format);
+    const job = await waitForExportJob(receipt.job_id);
+    if (!job) return;   // 已离开页面：后台继续，静默收尾
+    const blob = await downloadReportExportFile(receipt.job_id);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeFileName(report.title, report.report_id)}.${EXPORT_EXT[report.format] ?? 'txt'}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success(`已导出报告：${report.title}`);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '导出失败');
+  }
+};
+
+/** 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告） */
 const handleRegenerate = async (report: Report) => {
   try {
+    // 不带 scheduled：重新生成只产出一份快照，不复制定时任务（否则每次点一下多一条定时）
     await generateReport({
       scenario_id: report.scenario_id,
       title: report.title,
       scope: isAdmin.value ? 'all' : 'self',
       format: report.format,
-      scheduled: report.scheduled,
-      interval_days: report.interval_days,
     });
     ElMessage.success(`已重新生成报告：${report.title}`);
-    await loadReports();
+    await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
   }
@@ -105,10 +169,20 @@ const handleDelete = async (report: Report) => {
   try {
     await removeReport(report.report_id);
     ElMessage.success('报告已删除');
-    await loadReports();
+    // 删掉当前页最后一条时往前退一页，否则会停在一个空页上
+    if (reports.value.length === 1 && page.value > 1) page.value -= 1;
+    await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');
   }
+};
+
+// ===================== 定时报告（跟随账号） =====================
+const schedListVisible = ref(false);
+
+const openScheduleList = async () => {
+  schedListVisible.value = true;
+  await loadScheduled();
 };
 
 // ===================== 生成报告（需求 6.2 P1） =====================
@@ -125,6 +199,7 @@ const genForm = ref({
 const viewVisible = ref(false);
 const viewTarget = ref<Report | null>(null);
 
+/** 打开生成弹窗；勾上「定时生成」即为创建定时报告 */
 const openGenerate = () => {
   genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: isAdmin.value ? 'all' : 'self', format: 'markdown', scheduled: false, interval_days: 7 };
   genVisible.value = true;
@@ -139,6 +214,10 @@ const submitGenerate = async () => {
     ElMessage.warning('请选择报告场景');
     return;
   }
+  if (genForm.value.scheduled && (!genForm.value.interval_days || genForm.value.interval_days < 1)) {
+    ElMessage.warning('请填写正确的生成周期（至少 1 天）');
+    return;
+  }
   try {
     const created = await generateReport({
       scenario_id: genForm.value.scenario_id as ScenarioId,
@@ -148,52 +227,15 @@ const submitGenerate = async () => {
       scheduled: genForm.value.scheduled,
       interval_days: genForm.value.scheduled ? genForm.value.interval_days : undefined,
     });
-    ElMessage.success(`报告生成成功：${created.report_id}`);
+    ElMessage.success(
+      created.scheduled
+        ? `定时报告已创建，下次生成：${created.next_run_at ?? '—'}`
+        : `报告生成成功：${created.report_id}`,
+    );
     genVisible.value = false;
-    await loadReports();
+    await reloadAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '生成失败');
-  }
-};
-
-// ===================== 定时设置（修改/取消定时） =====================
-const scheduleVisible = ref(false);
-const scheduleTarget = ref<Report | null>(null);
-const scheduleForm = ref({
-  scheduled: false,
-  interval_days: 7,
-});
-
-const openSchedule = (report: Report) => {
-  scheduleTarget.value = report;
-  scheduleForm.value = {
-    scheduled: report.scheduled ?? false,
-    interval_days: report.interval_days ?? 7,
-  };
-  scheduleVisible.value = true;
-};
-
-const submitSchedule = async () => {
-  if (!scheduleTarget.value) return;
-  if (scheduleForm.value.scheduled && (!scheduleForm.value.interval_days || scheduleForm.value.interval_days < 1)) {
-    ElMessage.warning('请填写正确的生成周期（至少 1 天）');
-    return;
-  }
-  try {
-    await updateReportSchedule(
-      scheduleTarget.value.report_id,
-      scheduleForm.value.scheduled,
-      scheduleForm.value.scheduled ? scheduleForm.value.interval_days : undefined,
-    );
-    ElMessage.success(
-      scheduleForm.value.scheduled
-        ? `已设为每 ${scheduleForm.value.interval_days} 天自动生成`
-        : '已取消定时生成',
-    );
-    scheduleVisible.value = false;
-    await loadReports();
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '定时设置失败');
   }
 };
 
@@ -313,6 +355,11 @@ onMounted(async () => {
   await scenarioStore.fetchScenarioList();
   await loadReports();
 });
+
+// 离开页面时停止轮询，防止内存泄漏（后台导出不受影响，继续执行）
+onBeforeUnmount(() => {
+  exportPollAbort = true;
+});
 </script>
 
 <template>
@@ -321,13 +368,11 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Report Center</p>
         <h2>报告中心</h2>
-        <p class="report-center__desc">
-          {{ isSuperAdmin ? '可基于全平台聚合数据或本人个人数据生成报告并导出'
-            : isAdmin ? '可基于本场景聚合数据或本人个人数据生成报告并导出'
-            : '仅可基于本人个人数据生成报告并导出' }}
-        </p>
       </div>
-      <button class="gen-btn" @click="openGenerate">+ 生成报告</button>
+      <div class="report-center__actions">
+        <button class="gen-btn" @click="openGenerate()">+ 生成报告</button>
+        <button class="gen-btn gen-btn--ghost" @click="openScheduleList">定时报告</button>
+      </div>
     </div>
 
     <!-- 加载状态 -->
@@ -339,7 +384,7 @@ onMounted(async () => {
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
-      <button class="ghost-button" @click="loadReports">重试</button>
+      <button class="ghost-button" @click="loadReports()">重试</button>
     </section>
 
     <!-- 报告列表 -->
@@ -355,6 +400,27 @@ onMounted(async () => {
           <template #default="{ row }: { row: Report }">
             <div class="report-table__title-cell">
               <span class="report-table__title">{{ row.title }}</span>
+              <svg
+                v-if="row.scheduled"
+                class="report-table__clock"
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="13.5" r="7.5" />
+                <path d="M12 13.5V9.3" />
+                <path d="M12 13.5l3.1 1.9" />
+                <path d="M4.3 5.1 7.3 7.6" />
+                <path d="M19.7 5.1 16.7 7.6" />
+              </svg>
+              <!-- 定时周期：跟在闹钟标志后面 -->
+              <span v-if="row.scheduled && row.interval_days" class="report-table__interval">{{ row.interval_days }}</span>
             </div>
           </template>
         </el-table-column>
@@ -376,13 +442,6 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="定时" width="120" align="center">
-          <template #default="{ row }: { row: Report }">
-            <span v-if="row.scheduled" class="report-table__schedule">每 {{ row.interval_days ?? '-' }} 天</span>
-            <span v-else class="report-table__schedule report-table__schedule--off">—</span>
-          </template>
-        </el-table-column>
-
         <el-table-column prop="created_at" label="创建时间" width="160" align="center" />
 
         <el-table-column label="状态" width="100" align="center">
@@ -396,18 +455,45 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="360" align="center" fixed="right">
+        <el-table-column label="操作" width="300" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
               <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
               <el-button size="small" @click="handleDownload(row)">下载</el-button>
-              <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="success" plain @click="openSchedule(row)">定时</el-button>
-              <el-button v-if="row.generated_by === currentUser?.user_id" size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
-              <el-button v-if="row.generated_by === currentUser?.user_id || isAdmin" size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
+              <el-button size="small" type="warning" plain @click="handleRegenerate(row)">重新生成</el-button>
+              <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
+    </div>
+
+    <!-- 页码条：每页 10 条 -->
+    <div v-if="!loading && !error && total > 0" class="report-pager">
+      <span class="report-pager__info">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
+      <div class="report-pager__ctrl">
+        <button
+          class="report-pager__edge"
+          type="button"
+          :disabled="page <= 1 || loading"
+          @click="goPage(1)"
+        >首页</button>
+        <el-pagination
+          v-model:current-page="page"
+          layout="prev, pager, next"
+          :page-size="pageSize"
+          :total="total"
+          :disabled="loading"
+          background
+          @current-change="loadReports"
+        />
+        <button
+          class="report-pager__edge"
+          type="button"
+          :disabled="page >= totalPages || loading"
+          @click="goPage(totalPages)"
+        >末页</button>
+      </div>
     </div>
 
     <!-- 生成报告弹窗（与数据集中心字段预览同款 el-dialog；场景下拉仅系统管理员可见） -->
@@ -467,6 +553,60 @@ onMounted(async () => {
         <button class="gen-btn gen-btn--ghost" @click="genVisible = false">取消</button>
         <button class="gen-btn" @click="submitGenerate">生成报告</button>
       </template>
+    </el-dialog>
+
+    <!-- 定时报告：跟随账号，只做查看与删除；新建走「生成报告」里的定时生成 -->
+    <el-dialog
+      v-model="schedListVisible"
+      class="report-dialog"
+      title="定时报告"
+      width="860px"
+      top="8vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-table
+        :data="scheduledReports"
+        stripe
+        style="width: 100%"
+        empty-text=""
+        row-class-name="report-table-row"
+      >
+        <el-table-column prop="title" label="报告名称" min-width="180">
+          <template #default="{ row }: { row: Report }">
+            <span class="report-table__title">{{ row.title }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="所属场景" width="100" align="center">
+          <template #default="{ row }: { row: Report }">
+            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="格式" width="120" align="center">
+          <template #default="{ row }: { row: Report }">
+            <span
+              class="report-table__format-badge"
+              :class="`format-badge--${row.format}`"
+            >
+              {{ formatLabel[row.format] ?? row.format.toUpperCase() }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="周期" width="84" align="center">
+          <template #default="{ row }: { row: Report }">每 {{ row.interval_days ?? '—' }} 天</template>
+        </el-table-column>
+        <el-table-column label="下次生成" width="160" align="center">
+          <template #default="{ row }: { row: Report }">{{ row.next_run_at ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="130" align="center">
+          <template #default="{ row }: { row: Report }">
+            <div class="report-table__actions">
+              <el-button size="small" type="primary" plain @click="handleView(row)">查看</el-button>
+              <el-button size="small" type="danger" plain @click="handleDelete(row)">删除</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-dialog>
 
     <!-- 报告详情弹窗 -->
@@ -632,39 +772,6 @@ onMounted(async () => {
       <!-- 无结构化数据时回退纯文本 -->
       <pre v-else class="report-content">{{ viewTarget?.content ?? viewTarget?.summary }}</pre>
     </el-dialog>
-
-    <!-- 定时设置弹窗：只保存配置，不执行调度 -->
-    <el-dialog
-      v-model="scheduleVisible"
-      class="report-dialog"
-      title="定时设置"
-      width="460px"
-      top="12vh"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <div class="gen-form">
-        <div class="gen-field">
-          <label class="gen-field__label">报告</label>
-          <div class="gen-field__static">{{ scheduleTarget?.title }}</div>
-        </div>
-        <div class="gen-field">
-          <label class="gen-field__label">定时生成</label>
-          <div class="gen-schedule">
-            <el-switch v-model="scheduleForm.scheduled" />
-            <span class="gen-schedule__hint">{{ scheduleForm.scheduled ? '已开启定时配置' : '关闭（手动生成）' }}</span>
-          </div>
-        </div>
-        <div v-if="scheduleForm.scheduled" class="gen-field">
-          <label class="gen-field__label">生成周期（天）</label>
-          <input v-model.number="scheduleForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
-        </div>
-      </div>
-      <template #footer>
-        <button class="gen-btn gen-btn--ghost" @click="scheduleVisible = false">取消</button>
-        <button class="gen-btn" @click="submitSchedule">保存</button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -682,15 +789,17 @@ onMounted(async () => {
   margin-bottom: 20px;
 }
 
+/* 两个入口按钮竖排右对齐，宽度一致 */
+.report-center__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .report-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
-}
-
-.report-center__desc {
-  margin: 0;
-  color: rgba(220, 234, 255, 0.7);
-  font-size: 0.95rem;
 }
 
 .report-center__table-wrap {
@@ -700,12 +809,104 @@ onMounted(async () => {
   background: rgba(8, 18, 34, 0.7);
 }
 
+/* ---------------- 页码条（暗色） ----------------
+   与告警 / 推理记录页保持同一套分页外观；变量挂在包裹层上，
+   由 CSS 自定义属性继承进 el-pagination 内部。 */
+.report-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
+  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
+  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
+  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
+  --el-pagination-hover-color: #5ba6ff;
+}
+
+.report-pager__info {
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.report-pager__ctrl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-pager__edge {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  background: rgba(12, 26, 46, 0.9);
+  color: rgba(220, 234, 255, 0.75);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.report-pager__edge:hover:not(:disabled) {
+  color: #5ba6ff;
+  border-color: rgba(91, 166, 255, 0.45);
+}
+
+.report-pager__edge:disabled {
+  color: rgba(180, 200, 235, 0.28);
+  cursor: not-allowed;
+}
+
+.report-pager :deep(.el-pagination.is-background .el-pager li),
+.report-pager :deep(.el-pagination.is-background .btn-prev),
+.report-pager :deep(.el-pagination.is-background .btn-next) {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 6px;
+}
+
+.report-pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
+.report-pager :deep(.el-pagination.is-background .btn-prev:hover),
+.report-pager :deep(.el-pagination.is-background .btn-next:hover) {
+  background-color: rgba(20, 44, 72, 0.95) !important;
+  color: #9ad6ff !important;
+}
+
+.report-pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #3f7fd4 !important;
+  color: #ffffff !important;
+  border-color: transparent;
+}
+
+.report-pager :deep(.el-pagination.is-background .btn-prev),
+.report-pager :deep(.el-pagination.is-background .btn-next) {
+  background-color: rgba(12, 26, 46, 0.9) !important;
+  color: rgba(220, 234, 255, 0.7) !important;
+}
+
 .report-table-row {
   background: transparent !important;
 }
 
 .report-table__title-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 0;
+}
+
+/* 定时报告的闹钟标志 */
+.report-table__clock {
+  flex-shrink: 0;
+  color: #ffc37d;
+}
+
+/* 定时周期（天），紧跟在闹钟标志后面 */
+.report-table__interval {
+  flex-shrink: 0;
+  color: #ffc37d;
+  font-size: 0.78rem;
 }
 
 .report-table__title {
@@ -767,20 +968,6 @@ onMounted(async () => {
 .format-badge--markdown {
   background: rgba(83, 229, 200, 0.10);
   color: #6fe8d0;
-}
-
-.report-table__schedule {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  background: rgba(255, 177, 107, 0.12);
-  color: #ffc37d;
-}
-
-.report-table__schedule--off {
-  color: rgba(220, 234, 255, 0.35);
-  background: transparent;
 }
 
 .report-table__actions {
@@ -1224,7 +1411,8 @@ onMounted(async () => {
   --el-button-hover-text-color: #fff !important;
 }
 
-.report-center .el-button {
+.report-center .el-button,
+.report-dialog .el-button {
   border-radius: 999px;
 }
 </style>
