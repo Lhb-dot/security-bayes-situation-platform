@@ -119,6 +119,15 @@ DATASET_LOGICAL_IDS = (
     "carrier_feature2_biaoqian",
     "carrier_feature2_lisan",
     "carrier_paired_trail",
+    # 生产 seed 上传的数据集（同一批物理文件的再次注册，logical_id 与平台内置清单不同）
+    "net_flow_company_v1",
+    "alice_conn_personal_v1",
+    "power_grid_company_v1",
+    "bob_sensor_personal_v1",
+    "carrier_track_company_v1",
+    "deck_user01_trail_personal_v1",
+    "geo_slope_company_v1",
+    "carol_slope_personal_v1",
 )
 
 # 数据集展示名兜底字典（仅在 Dataset 记录缺少 file_path 时使用）。
@@ -144,6 +153,15 @@ DATASET_DISPLAY_NAMES = {
     "carrier_feature2_biaoqian": "Feature2_Cleaning_biaoqian",
     "carrier_feature2_lisan": "Feature2_Cleaning_lisan",
     "carrier_paired_trail": "paired_TrailData_feature2_biaoqian",
+    # 生产 seed 注册的数据集：展示名一律取源文件名（去扩展名），与 dataset_display_name_of 口径一致
+    "net_flow_company_v1": "NF-UNSW-NB15-v2",
+    "alice_conn_personal_v1": "KDDTrain_20Percent",
+    "power_grid_company_v1": "powergrid_knowledgebase_dataset",
+    "bob_sensor_personal_v1": "powergrid_knowledgebase_dataset",
+    "carrier_track_company_v1": "Feature2_Cleaning_lisan",
+    "deck_user01_trail_personal_v1": "paired_TrailData_feature2_biaoqian",
+    "geo_slope_company_v1": "DIS_Landslides",
+    "carol_slope_personal_v1": "DIS_raw_data",
 }
 
 
@@ -279,6 +297,16 @@ DATASET_POSITIVE_LABELS = {
     "carrier_feature2_biaoqian": {"1"},                        # Collision=1 风险 / 0 正常
     "carrier_feature2_lisan": {"1"},
     "carrier_paired_trail": {"1"},
+    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
+    # 标签语义与其源文件完全一致，见上表同名源文件的登记说明。
+    "net_flow_company_v1": {"1"},                              # 源 NF-UNSW-NB15-v2，Label 正类=1
+    "alice_conn_personal_v1": {"anomaly"},                     # 源 KDDTrain_20Percent，class 正类=anomaly
+    "power_grid_company_v1": {"1"},                            # 源 powergrid_knowledgebase_dataset，Target_Event 正类=1
+    "bob_sensor_personal_v1": {"1"},                           # 同上
+    "carrier_track_company_v1": {"1"},                         # 源 Feature2_Cleaning_lisan，Collision 正类=1
+    "deck_user01_trail_personal_v1": {"1"},                    # 源 paired_TrailData_feature2_biaoqian，Collision 正类=1
+    "geo_slope_company_v1": {"1"},                             # 源 DIS_Landslides，LS 正类=1
+    "carol_slope_personal_v1": {"1"},                          # 源 DIS_raw_data，Label 正类=1
 }
 # dis_global_catalog：多分类编目数据，不参与二分类训练与风险事件生成（§4.4.3），未列入映射。
 
@@ -316,6 +344,15 @@ DATASET_RISK_TYPES = {
     "carrier_feature2_biaoqian": RISK_TYPE_FLIGHT_DECK,
     "carrier_feature2_lisan": RISK_TYPE_FLIGHT_DECK,
     "carrier_paired_trail": RISK_TYPE_FLIGHT_DECK,
+    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
+    "net_flow_company_v1": RISK_TYPE_NETWORK,
+    "alice_conn_personal_v1": RISK_TYPE_NETWORK,
+    "power_grid_company_v1": RISK_TYPE_POWER,
+    "bob_sensor_personal_v1": RISK_TYPE_POWER,
+    "carrier_track_company_v1": RISK_TYPE_FLIGHT_DECK,
+    "deck_user01_trail_personal_v1": RISK_TYPE_FLIGHT_DECK,
+    "geo_slope_company_v1": RISK_TYPE_GEOLOGICAL,
+    "carol_slope_personal_v1": RISK_TYPE_GEOLOGICAL,
 }
 
 # 阈值兜底（需求文档 §5.4.1 第 6 条：正式阈值应通过 risk_threshold 表配置提供，
