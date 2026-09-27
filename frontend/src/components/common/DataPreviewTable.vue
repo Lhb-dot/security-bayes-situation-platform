@@ -11,6 +11,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { attachOuterFirstWheel } from '@/utils/scrollChain';
+import { keepScroll } from '@/utils/scrollAnchor';
 
 const props = withDefaults(
   defineProps<{
@@ -79,6 +80,9 @@ watch(tableWrapRef, (el) => {
   if (el) detachWheel = attachOuterFirstWheel(el);
 });
 
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadPage(target), tableWrapRef.value);
+
 onBeforeUnmount(() => {
   detachWheel?.();
   detachWheel = null;
@@ -87,8 +91,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="data-preview">
-    <!-- 加载状态 -->
-    <div v-if="loading" class="data-preview__state">
+    <!-- 加载状态：只有还没有数据时才用整块状态卡。
+         翻页时保留表格、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <div v-if="loading && !rows.length" class="data-preview__state">
       <div class="loader"></div>
       <p>正在加载数据内容...</p>
     </div>
@@ -102,6 +107,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <p class="data-preview__tip">只读数据预览：每页最多 {{ pageSize }} 条，标签列已高亮。</p>
       <div ref="tableWrapRef" class="data-preview__table-wrap">
+        <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
         <el-table
           :data="rows"
           stripe
@@ -132,7 +138,7 @@ onBeforeUnmount(() => {
           :page-size="pageSize"
           :total="total"
           background
-          @current-change="loadPage"
+          @current-change="changePage"
         />
       </div>
     </template>
@@ -168,6 +174,7 @@ onBeforeUnmount(() => {
 }
 
 .data-preview__table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   border: 1px solid rgba(125, 201, 255, 0.1);
   border-radius: 12px;
   overflow: hidden;

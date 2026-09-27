@@ -69,7 +69,11 @@ class GenerateJob:
     finished_at: Optional[float] = None
 
     def to_dict(self) -> dict:
-        """对外视图：不下发入参，只给前端渲染任务卡与通知所需的字段。"""
+        """对外视图：不下发入参，只给前端渲染任务卡与通知所需的字段。
+
+        created_at 是 epoch 秒：前端用它算「已进行多少秒」。前端自己记开始时刻的话
+        刷新就归零，而这个任务表本来就在服务端、时间以它为准才对。
+        """
         return {
             "job_id": self.id,
             "title": self.title,
@@ -77,6 +81,7 @@ class GenerateJob:
             "error": self.error,
             "report_id": self.report_id,
             "ready": self.status == STATUS_DONE,
+            "created_at": self.created_at,
         }
 
 

@@ -52,9 +52,7 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Scenario Center</p>
         <h2>场景中心</h2>
-        <p class="scenario-center__desc">
-          选择业务场景，进入专属态势感知大屏
-        </p>
+        <p class="scenario-center__desc">各业务场景的态势感知入口</p>
       </div>
     </div>
 
@@ -106,11 +104,12 @@ onMounted(() => {
 .scenario-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .scenario-center__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 

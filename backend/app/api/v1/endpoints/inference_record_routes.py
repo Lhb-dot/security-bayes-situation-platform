@@ -158,6 +158,18 @@ async def predict_batch_upload_submit(
 
 
 @router.get(
+    "/predict-batch/jobs",
+    response_model=ResponseModel,
+    summary="我的批量研判任务列表（刷新/切页回来能恢复「还在跑」的状态）",
+)
+def list_predict_batch_jobs(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(InferenceRecordService(db).list_batch_jobs(current_user))
+
+
+@router.get(
     "/predict-batch/jobs/{job_id}",
     response_model=ResponseModel,
     summary="查询批量研判任务进度（仅发起人）",

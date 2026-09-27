@@ -15,7 +15,7 @@
  *
  * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
@@ -23,14 +23,15 @@ import { marked } from 'marked';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
+import { useBatchJobStore } from '@/stores/batchJobStore';
 import { getScenarioList } from '@/api/scenarioApi';
 import { getDatasetPreview } from '@/api/datasetApi';
+import { keepScroll } from '@/utils/scrollAnchor';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
 import {
   submitInferenceBatch,
   submitInferenceBatchUpload,
-  getInferenceBatchJob,
   streamInferenceExplanation,
   type BatchInferenceResult,
   type PredictResult,
@@ -115,20 +116,19 @@ const labelField = computed(
 
 /** 批量导入 */
 const batchLimit = ref(50);
-const batchRunning = ref(false);
 const batchResult = ref<BatchInferenceResult | null>(null);
+/** 提交请求在途（按钮立刻置灰，避免连点提交两批） */
+const batchSubmitting = ref(false);
 
-// ===== 批量研判任务轮询（提交后轮询直到 DONE / FAILED） =====
-// 200 条最坏约 16 分钟，留足余量；超时后任务仍在后台继续，结果可在推理记录里查看。
-const BATCH_POLL_INTERVAL_MS = 2000;
-const BATCH_POLL_TIMEOUT_MS = 30 * 60 * 1000;
-let batchPollAbort = false;
-const batchProgress = ref({ processed: 0, total: 0 });
-const batchProgressText = computed(() =>
-  batchProgress.value.total
-    ? `研判中… ${batchProgress.value.processed}/${batchProgress.value.total}`
-    : '研判中…'
-);
+// ===== 批量研判任务（数据源在 store：离开页面后台照样跑，完成时全局通知） =====
+// 进度取自 store 里最近登记的那条任务；完成通知与超时兜底都在 store，不随组件卸载。
+const batchJobStore = useBatchJobStore();
+const activeBatchJob = computed(() => batchJobStore.activeJob);
+const batchRunning = computed(() => Boolean(activeBatchJob.value));
+const batchProgressText = computed(() => {
+  const job = activeBatchJob.value;
+  return job?.total ? `研判中… ${job.processed}/${job.total}` : '研判中…';
+});
 const uploadFile = ref<File | null>(null);
 
 // ===================== 3 单条推理结果 =====================
@@ -330,9 +330,15 @@ const loadSamples = async (page: number) => {
   }
 };
 
+/** 样本区的滚动容器（.pane 自身可滚，翻页要锚住它，见 utils/scrollAnchor.ts） */
+const samplePaneRef = ref<HTMLElement | null>(null);
+
+/** 样本翻页：包一层滚动锚定，换页后视口停在原处 */
+const changeSamplePage = (target: number) =>
+  keepScroll(() => loadSamples(target), samplePaneRef.value);
+
 /** 点样本行 → 把该行取值填进输入表单 */
-const applySample = (index: number) => {
-  selectedSampleIndex.value = index;
+const applySample = (index: number) => {  selectedSampleIndex.value = index;
   const row = samples.value[index];
   if (!row) return;
   const next: Record<string, string | number> = { ...inputData.value };
@@ -383,7 +389,6 @@ const handleInfer = async () => {
     });
     inferResult.value = result;
     hasInferred.value = true;
-    void generateExplanation(result);
     await scrollToResult();
     if (result.is_risk_event) {
       ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}`);
@@ -396,51 +401,52 @@ const handleInfer = async () => {
 };
 
 // ===================== 批量研判 =====================
-const canBatch = computed(() => Boolean(selectedModelId.value) && !batchRunning.value);
+const canBatch = computed(
+  () => Boolean(selectedModelId.value) && !batchRunning.value && !batchSubmitting.value
+);
 
-const batchDone = async (res: BatchInferenceResult) => {
+/** 批量研判完成（可能在别的页面）：结果表由 store 的 lastResult 驱动回填 */
+const showBatchResult = async (res: BatchInferenceResult) => {
   batchResult.value = res;
   await scrollToResult();
-  ElMessage.success(
-    `批量研判完成：成功 ${res.succeeded} 条、风险 ${res.risk_count} 条`
-    + (res.failed ? `、失败 ${res.failed} 条` : '')
-  );
 };
 
-/** 轮询批量研判任务：离开页面返回 null（静默收尾），超时或任务失败抛错。 */
-const waitForBatchJob = async (jobId: string): Promise<BatchInferenceResult | null> => {
-  const deadline = Date.now() + BATCH_POLL_TIMEOUT_MS;
-  let job = await getInferenceBatchJob(jobId);
-  batchProgress.value = { processed: job.processed, total: job.total };
-  while (job.status === 'PENDING' || job.status === 'RUNNING') {
-    if (batchPollAbort) return null;
-    if (Date.now() >= deadline) throw new Error('研判仍在进行，请稍后在推理记录中查看结果');
-    await new Promise((resolve) => window.setTimeout(resolve, BATCH_POLL_INTERVAL_MS));
-    job = await getInferenceBatchJob(jobId);
-    batchProgress.value = { processed: job.processed, total: job.total };
-  }
-  if (job.status === 'FAILED') throw new Error(job.error || '批量研判失败');
-  return job.result;
-};
-
-/** 提交后的公共收尾：提交 → 轮询 → 展示（离开页面则静默结束） */
-const runBatchJob = async (submit: () => Promise<{ job_id: string; total: number }>) => {
-  batchRunning.value = true;
+/**
+ * 提交后的公共收尾：提交 → 登记到 store → 立刻返回。
+ *
+ * 轮询、完成通知、超时兜底都在 batchJobStore 里 —— 那里不随组件卸载，所以用户
+ * 离开本页任务照跑、完成时照样弹通知，回到页面还能看到结果表。
+ */
+const runBatchJob = async (
+  submit: () => Promise<{ job_id: string; total: number }>,
+  title: string,
+) => {
   batchResult.value = null;
   inferResult.value = null;
   hasInferred.value = false;
-  batchPollAbort = false;
-  batchProgress.value = { processed: 0, total: 0 };
+  batchSubmitting.value = true;
   try {
     const receipt = await submit();
-    batchProgress.value = { processed: 0, total: receipt.total };
-    const res = await waitForBatchJob(receipt.job_id);
-    if (!res) return;   // 已离开页面：后台继续，静默收尾
-    await batchDone(res);
+    batchJobStore.track(receipt.job_id, Number(selectedModelId.value), title, receipt.total);
+    ElMessage.success(`批量研判任务已生成，共 ${receipt.total} 条，完成后会通知你`);
   } finally {
-    batchRunning.value = false;
+    batchSubmitting.value = false;
   }
 };
+
+// 批量研判完成：store 记下结果，这里回填结果表并滚入视口（模型没换才展示）
+watch(
+  [() => batchJobStore.lastResult, selectedModelId],
+  async ([payload]) => {
+    if (!payload || batchResult.value) return;
+    if (String(payload.modelVersionId) !== String(selectedModelId.value)) return;
+    await showBatchResult(payload.result);
+  },
+);
+
+/** 通知文案里的任务名（与模型下拉的标签一致） */
+const batchJobTitle = () =>
+  selectedModel.value ? modelLabel(selectedModel.value) : `模型版本 #${selectedModelId.value}`;
 
 const handleBatch = async () => {
   if (!selectedModelId.value) {
@@ -453,7 +459,7 @@ const handleBatch = async () => {
       source: 'dataset',
       offset: 0,
       limit: batchLimit.value,
-    }));
+    }), batchJobTitle());
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '批量研判失败');
   }
@@ -477,7 +483,7 @@ const handleUpload = async () => {
     await runBatchJob(() => submitInferenceBatchUpload({
       model_version_id: selectedModelId.value,
       file: uploadFile.value as File,
-    }));
+    }), batchJobTitle());
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'CSV 批量研判失败');
   }
@@ -607,16 +613,14 @@ onMounted(async () => {
   }
 });
 
-// 离开页面时停止轮询，防止内存泄漏（后台任务不受影响，继续执行）
-onBeforeUnmount(() => {
-  batchPollAbort = true;
-});
 </script>
 
 <template>
   <div class="inference-page">
     <div class="inference-page__header">
+      <p class="eyebrow">Risk Inference</p>
       <h2>风险研判</h2>
+      <p class="inference-page__desc">样本推理与风险等级判定</p>
     </div>
 
     <!-- ============ 1 选范围 ============ -->
@@ -694,10 +698,10 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 样本库 -->
-      <div v-if="sourceTab === 'sample'" class="pane">
-        <div v-if="sampleLoading" class="pane-status">正在读取样本…</div>
-        <template v-else-if="samples.length">
+      <div v-if="sourceTab === 'sample'" ref="samplePaneRef" class="pane">
+        <template v-if="samples.length">
           <div class="sample-table__wrap">
+            <div v-if="sampleLoading" class="pane-loading"><div class="loader"></div></div>
             <table class="sample-table">
               <thead>
                 <tr>
@@ -724,12 +728,22 @@ onBeforeUnmount(() => {
               </tbody>
             </table>
           </div>
+          <!-- 翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
           <div v-if="totalSamplePages > 1" class="sample-pager">
-            <button class="ghost-btn" :disabled="samplePage <= 1" @click="loadSamples(samplePage - 1)">上一页</button>
+            <button
+              class="ghost-btn"
+              :disabled="sampleLoading || samplePage <= 1"
+              @click="changeSamplePage(samplePage - 1)"
+            >上一页</button>
             <span class="sample-pager__info">{{ samplePage }} / {{ totalSamplePages }}</span>
-            <button class="ghost-btn" :disabled="samplePage >= totalSamplePages" @click="loadSamples(samplePage + 1)">下一页</button>
+            <button
+              class="ghost-btn"
+              :disabled="sampleLoading || samplePage >= totalSamplePages"
+              @click="changeSamplePage(samplePage + 1)"
+            >下一页</button>
           </div>
         </template>
+        <div v-else-if="sampleLoading" class="pane-status">正在读取样本…</div>
         <div v-else class="pane-status">该数据集没有可读取的样本</div>
       </div>
 
@@ -782,21 +796,23 @@ onBeforeUnmount(() => {
 
       <!-- 批量导入 -->
       <div v-else class="pane">
-        <div class="batch-row">
-          <label class="form-label">数据集样本条数</label>
-          <input v-model.number="batchLimit" type="number" min="1" max="200" class="form-input batch-row__num" />
-          <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
-            <span v-if="batchRunning" class="btn-spinner"></span>
-            {{ batchRunning ? batchProgressText : '批量研判' }}
-          </button>
-        </div>
-        <div class="batch-row">
-          <label class="form-label">上传 CSV</label>
-          <input type="file" accept=".csv" class="batch-row__file" @change="onFileChange" />
-          <button class="infer-btn" :disabled="!canBatch || !uploadFile" @click="handleUpload">
-            <span v-if="batchRunning" class="btn-spinner"></span>
-            {{ batchRunning ? batchProgressText : '上传并研判' }}
-          </button>
+        <div class="batch-grid">
+          <div class="batch-row">
+            <label class="form-label">数据集样本条数</label>
+            <input v-model.number="batchLimit" type="number" min="1" max="200" class="form-input batch-row__num" />
+            <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
+              <span v-if="batchRunning" class="btn-spinner"></span>
+              {{ batchRunning ? batchProgressText : '批量研判' }}
+            </button>
+          </div>
+          <div class="batch-row">
+            <label class="form-label">上传 CSV</label>
+            <input type="file" accept=".csv" class="batch-row__file" @change="onFileChange" />
+            <button class="infer-btn" :disabled="!canBatch || !uploadFile" @click="handleUpload">
+              <span v-if="batchRunning" class="btn-spinner"></span>
+              {{ batchRunning ? batchProgressText : '上传并研判' }}
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -919,7 +935,9 @@ onBeforeUnmount(() => {
             <h3>场景化分析</h3>
             <div class="ai-explanation__actions">
               <button v-if="explanationLoading" class="ghost-btn" type="button" @click="stopExplanation">停止生成</button>
-              <button v-else class="ghost-btn" type="button" @click="inferResult && generateExplanation(inferResult)">重新生成</button>
+              <button v-else class="ghost-btn" type="button" @click="inferResult && generateExplanation(inferResult)">
+                {{ explanationMarkdown ? '重新生成' : '生成AI评价' }}
+              </button>
             </div>
           </div>
           <p v-if="explanationLoading && !explanationMarkdown" class="ai-explanation__status">正在根据模型结果生成说明…</p>
@@ -950,8 +968,15 @@ onBeforeUnmount(() => {
 }
 
 .inference-page__header h2 {
-  margin: 0;
+  margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
+}
+
+.inference-page__desc {
+  margin: 0;
+  color: rgba(180, 200, 235, 0.55);
+  font-size: 0.95rem;
 }
 
 /* ---------- 1 选范围 ---------- */
@@ -1142,6 +1167,7 @@ select.form-input option {
 
 /* 样本表 */
 .sample-table__wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   border: 1px solid rgba(125, 201, 255, 0.12);
   border-radius: 10px;
 }
@@ -1225,11 +1251,18 @@ select.form-input option {
 }
 
 /* 批量导入 */
-.batch-row {
-  display: flex;
+/* 两行共用一套列宽（标签 / 输入 / 按钮各占一列），按钮才不会一行靠左一行靠右。
+   .batch-row 自己不生成盒子（display: contents），子元素直接落进 .batch-grid 的列里。 */
+.batch-grid {
+  display: grid;
+  grid-template-columns: max-content max-content max-content;
+  justify-content: start;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+}
+
+.batch-row {
+  display: contents;
 }
 
 .batch-row .form-label {

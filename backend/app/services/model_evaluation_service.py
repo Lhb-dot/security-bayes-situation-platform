@@ -19,7 +19,10 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    EVALUATION_AUDIENCE_USER,
     dataset_display_name_of,
+    evaluation_audience,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
@@ -35,12 +38,15 @@ from app.utils.common import get_logger
 
 logger = get_logger("model_evaluation")
 MODEL_EVALUATION_VERSION = "1.0"
-ADMIN_ROLE = "management"
-USER_ROLE = "user"
+#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+MODEL_EVALUATION_PROMPT_VERSION = "1.0"
+ADMIN_ROLE = EVALUATION_AUDIENCE_MANAGEMENT
+USER_ROLE = EVALUATION_AUDIENCE_USER
 
 
 def _role_key(user: Any) -> str:
-    return ADMIN_ROLE if getattr(user, "role", None) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) else USER_ROLE
+    """三级角色 → 两级评价受众（与样本级研判共用同一套受众键）。"""
+    return evaluation_audience(getattr(user, "role", None))
 
 
 def _quality_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
@@ -319,13 +325,32 @@ class ModelEvaluationService(ServiceBase):
             },
         })
 
-    def _save(self, model: ModelVersion, role: str, markdown: str, source: str, facts: dict[str, Any]) -> None:
+    def _save(
+        self,
+        model: ModelVersion,
+        role: str,
+        markdown: str,
+        source: str,
+        facts: dict[str, Any],
+        *,
+        generated_by: int | None = None,
+        ai_model: str | None = None,
+    ) -> None:
+        """写入该受众那一格。
+
+        ``ai_evaluation`` 是整块读-改-写的 JSONB，没有行锁时两个请求同时生成
+        会互相吞掉对方的结果，所以先锁住模型版本行再回写。
+        """
+        self.db.refresh(model, with_for_update=True)
         evaluations = dict(getattr(model, "ai_evaluation", None) or {})
         evaluations[role] = {
             "available": True,
             "markdown": markdown[:100_000],
             "source": source if source in {"ai", "fallback"} else "fallback",
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_by": generated_by,
+            "model": ai_model,
+            "prompt_version": MODEL_EVALUATION_PROMPT_VERSION,
             "facts_snapshot": facts,
         }
         model.ai_evaluation = evaluations
@@ -354,9 +379,14 @@ class ModelEvaluationService(ServiceBase):
             return
         facts = build_model_evaluation_facts(attributes, role)
         setting = self.db.get(UserAISetting, current_user.id)
+        # 产物随评价一起落库，便于回溯「谁、用哪个模型、哪版提示词生成的」。
+        save_meta = {
+            "generated_by": getattr(current_user, "id", None),
+            "ai_model": getattr(setting, "model", None),
+        }
         if setting is None or not setting.enabled:
             markdown = fallback_model_evaluation(facts, role)
-            self._save(model, role, markdown, "fallback", facts)
+            self._save(model, role, markdown, "fallback", facts, **save_meta)
             yield "error", {"message": "当前账号未配置可用的 AI 服务", "reason_code": "not_configured"}
             for chunk in _chunk_text(markdown):
                 yield "delta", {"content": chunk}
@@ -374,7 +404,7 @@ class ModelEvaluationService(ServiceBase):
             markdown = "".join(parts).strip()
             if not markdown:
                 raise RuntimeError("empty AI response")
-            self._save(model, role, markdown, "ai", facts)
+            self._save(model, role, markdown, "ai", facts, **save_meta)
             yield "done", {"status": "模型评价完成", "source": "ai"}
         except Exception as exc:  # noqa: BLE001
             reason_code, reason_message = _classify_ai_error(exc)
@@ -383,7 +413,7 @@ class ModelEvaluationService(ServiceBase):
                 model_id, role, reason_code,
             )
             markdown = fallback_model_evaluation(facts, role)
-            self._save(model, role, markdown, "fallback", facts)
+            self._save(model, role, markdown, "fallback", facts, **save_meta)
             yield "error", {
                 "message": f"AI 评价未生成完成，已回退规则模板：{reason_message}",
                 "reason_code": reason_code,

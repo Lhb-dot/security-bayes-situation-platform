@@ -42,3 +42,20 @@ export const trainModelAsync = async (payload) =>
 /** 模型版本详情：异步训练轮询用，状态转为 DRAFT / FAILED 即训练结束 */
 export const getModelVersionDetail = async (modelId) =>
   unwrapData(await request.get(`/api/v1/model-versions/${modelId}`));
+
+/**
+ * 我的训练任务（GET /api/v1/model-versions/training-jobs）
+ *
+ * 训练没有独立任务表，在途状态就落在 model_version.status 上；刷新 / 切页回来靠它
+ * 把还在 TRAINING 的版本接回轮询，这样离开训练页也不会丢掉完成通知。
+ *
+ * includeFinished=true 时把 DRAFT / FAILED 也带回来（最多 20 条），供顶栏任务面板
+ * 判定「已完成但没看过」：model_version 没有完成时间字段，所以按 id 集合差判 ——
+ * id 自增，前端把见过的 id 记在 localStorage 里，没见过的就是没看过。
+ */
+export const listTrainingJobs = async (includeFinished = false) =>
+  unwrapData(
+    await request.get('/api/v1/model-versions/training-jobs', {
+      params: includeFinished ? { include_finished: true } : undefined,
+    })
+  );

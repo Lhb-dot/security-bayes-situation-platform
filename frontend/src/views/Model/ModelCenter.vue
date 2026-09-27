@@ -17,7 +17,7 @@ import {
   deleteModelVersion,
   disableModel,
   enableModel,
-  getModelVersionList,
+  getModelVersionPage,
   publishModel,
   setDefaultModel,
 } from '@/api/modelVersionApi';
@@ -29,6 +29,7 @@ import {
   type ModelEvaluationResponse,
 } from '@/api/modelEvaluationApi';
 import type { EvaluationMetrics } from '@/types/security';
+import { keepScroll } from '@/utils/scrollAnchor';
 
 const userStore = useUserStore();
 const models = ref<BackendModelVersion[]>([]);
@@ -36,6 +37,12 @@ const algorithms = ref<Array<{ algorithm_id: string; display_name: string }>>([]
 const currentUser = computed(() => userStore.currentUser);
 const loading = ref(true);
 const error = ref('');
+
+/** 服务端分页：每页 10 条，计数与翻页都以服务端 total 为准（前端不再本地过滤） */
+const page = ref(1);
+const pageSize = 10;
+const total = ref(0);
+
 const selectedScenario = ref<string>('all');
 const selectedDataset = ref<string>('all');
 type ModelStatusFilter = 'all' | 'unpublished' | 'published' | 'disabled';
@@ -92,35 +99,70 @@ watch(selectedScenario, () => {
   selectedDataset.value = 'all';
 });
 
-const filteredModels = computed(() => {
-  let list = models.value;
-  if (selectedScenario.value !== 'all') list = list.filter((m) => m.scenario_code === selectedScenario.value);
-  if (selectedDataset.value !== 'all') list = list.filter((m) => String(m.dataset_id) === selectedDataset.value);
-  if (isAdmin.value && selectedStatus.value === 'unpublished') {
-    list = list.filter((m) => ['TRAINING', 'FAILED', 'DRAFT'].includes(m.status));
-  } else if (isAdmin.value && selectedStatus.value === 'published') {
-    list = list.filter((m) => m.status === 'PUBLISHED');
-  } else if (isAdmin.value && selectedStatus.value === 'disabled') {
-    list = list.filter((m) => m.status === 'DISABLED');
-  }
-  return list;
-});
-
 const scenarioOptions = computed(() => {
   return allScenarios.value;
 });
 
-const loadModels = async () => {
+/** 筛选条件 → 后端查询参数：场景 code 转 id，「未发布」展开成三个状态 */
+const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
+  const scenarioId = allScenarios.value.find((s) => s.code === selectedScenario.value)?.id;
+  const status =
+    !isAdmin.value || selectedStatus.value === 'all'
+      ? undefined
+      : selectedStatus.value === 'unpublished'
+        ? 'TRAINING,FAILED,DRAFT'
+        : selectedStatus.value.toUpperCase();
+  return {
+    scenario_id: selectedScenario.value === 'all' ? undefined : scenarioId,
+    dataset_id: selectedDataset.value === 'all' ? undefined : selectedDataset.value,
+    status,
+    page_size: pageSize,
+  };
+};
+
+/** 请求序号：连续切筛选时丢弃过期响应，避免旧结果盖掉新结果 */
+let loadSeq = 0;
+
+const loadModels = async (targetPage: number = page.value) => {
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = '';
   try {
-    models.value = await getModelVersionList({ page: 1, page_size: 200 });
+    const data = await getModelVersionPage({ ...queryParams(), page: targetPage });
+    if (seq !== loadSeq) return;
+    // 删除或切筛选后页码可能越界（后端不修正页码），退回最后一页
+    if (!data.items.length && data.total > 0 && targetPage > 1) {
+      await loadModels(Math.max(1, Math.ceil(data.total / pageSize)));
+      return;
+    }
+    models.value = data.items;
+    total.value = data.total;
+    page.value = data.page;
+    // 当前页的对比选中项跟着刷新，避免对比面板停在旧状态
+    for (const item of data.items) {
+      if (compareCache.has(item.id)) compareCache.set(item.id, item);
+    }
   } catch (err) {
+    if (seq !== loadSeq) return;
     error.value = err instanceof Error ? err.message : '模型数据加载失败';
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 };
+
+const listRef = ref<HTMLElement | null>(null);
+
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadModels(target), listRef.value);
+
+/** 初始化期间不触发重载：场景是按当前用户预设的，onMounted 末尾自己会加载一次 */
+const ready = ref(false);
+
+/** 筛选变化回到第 1 页重载 */
+watch([selectedScenario, selectedDataset, selectedStatus], () => {
+  if (!ready.value) return;
+  void loadModels(1);
+});
 
 // ===================== 管理员操作 =====================
 const handlePublish = async (m: BackendModelVersion) => {
@@ -177,25 +219,33 @@ const handleSetDefault = async (m: BackendModelVersion) => {
 // ===================== 模型版本对比（需求 6.2 P1；普通用户仅可对比已发布模型） =====================
 const compareIds = ref<number[]>([]);
 
+/** 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞 */
+const compareCache = new Map<number, BackendModelVersion>();
+
 const toggleCompare = (m: BackendModelVersion) => {
   const idx = compareIds.value.indexOf(m.id);
   if (idx >= 0) {
     compareIds.value.splice(idx, 1);
+    compareCache.delete(m.id);
   } else {
     if (compareIds.value.length >= 5) {
       ElMessage.warning('最多选择 5 个模型进行对比');
       return;
     }
     compareIds.value.push(m.id);
+    compareCache.set(m.id, m);
   }
 };
 
 const compareList = computed(() =>
-  models.value.filter((m) => compareIds.value.includes(m.id))
+  compareIds.value
+    .map((id) => compareCache.get(id))
+    .filter((m): m is BackendModelVersion => Boolean(m))
 );
 
 const clearCompare = () => {
   compareIds.value = [];
+  compareCache.clear();
 };
 
 /** 对比指标列定义 */
@@ -275,6 +325,12 @@ const evaluationMarkdown = computed(() => activeEvaluation.value.markdown);
 const evaluationReasoning = computed(() => activeEvaluation.value.reasoning);
 const evaluationStatus = computed(() => activeEvaluation.value.status);
 const evaluationError = computed(() => activeEvaluation.value.error);
+
+/**
+ * 普通用户对「用户视角」已保存的评价不给「重新生成」入口：该产物面向所有场景用户，
+ * 管理员可能已经代写过，一键覆盖会把它抹掉。管理员不受限，仍可随时重新生成。
+ */
+const canGenerateEvaluation = computed(() => isAdmin.value || !evaluationMarkdown.value);
 
 const evaluationBodyRef = ref<HTMLElement | null>(null);
 const evaluationReasoningRef = ref<HTMLElement | null>(null);
@@ -458,7 +514,8 @@ onMounted(async () => {
       scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
     }))
   );
-  await loadModels();
+  await loadModels(1);
+  ready.value = true;
 });
 </script>
 
@@ -469,7 +526,7 @@ onMounted(async () => {
         <p class="eyebrow">Model Center</p>
         <h2>模型中心</h2>
         <p class="model-center__desc">
-          {{ isAdmin ? '模型版本管理（发布 / 禁用 / 删除）' : '仅展示已发布模型及其评估指标' }}
+          {{ isAdmin ? '模型版本的发布、禁用与删除' : '已发布模型及其评估指标' }}
         </p>
       </div>
     </div>
@@ -493,7 +550,7 @@ onMounted(async () => {
         </select>
       </div>
       <span class="model-center__count">
-        共 <strong>{{ filteredModels.length }}</strong> 个模型版本
+        共 <strong>{{ total }}</strong> 个模型版本
       </span>
     </div>
 
@@ -547,6 +604,7 @@ onMounted(async () => {
                 导出
               </button>
               <button
+                v-if="canGenerateEvaluation"
                 class="op-btn"
                 :disabled="evaluationLoading || (evaluationAudience === 'user' && evaluationTarget.status !== 'PUBLISHED')"
                 @click="generateModelEvaluation(Boolean(evaluationMarkdown), evaluationAudience)"
@@ -615,8 +673,8 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <!-- 加载状态 -->
-    <section v-if="loading" class="state-card">
+    <!-- 首屏加载：列表还是空的才用整块状态卡，翻页走列表内的局部遮罩 -->
+    <section v-if="loading && !models.length" class="state-card">
       <div class="loader"></div>
       <p>正在加载模型数据...</p>
     </section>
@@ -624,16 +682,16 @@ onMounted(async () => {
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
-      <button class="ghost-button" @click="loadModels">重试</button>
+      <button class="ghost-button" @click="loadModels()">重试</button>
     </section>
 
     <!-- 空状态 -->
-    <section v-else-if="filteredModels.length === 0" class="state-card">
+    <section v-else-if="!models.length" class="state-card">
       <p>当前筛选范围内暂无模型版本</p>
     </section>
 
     <!-- 模型版本对比（需求 6.2 P1） -->
-    <div v-if="compareList.length >= 2" class="compare-panel card">
+    <div v-else-if="compareList.length >= 2" class="compare-panel card">
       <div class="compare-panel__head">
         <h4>模型版本对比</h4>
         <button class="compare-clear" @click="clearCompare">清空对比</button>
@@ -679,9 +737,10 @@ onMounted(async () => {
     </div>
 
     <!-- 模型卡片列表 -->
-    <div v-else class="model-center__list">
+    <div v-else ref="listRef" class="model-center__list">
+      <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
       <div
-        v-for="model in filteredModels"
+        v-for="model in models"
         :key="model.id"
         class="model-card card"
       >
@@ -823,6 +882,18 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <div v-if="total > 0" class="model-center__pager">
+      <el-pagination
+        v-model:current-page="page"
+        layout="prev, pager, next"
+        :page-size="pageSize"
+        :total="total"
+        :disabled="loading"
+        background
+        @current-change="changePage"
+      />
+    </div>
   </div>
 </template>
 
@@ -843,11 +914,12 @@ onMounted(async () => {
 .model-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .model-center__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -902,8 +974,59 @@ onMounted(async () => {
 }
 
 .model-center__list {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   display: grid;
   gap: 18px;
+}
+
+/* ---------------- 分页器（暗色） ----------------
+   与推理记录 / 数据集预览保持同一套分页外观；变量挂在包裹层上，
+   由 CSS 自定义属性继承进 el-pagination 内部。 */
+.model-center__pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
+  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
+  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
+  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
+  --el-pagination-hover-color: #5ba6ff;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li),
+.model-center__pager :deep(.el-pagination.is-background .btn-prev),
+.model-center__pager :deep(.el-pagination.is-background .btn-next) {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 6px;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
+.model-center__pager :deep(.el-pagination.is-background .btn-prev:hover),
+.model-center__pager :deep(.el-pagination.is-background .btn-next:hover) {
+  background-color: rgba(20, 44, 72, 0.95) !important;
+  color: #9ad6ff !important;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #3f7fd4 !important;
+  color: #ffffff !important;
+  border-color: transparent;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .btn-prev),
+.model-center__pager :deep(.el-pagination.is-background .btn-next) {
+  background-color: rgba(12, 26, 46, 0.9) !important;
+  color: rgba(220, 234, 255, 0.7) !important;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .btn-prev:disabled),
+.model-center__pager :deep(.el-pagination.is-background .btn-next:disabled) {
+  background-color: rgba(8, 17, 31, 0.45) !important;
+  color: rgba(180, 200, 235, 0.25) !important;
 }
 
 .model-card {

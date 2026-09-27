@@ -25,12 +25,16 @@ from app.models.dataset import Dataset
 from app.models.inference_record import InferenceRecord
 from app.models.model_version import ModelVersion
 from app.models.risk_event import RiskEvent
+from app.models.user_ai_setting import UserAISetting
 from app.schemas.common import ok
 from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    ADMIN_ROLES,
     DATASET_RISK_TYPES,
     DATASET_VISIBILITY_PLATFORM,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    EVALUATION_AUDIENCE_USER,
     INFERENCE_ALLOWED_MODEL_STATUSES,
     ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
@@ -38,6 +42,7 @@ from app.services.constants import (
     MODEL_STATUS_PUBLISHED,
     DATASET_POSITIVE_LABELS,
     dataset_display_name_of,
+    evaluation_audience,
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
@@ -67,6 +72,35 @@ def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
             return value
         return int(number) if number.is_integer() else number
     return value
+
+
+def _explanation_artifact_for(explain_data: dict[str, Any] | None, role: str | None) -> dict:
+    """取该受众那一格的 AI 研判产物。
+
+    改造前的结构是单格（``ai_explanation`` 顶层直接带 markdown），没有受众键。
+    这种老内容对两种受众都可见 —— 升级后历史评价不会突然消失，等各自重新生成
+    时再自然收敛到分受众结构（见 ``_explanation_artifacts``）。
+    """
+    artifact = (explain_data or {}).get("ai_explanation")
+    if not isinstance(artifact, dict):
+        return {}
+    if "markdown" in artifact:
+        return artifact
+    return artifact.get(evaluation_audience(role)) or {}
+
+
+def _explanation_artifacts(explain_data: dict[str, Any] | None) -> dict[str, dict]:
+    """把 ``ai_explanation`` 归一成 ``{受众: 产物}``，供写入前展开老结构。"""
+    artifact = (explain_data or {}).get("ai_explanation")
+    if not isinstance(artifact, dict):
+        return {}
+    if "markdown" in artifact:
+        # 老的单格产物：两边各放一份，之后各自重新生成时覆盖自己那份。
+        return {
+            EVALUATION_AUDIENCE_MANAGEMENT: dict(artifact),
+            EVALUATION_AUDIENCE_USER: dict(artifact),
+        }
+    return {key: value for key, value in artifact.items() if isinstance(value, dict)}
 
 
 class InferenceRecordService(ServiceBase):
@@ -174,15 +208,16 @@ class InferenceRecordService(ServiceBase):
 
     @staticmethod
     def _saved_explanation_for_role(record: InferenceRecord, role: str | None) -> dict:
-        """Expose the persisted wording artifact without leaking its private snapshot.
+        """Expose the persisted wording artifact for the caller's audience.
 
-        The Markdown is an output artifact and is safe to return to the same users
-        who may read the inference record.  The exact facts sent to the AI remain
-        manager-only because they may contain raw input features and algorithm
-        internals; the prediction itself is always read from the server record.
+        Each audience owns its own slot, so an administrator's wording is no
+        longer overwritten when a scenario user regenerates the same record.
+        The exact facts sent to the AI remain manager-only because they may
+        contain raw input features and algorithm internals; the prediction
+        itself is always read from the server record.
         """
-        artifact = (record.explain_data or {}).get("ai_explanation")
-        if not isinstance(artifact, dict) or not artifact.get("markdown"):
+        artifact = _explanation_artifact_for(record.explain_data, role)
+        if not artifact.get("markdown"):
             return {"available": False, "source": None, "generated_at": None}
         result = {
             "available": True,
@@ -190,7 +225,7 @@ class InferenceRecordService(ServiceBase):
             "source": str(artifact.get("source") or "fallback"),
             "generated_at": artifact.get("generated_at"),
         }
-        if role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
+        if role in ADMIN_ROLES:
             result["data_snapshot"] = artifact.get("data_snapshot") or {}
         return result
 
@@ -658,6 +693,14 @@ class InferenceRecordService(ServiceBase):
         return ok(data=view)
 
     @service_call
+    def list_batch_jobs(self, current_user):
+        """当前用户的批量研判任务列表（刷新 / 切页回来能恢复「还在跑」的状态）。"""
+        from app.services.batch_inference_runner import list_jobs
+
+        self.require_login(current_user)
+        return ok(data=list_jobs(current_user.id))
+
+    @service_call
     def submit_batch_from_dataset(
         self,
         current_user,
@@ -793,16 +836,25 @@ class InferenceRecordService(ServiceBase):
 
     @service_call
     def get_explanation_source(self, current_user, record_id: int):
-        """Return the authorized, server-side facts used by the explanation stream."""
+        """Return the authorized, server-side facts used by the explanation stream.
+
+        事实按受众裁剪（``explanation_for_role``）：普通用户拿不到
+        ``algorithm_details`` / ``model_quality`` / ``input_snapshot``，
+        所以 AI 正文里也不会出现本应对普通用户隐藏的算法内部明细 ——
+        正文与「查看解释」弹窗的口径保持一致。
+        """
         record = self._get(record_id)
         self._require_record_access(current_user, record)
+        from app.schemas.explanation_contract import explanation_for_role
         from app.services.explanation_service import get_scenario_config
 
         model = self.db.get(ModelVersion, record.model_version_id)
         scenario_code = model.scenario.code if model and model.scenario else None
         scenario = get_scenario_config(scenario_code)
-        model_result = dict(record.explain_data or {})
         # A previous wording result is an output artifact, never an input fact.
+        model_result = explanation_for_role(
+            record.explain_data, getattr(current_user, "role", None)
+        )
         model_result.pop("ai_explanation", None)
         model_result.setdefault("prediction_label", record.prediction_label)
         model_result.setdefault("prediction_is_risk", bool(record.is_risk_event))
@@ -825,22 +877,35 @@ class InferenceRecordService(ServiceBase):
         source: str,
         data_snapshot: dict[str, Any],
     ):
-        """Persist generated Markdown together with the exact facts sent to the model."""
+        """Persist generated Markdown into the caller's audience slot.
+
+        产物按受众分格：管理员生成的完整版不会被场景用户重新生成时覆盖，
+        反之亦然。老的单格结构在写入时展开成两份（见 ``_explanation_artifacts``）。
+        """
+        from app.services.explanation_service import EXPLANATION_PROMPT_VERSION
+
         record = self._get(record_id)
         self._require_record_access(current_user, record)
         if not markdown or len(markdown) > 100_000:
             raise ServiceError(400, "解释文本为空或超过保存上限")
         source = source if source in {"ai", "fallback"} else "fallback"
+        audience = evaluation_audience(getattr(current_user, "role", None))
+        setting = self.db.get(UserAISetting, current_user.id)
         explain_data = dict(record.explain_data or {})
-        explain_data["ai_explanation"] = {
+        artifacts = _explanation_artifacts(explain_data)
+        artifacts[audience] = {
             "markdown": markdown,
             "source": source,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_by": getattr(current_user, "id", None),
+            "model": getattr(setting, "model", None),
+            "prompt_version": EXPLANATION_PROMPT_VERSION,
             "data_snapshot": data_snapshot,
         }
+        explain_data["ai_explanation"] = artifacts
         record.explain_data = explain_data
         self.commit()
-        return ok(data={"saved": True, "source": source})
+        return ok(data={"saved": True, "source": source, "audience": audience})
 
     @service_call
     def get_explain(self, current_user, record_id: int):

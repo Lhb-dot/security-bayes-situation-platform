@@ -10,7 +10,10 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { getRiskEventPage } from '@/api/riskEventApi';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { getRiskEventPage, hideRiskEvent, unhideRiskEvent } from '@/api/riskEventApi';
+import { shortExplanation } from '@/utils/explanationText';
+import { keepScroll } from '@/utils/scrollAnchor';
 import { useUserStore } from '@/stores/userStore';
 
 /** 真实风险事件（后端 /api/v1/risk-events 返回结构） */
@@ -24,6 +27,7 @@ interface RiskEventItem {
   description: string;
   occurred_at: string;
   status: string; // PENDING / PROCESSING / RESOLVED
+  hidden_at: string | null; // 非空 = 已隐藏（软隐藏，不是删除）
 }
 
 /** 风险事件列表（当前页） */
@@ -44,6 +48,8 @@ const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN
 const selectedScenario = ref<number | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
 const selectedStatus = ref<string>('all');
+/** 是否把已隐藏的事件一起查出来（默认不查 —— 隐藏是可见性开关，不是删除） */
+const showHidden = ref(false);
 
 /** 场景数字 ID → 名称（与后端 scenario 表 id 对齐） */
 const SCENARIO_META: Record<number, { code: string; name: string }> = {
@@ -86,6 +92,12 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: '已处置',
 };
 
+/** 已隐藏事件选项（隐藏 = 软隐藏，数据与处置记录都保留） */
+const hiddenOptions = [
+  { value: false, label: '不显示' },
+  { value: true, label: '显示' },
+];
+
 /** 当前筛选条件 → 后端查询参数（'all' 表示该维度不过滤） */
 const queryParams = computed(() => ({
   scenario_id: selectedScenario.value === 'all' ? undefined : selectedScenario.value,
@@ -97,6 +109,7 @@ const queryParams = computed(() => ({
     selectedStatus.value === 'all'
       ? undefined
       : (STATUS_VALUE[selectedStatus.value] as 'PENDING' | 'PROCESSING' | 'RESOLVED'),
+  include_hidden: showHidden.value || undefined,
 }));
 
 /** 加载数据（筛选与分页均由后端执行） */
@@ -120,9 +133,14 @@ const loadEvents = async (targetPage: number = page.value) => {
 };
 
 /** 筛选条件变化时回到第 1 页重新查询 */
-watch([selectedScenario, selectedRiskLevel, selectedStatus], () => {
+watch([selectedScenario, selectedRiskLevel, selectedStatus, showHidden], () => {
   loadEvents(1);
 });
+
+const tableWrapRef = ref<HTMLElement | null>(null);
+
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadEvents(target), tableWrapRef.value);
 
 /** 风险等级标签映射 */
 const riskLevelMap: Record<string, { label: string; type: string }> = {
@@ -131,9 +149,58 @@ const riskLevelMap: Record<string, { label: string; type: string }> = {
   LOW: { label: '低危', type: 'info' },
 };
 
+/** 原始标签中文化（模型输出的原始类标；未收录的原样显示） */
+const ORIGINAL_LABEL: Record<string, string> = {
+  anomaly: '异常',
+  normal: '正常',
+  '1': '风险',
+  '0': '正常',
+};
+const originalLabel = (value: string) => ORIGINAL_LABEL[value] ?? value;
+
 /** 行内「查看」→ 风险事件详情页 */
 const goEventDetail = (row: RiskEventItem) => {
   router.push({ path: `/events/${row.id}` });
+};
+
+/** 正在切换隐藏状态的事件 id（按钮置灰用） */
+const togglingId = ref<number | null>(null);
+
+/**
+ * 隐藏 / 取消隐藏风险事件。
+ *
+ * 走软隐藏：需求 5.2 访问控制第 4 条要求历史事件不得被无痕删除，后端 DELETE 接口
+ * 因此永远返回 400，所以这里改的是可见性开关 —— 数据与处置记录一行不动。
+ * 隐藏后该行默认从列表消失；取消隐藏后如果没勾「显示」，行同样会消失，两种情况都重拉列表。
+ */
+const toggleHidden = async (row: RiskEventItem) => {
+  const willHide = !row.hidden_at;
+  try {
+    await ElMessageBox.confirm(
+      willHide
+        ? `确认隐藏事件 #${row.id}？隐藏后不在列表显示，数据不会删除。`
+        : `确认取消隐藏事件 #${row.id}？`,
+      willHide ? '隐藏风险事件' : '取消隐藏风险事件',
+      {
+        type: 'warning',
+        confirmButtonText: willHide ? '隐藏' : '取消隐藏',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  togglingId.value = row.id;
+  try {
+    if (willHide) await hideRiskEvent(String(row.id));
+    else await unhideRiskEvent(String(row.id));
+    ElMessage.success(willHide ? '风险事件已隐藏' : '风险事件已取消隐藏');
+    await loadEvents();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '操作失败');
+  } finally {
+    togglingId.value = null;
+  }
 };
 
 onMounted(() => {
@@ -147,7 +214,7 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Risk Events</p>
         <h2>风险事件列表</h2>
-        <p class="risk-events-page__desc">跨场景统一风险事件展示，支持多维度筛选过滤</p>
+        <p class="risk-events-page__desc">各场景风险事件汇总与筛选</p>
       </div>
       <span class="section-tag">{{ total }} 条事件</span>
     </div>
@@ -174,10 +241,18 @@ onMounted(() => {
           <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
       </label>
+
+      <label class="filter-item">
+        <span class="filter-item__label">已隐藏</span>
+        <select v-model="showHidden" class="filter-select">
+          <option v-for="opt in hiddenOptions" :key="String(opt.value)" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
     </div>
 
-    <!-- 加载状态 -->
-    <section v-if="loading" class="state-card">
+    <!-- 加载状态：只有首屏（列表还是空的）才用整块状态卡。
+         翻页时保留列表、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <section v-if="loading && !events.length" class="state-card">
       <div class="loader"></div>
       <p>正在加载风险事件...</p>
     </section>
@@ -194,7 +269,8 @@ onMounted(() => {
     </section>
 
     <!-- 事件列表 -->
-    <div v-else class="risk-events-table-wrap">
+    <div v-else ref="tableWrapRef" class="risk-events-table-wrap">
+      <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
       <el-table
         :data="events"
         stripe
@@ -202,48 +278,40 @@ onMounted(() => {
         row-class-name="event-table-row"
         empty-text="暂无匹配的风险事件"
       >
-        <el-table-column prop="id" label="事件编号" width="96" align="center" show-overflow-tooltip />
+        <el-table-column prop="id" label="事件编号" width="88" align="center" show-overflow-tooltip />
 
-        <el-table-column label="所属场景" width="110" align="center">
+        <el-table-column label="所属场景" width="96" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__scenario-tag">{{ scenarioName(row.scenario_id) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="风险类型" width="160" align="center">
+        <el-table-column label="风险等级" width="118" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
-            <span class="event-table__risk-type">{{ row.risk_type }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="风险等级" width="90" align="center">
-          <template #default="{ row }: { row: RiskEventItem }">
-            <span
-              class="ev-level-badge"
-              :class="`ev-level--${row.risk_level}`"
-            >
-              {{ riskLevelMap[row.risk_level]?.label ?? row.risk_level }}
+            <span class="event-table__level">
+              <span class="ev-level-badge" :class="`ev-level--${row.risk_level}`">
+                {{ riskLevelMap[row.risk_level]?.label ?? row.risk_level }}
+              </span>
+              <span class="ev-level-score">{{ (row.risk_score * 100).toFixed(1) }}%</span>
             </span>
           </template>
         </el-table-column>
 
-        <el-table-column label="风险概率" width="100" align="center">
+        <el-table-column label="原始标签" width="92" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
-            <span class="event-table__score">{{ (row.risk_score * 100).toFixed(1) }}%</span>
+            <span class="event-table__orig-label">{{ originalLabel(row.original_label) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="原始标签" width="100" align="center">
+        <el-table-column label="风险说明" min-width="200" class-name="ev-desc-cell">
           <template #default="{ row }: { row: RiskEventItem }">
-            <span class="event-table__orig-label">{{ row.original_label }}</span>
+            {{ shortExplanation(row.description) }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="description" label="风险说明" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="occurred_at" label="发生时间" width="158" align="center" />
 
-        <el-table-column prop="occurred_at" label="发生时间" width="160" align="center" />
-
-        <el-table-column label="处置状态" width="100" align="center">
+        <el-table-column label="处置状态" width="94" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
             <span
               class="event-table__status"
@@ -254,15 +322,25 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="110" align="center" fixed="right">
+        <el-table-column label="操作" width="172" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
-            <el-button size="small" type="primary" plain @click="goEventDetail(row)">查看</el-button>
+            <span class="ev-ops">
+              <el-button size="small" type="primary" plain @click="goEventDetail(row)">查看</el-button>
+              <el-button
+                size="small"
+                :type="row.hidden_at ? 'info' : 'warning'"
+                plain
+                :disabled="togglingId === row.id"
+                @click="toggleHidden(row)"
+              >{{ row.hidden_at ? '不隐藏' : '隐藏' }}</el-button>
+            </span>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <div v-if="!loading && !error && total > 0" class="risk-events-pager">
+    <!-- 页码条：翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
+    <div v-if="!error && total > 0" class="risk-events-pager">
       <span class="risk-events-pager__total">共 {{ total }} 条</span>
       <el-pagination
         v-model:current-page="page"
@@ -271,7 +349,7 @@ onMounted(() => {
         :total="total"
         :disabled="loading"
         background
-        @current-change="loadEvents"
+        @current-change="changePage"
       />
     </div>
   </div>
@@ -313,52 +391,11 @@ onMounted(() => {
   border-bottom: 1px solid rgba(125, 201, 255, 0.08);
 }
 
-.risk-events-filters__group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.risk-events-filters__label {
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.6);
-  white-space: nowrap;
-}
-
-.risk-events-filters__select {
-  padding: 7px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 201, 255, 0.2);
-  background: rgba(8, 17, 31, 0.6);
-  color: #e8f1ff;
-  font-size: 0.88rem;
-  outline: none;
-  cursor: pointer;
-  min-width: 130px;
-}
-
-.risk-events-filters__select:focus {
-  border-color: rgba(91, 166, 255, 0.5);
-}
-
-.risk-events-filters__select option {
-  background: #0b1628;
-  color: #e8f1ff;
-}
-
-.risk-events-filters__tab:hover {
-  background: rgba(91, 166, 255, 0.1);
-  color: #fff;
-}
-
-.risk-events-filters__tab.is-active {
-  background: rgba(91, 166, 255, 0.18);
-  color: #fff;
-  font-weight: 500;
-}
+/* 筛选控件外观由全局 .filter-item / .filter-select 提供（style.css） */
 
 /* 表格外层 */
 .risk-events-table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   border: 1px solid rgba(125, 201, 255, 0.10);
   border-radius: 18px;
   overflow: hidden;
@@ -378,15 +415,16 @@ onMounted(() => {
   color: rgba(155, 195, 240, 0.8);
 }
 
-.event-table__risk-type {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: rgba(175, 198, 230, 0.8);
+/* 风险等级：等级徽章 + 概率并排 */
+.event-table__level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.event-table__score {
-  font-weight: 600;
-  color: rgba(155, 195, 240, 0.85);
+.ev-level-score {
+  font-size: 0.78rem;
+  color: rgba(155, 195, 240, 0.7);
   font-variant-numeric: tabular-nums;
 }
 
@@ -531,5 +569,31 @@ onMounted(() => {
 
 .risk-events-page .el-table__empty-text {
   color: rgba(155, 185, 225, 0.3) !important;
+}
+
+/* 风险说明：单元格内单行截断，完整说明进详情页看。
+   这里不挂 show-overflow-tooltip —— 悬停浮层会盖住上下相邻行。
+   EP 的 .cell 默认 white-space: normal 会折行，必须显式钉成单行 + 省略号。
+   列表里展示的是 shortExplanation() 的短文本（去掉与「所属场景」「风险等级」
+   两列重复的开头、以及每种类型固定的「建议…」模板尾巴），详情页仍是完整正文。 */
+.risk-events-page .ev-desc-cell .cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 操作列两个按钮排一行，间距自己控（EP 默认给相邻 el-button 加 margin-left，先清掉） */
+.risk-events-page .ev-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 两个按钮等宽：文案在「查看」/「隐藏」/「不隐藏」之间切，按最宽的「不隐藏」定 64px。
+   实测（字体 12px、左右 padding 各 11px、边框 1px）：查看/隐藏 48px、不隐藏 60px、
+   取消隐藏 72px。64px 放下「不隐藏」还余 4px；两个都写 width，宽度不随状态变。 */
+.risk-events-page .ev-ops .el-button {
+  width: 64px;
+  margin-left: 0;
 }
 </style>

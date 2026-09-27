@@ -34,10 +34,27 @@ threadpool 里（同一端点的多次请求可能落在不同线程），所以
 只被用过个位数次）。所以渲染线程在队列空闲 IDLE_EXIT_SECONDS 后主动退出并关闭浏览器，
 下一次导出再重新拉起 —— 代价是空闲后的首次导出多约 1–2 秒冷启动。
 环境变量 PDF_IDLE_EXIT_SECONDS 可覆盖（置 0 表示永不退出，即改动前的行为）。
+
+图表
+----
+界面上「报告详情」里的图表是前端拿 `report_data` 用 ECharts 现画的，而 `report.content`
+（Markdown 正文）里只有文字和表格，所以导出文件里一张图都没有。
+这里补上：把 `report_data` 里的分布/概率数据用**纯 Python 生成 SVG** 塞进导出的 HTML，
+PDF 走同一份 HTML 渲染，于是两种格式的图一致。
+
+选 SVG 手写而不是在导出页里引 ECharts，原因是：
+- 导出的 HTML 是给人下载后**离线打开**的，引 CDN 会在断网/内网环境里变成空白；
+- PDF 由服务端 Chromium 渲染，引 CDN 还要求服务器能出网，多一个失败点；
+- SVG 在 PDF 里是矢量，缩放不糊，比位图截图更适合打印。
+
+markdown 格式仍然是纯文本（Markdown 本身没有可靠的图表表达方式，嵌 base64 图片
+会让文件不可读），这是有意保留的差异。
 """
 from __future__ import annotations
 
+import html as _html
 import logging
+import math
 import os
 import queue
 import re
@@ -135,6 +152,11 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     border-left: 3px solid var(--rule);
     color: var(--ink-soft);
   }}
+  /* 图表：每张图自身不跨页断开（PDF）；单个 chart-block 可能装多张图，
+     整块超过一页时 Chromium 会忽略块级约束，所以约束要落在 svg 上 */
+  .report .chart-block {{ margin: 14px 0 18px; }}
+  .report .chart-block svg {{ display: block; width: 100%; height: auto; break-inside: avoid; }}
+  .report .chart-block text {{ font-family: inherit; }}
   /* 屏幕上给一点留白和卡片感；打印/PDF 走 @page 的边距，不加内边距 */
   @media screen {{
     body {{ background: #eef2f8; padding: 36px 20px; }}
@@ -179,15 +201,472 @@ _MD = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": 
     "table"
 )
 
+# ---------------------------------------------------------------------------
+# 图表：report_data → SVG
+# ---------------------------------------------------------------------------
+#: 与报告正文同一套浅色「蓝墨稿纸」配色
+_BAR_FILL = "#2f6fb5"
+_PALETTE = [
+    "#1f5fa9",
+    "#3f8fcf",
+    "#4aa8a0",
+    "#c08a2e",
+    "#8a6fc4",
+    "#c25b52",
+    "#6b8fb5",
+    "#a0632f",
+]
+_AXIS_LINE = "#c7d5e6"
+_GRID_LINE = "#e3ebf5"
+_LABEL_INK = "#5a6b85"
+_VALUE_INK = "#1b2b44"
+_MUTED_INK = "#8896ab"
+
+
+def _r(v: float) -> float:
+    """坐标取两位小数，避免 SVG 里出现一长串浮点尾数。"""
+    return round(float(v), 2)
+
+
+def _xml(text) -> str:
+    """SVG 文本节点转义（标签/类别名来自数据，可能带 & 或 <）。"""
+    return _html.escape(str(text), quote=True)
+
+
+def _text_width(text: str, size: float) -> float:
+    """粗略估算文本宽度：中日韩字符按 1 em，其余按 0.55 em。
+
+    只用来决定标签要不要截断，不需要精确 —— SVG 里没有排版引擎可以先量后画。
+    """
+    return sum(size * (1.0 if ord(ch) > 0x2E80 else 0.55) for ch in text)
+
+
+def _ellipsize(text: str, size: float, max_width: float) -> str:
+    """超宽标签截断加省略号。"""
+    text = str(text)
+    if _text_width(text, size) <= max_width:
+        return text
+    out = ""
+    for ch in text:
+        if _text_width(out + ch + "…", size) > max_width:
+            break
+        out += ch
+    return (out + "…") if out else "…"
+
+
+def _fmt_num(v) -> str:
+    """整数不带小数点，其余保留三位。"""
+    if v is None:
+        return "—"
+    f = float(v)
+    if abs(f - round(f)) < 1e-9:
+        return str(int(round(f)))
+    return f"{f:.3f}"
+
+
+def _fmt_tick(v: float) -> str:
+    """坐标轴刻度：0.25 → 0.25、0.5 → 0.5、1.0 → 1。"""
+    if abs(v - round(v)) < 1e-9:
+        return str(int(round(v)))
+    if abs(v) < 1:
+        return f"{v:.2f}".rstrip("0").rstrip(".")
+    return f"{v:g}"
+
+
+def _nice_axis(max_value: float, ticks: int = 4) -> tuple:
+    """给坐标轴找一组好看的 (上限, 步长)。"""
+    max_value = float(max_value or 0)
+    if max_value <= 0:
+        return float(ticks), 1.0
+    raw = max_value / ticks
+    mag = 10 ** math.floor(math.log10(raw))
+    step = mag * 10
+    for mult in (1, 2, 2.5, 5, 10):
+        if mult * mag >= raw:
+            step = mult * mag
+            break
+    top = step * ticks
+    while top < max_value:
+        top += step
+    return top, step
+
+
+def _svg_open(width: float, height: float, title: str) -> str:
+    return (
+        f'<svg class="chart" viewBox="0 0 {_r(width)} {_r(height)}" '
+        f'xmlns="http://www.w3.org/2000/svg" role="img">'
+        f"<title>{_xml(title)}</title>"
+    )
+
+
+def _chart_title(title: str, x: float, y: float, max_width: float = 0) -> str:
+    if max_width:
+        title = _ellipsize(title, 13, max_width)
+    return (
+        f'<text x="{_r(x)}" y="{_r(y)}" font-size="13" font-weight="700" '
+        f'fill="{_VALUE_INK}">{_xml(title)}</text>'
+    )
+
+
+def _legend_items(series, width, x0, y0, max_lines=2) -> str:
+    """多系列图例；一行放不下就折行，超过 max_lines 就不再画。"""
+    parts, x, y, lines = [], x0, y0, 1
+    for idx, item in enumerate(series):
+        name = str(item.get("name") or f"系列 {idx + 1}")
+        color = _PALETTE[idx % len(_PALETTE)]
+        need = 14 + _text_width(name, 12) + 18
+        if x + need > width and lines < max_lines:
+            x, y, lines = x0, y + 18, lines + 1
+        if x + need > width:
+            break
+        parts.append(
+            f'<rect x="{_r(x)}" y="{_r(y - 8)}" width="10" height="10" rx="2" fill="{color}"/>'
+        )
+        parts.append(
+            f'<text x="{_r(x + 15)}" y="{_r(y + 1)}" font-size="12" '
+            f'fill="{_LABEL_INK}">{_xml(name)}</text>'
+        )
+        x += need
+    return "".join(parts)
+
+
+def _vbar_svg(title: str, categories, values, width: float = 720, height: float = 264) -> str:
+    """垂直柱状图（预测标签分布）。"""
+    pad_l, pad_r, pad_t, pad_b = 58.0, 18.0, 44.0, 54.0
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    top, step = _nice_axis(max(values) if values else 0)
+
+    parts = [
+        _svg_open(width, height, title),
+        _chart_title(title, pad_l, 24, width - pad_l - pad_r),
+    ]
+    ticks = int(round(top / step)) if step else 0
+    for i in range(ticks + 1):
+        v = step * i
+        y = pad_t + plot_h * (1 - v / top)
+        parts.append(
+            f'<line x1="{_r(pad_l)}" y1="{_r(y)}" x2="{_r(pad_l + plot_w)}" y2="{_r(y)}" '
+            f'stroke="{_GRID_LINE}" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{_r(pad_l - 8)}" y="{_r(y + 4)}" text-anchor="end" font-size="11" '
+            f'fill="{_MUTED_INK}">{_fmt_tick(v)}</text>'
+        )
+    parts.append(
+        f'<line x1="{_r(pad_l)}" y1="{_r(pad_t + plot_h)}" x2="{_r(pad_l + plot_w)}" '
+        f'y2="{_r(pad_t + plot_h)}" stroke="{_AXIS_LINE}" stroke-width="1"/>'
+    )
+
+    n = len(categories)
+    band = plot_w / n if n else plot_w
+    bar_w = min(48.0, band * 0.6)
+    for i, (cat, val) in enumerate(zip(categories, values)):
+        cx = pad_l + band * (i + 0.5)
+        h = plot_h * (float(val) / top) if top else 0.0
+        y = pad_t + plot_h - h
+        if h > 0:
+            parts.append(
+                f'<rect x="{_r(cx - bar_w / 2)}" y="{_r(y)}" width="{_r(bar_w)}" '
+                f'height="{_r(h)}" rx="3" fill="{_BAR_FILL}"/>'
+            )
+        parts.append(
+            f'<text x="{_r(cx)}" y="{_r(y - 6)}" text-anchor="middle" font-size="11" '
+            f'fill="{_VALUE_INK}">{_fmt_num(val)}</text>'
+        )
+        label = _ellipsize(cat, 12, max(band - 6, 24))
+        parts.append(
+            f'<text x="{_r(cx)}" y="{_r(pad_t + plot_h + 20)}" text-anchor="middle" '
+            f'font-size="12" fill="{_LABEL_INK}">{_xml(label)}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _hbar_svg(title: str, categories, values, width: float = 720, row_h: float = 34) -> str:
+    """横向柱状图（风险概率区间分布）。"""
+    pad_l, pad_r, pad_t, pad_b = 78.0, 46.0, 44.0, 34.0
+    n = len(categories)
+    height = pad_t + n * row_h + pad_b
+    plot_w = width - pad_l - pad_r
+    top, step = _nice_axis(max(values) if values else 0)
+
+    parts = [_svg_open(width, height, title), _chart_title(title, pad_l, 24, width - pad_l - pad_r)]
+    ticks = int(round(top / step)) if step else 0
+    for i in range(ticks + 1):
+        v = step * i
+        x = pad_l + plot_w * (v / top)
+        parts.append(
+            f'<line x1="{_r(x)}" y1="{_r(pad_t)}" x2="{_r(x)}" y2="{_r(pad_t + n * row_h)}" '
+            f'stroke="{_GRID_LINE}" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{_r(x)}" y="{_r(pad_t + n * row_h + 18)}" text-anchor="middle" '
+            f'font-size="11" fill="{_MUTED_INK}">{_fmt_tick(v)}</text>'
+        )
+    parts.append(
+        f'<line x1="{_r(pad_l)}" y1="{_r(pad_t)}" x2="{_r(pad_l)}" y2="{_r(pad_t + n * row_h)}" '
+        f'stroke="{_AXIS_LINE}" stroke-width="1"/>'
+    )
+
+    bar_h = min(18.0, row_h * 0.56)
+    for i, (cat, val) in enumerate(zip(categories, values)):
+        cy = pad_t + row_h * (i + 0.5)
+        w = plot_w * (float(val) / top) if top else 0.0
+        if w > 0:
+            parts.append(
+                f'<rect x="{_r(pad_l)}" y="{_r(cy - bar_h / 2)}" width="{_r(w)}" '
+                f'height="{_r(bar_h)}" rx="3" fill="{_BAR_FILL}"/>'
+            )
+        parts.append(
+            f'<text x="{_r(pad_l - 10)}" y="{_r(cy + 4)}" text-anchor="end" font-size="12" '
+            f'fill="{_LABEL_INK}">{_xml(cat)}</text>'
+        )
+        parts.append(
+            f'<text x="{_r(pad_l + w + 8)}" y="{_r(cy + 4)}" font-size="11" '
+            f'fill="{_VALUE_INK}">{_fmt_num(val)}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _ring_point(cx: float, cy: float, r: float, deg: float) -> tuple:
+    rad = math.radians(deg - 90)
+    return cx + r * math.cos(rad), cy + r * math.sin(rad)
+
+
+def _ring_segment(cx, cy, r_out, r_in, a0, a1) -> str:
+    """环形扇区路径（a0/a1 为角度，0 = 12 点方向，顺时针）。"""
+    x0, y0 = _ring_point(cx, cy, r_out, a0)
+    x1, y1 = _ring_point(cx, cy, r_out, a1)
+    x2, y2 = _ring_point(cx, cy, r_in, a1)
+    x3, y3 = _ring_point(cx, cy, r_in, a0)
+    large = 1 if (a1 - a0) > 180 else 0
+    return (
+        f"M {_r(x0)} {_r(y0)} A {_r(r_out)} {_r(r_out)} 0 {large} 1 {_r(x1)} {_r(y1)} "
+        f"L {_r(x2)} {_r(y2)} A {_r(r_in)} {_r(r_in)} 0 {large} 0 {_r(x3)} {_r(y3)} Z"
+    )
+
+
+def _donut_svg(title: str, items, width: float = 720, height: Optional[float] = None) -> str:
+    """环形图（类别概率）；items = [{label, value, color}]。"""
+    items = [it for it in items if (it.get("value") or 0) > 0]
+    total = sum(float(it["value"]) for it in items)
+    if not items or total <= 0:
+        return ""
+
+    pad_t = 44.0
+    # 图例一行 22px，类别多的时候把画布拉高，别让图例被裁掉
+    if height is None:
+        height = max(236.0, pad_t + len(items) * 22 + 14)
+    cx, cy = 152.0, pad_t + 78
+    r_out, r_in = 80.0, 48.0
+    parts = [_svg_open(width, height, title), _chart_title(title, 16, 24, width - 32)]
+
+    if len(items) == 1:
+        parts.append(
+            f'<circle cx="{_r(cx)}" cy="{_r(cy)}" r="{_r((r_out + r_in) / 2)}" fill="none" '
+            f'stroke="{items[0]["color"]}" stroke-width="{_r(r_out - r_in)}"/>'
+        )
+    else:
+        angle = 0.0
+        for it in items:
+            sweep = 360.0 * float(it["value"]) / total
+            parts.append(
+                f'<path d="{_ring_segment(cx, cy, r_out, r_in, angle, angle + sweep)}" '
+                f'fill="{it["color"]}"/>'
+            )
+            angle += sweep
+
+    lx, ly = 300.0, pad_t + 2
+    legend_w = width - lx - 16
+    for it in items:
+        pct = float(it["value"]) / total * 100
+        text = _ellipsize(f"{it['label']} {pct:.1f}%", 12, legend_w - 16)
+        parts.append(
+            f'<rect x="{_r(lx)}" y="{_r(ly - 9)}" width="10" height="10" rx="2" '
+            f'fill="{it["color"]}"/>'
+        )
+        parts.append(
+            f'<text x="{_r(lx + 16)}" y="{_r(ly)}" font-size="12" '
+            f'fill="{_LABEL_INK}">{_xml(text)}</text>'
+        )
+        ly += 22
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _grouped_bar_svg(
+    title: str, categories, series, width: float = 720, height: float = 300
+) -> str:
+    """分组柱状图（多视图概率对比）；series = [{name, data}]。"""
+    pad_l, pad_r, pad_t, pad_b = 58.0, 18.0, 64.0, 54.0
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    flat = [v for s in series for v in s.get("data") or []]
+    top, step = _nice_axis(max(flat) if flat else 0)
+
+    parts = [
+        _svg_open(width, height, title),
+        _chart_title(title, pad_l, 24, width - pad_l - pad_r),
+        _legend_items(series, width - pad_r, pad_l, 46),
+    ]
+    ticks = int(round(top / step)) if step else 0
+    for i in range(ticks + 1):
+        v = step * i
+        y = pad_t + plot_h * (1 - v / top)
+        parts.append(
+            f'<line x1="{_r(pad_l)}" y1="{_r(y)}" x2="{_r(pad_l + plot_w)}" y2="{_r(y)}" '
+            f'stroke="{_GRID_LINE}" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{_r(pad_l - 8)}" y="{_r(y + 4)}" text-anchor="end" font-size="11" '
+            f'fill="{_MUTED_INK}">{_fmt_tick(v)}</text>'
+        )
+    parts.append(
+        f'<line x1="{_r(pad_l)}" y1="{_r(pad_t + plot_h)}" x2="{_r(pad_l + plot_w)}" '
+        f'y2="{_r(pad_t + plot_h)}" stroke="{_AXIS_LINE}" stroke-width="1"/>'
+    )
+
+    n, m = len(categories), len(series)
+    band = plot_w / n if n else plot_w
+    group_w = band * 0.72
+    bar_w = group_w / m if m else group_w
+    show_values = bar_w >= 22
+    for i, cat in enumerate(categories):
+        base = pad_l + band * i + (band - group_w) / 2
+        for j, s in enumerate(series):
+            data = s.get("data") or []
+            val = float(data[i]) if i < len(data) else 0.0
+            h = plot_h * (val / top) if top else 0.0
+            x = base + bar_w * j
+            y = pad_t + plot_h - h
+            if h > 0:
+                parts.append(
+                    f'<rect x="{_r(x + 1)}" y="{_r(y)}" width="{_r(max(bar_w - 2, 1))}" '
+                    f'height="{_r(h)}" rx="2" fill="{_PALETTE[j % len(_PALETTE)]}"/>'
+                )
+            if show_values:
+                parts.append(
+                    f'<text x="{_r(x + bar_w / 2)}" y="{_r(y - 5)}" text-anchor="middle" '
+                    f'font-size="10" fill="{_VALUE_INK}">{_fmt_num(val)}</text>'
+                )
+        label = _ellipsize(cat, 12, max(band - 6, 24))
+        parts.append(
+            f'<text x="{_r(pad_l + band * (i + 0.5))}" y="{_r(pad_t + plot_h + 20)}" '
+            f'text-anchor="middle" font-size="12" fill="{_LABEL_INK}">{_xml(label)}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+#: 图表插到哪一段之后：锚点是「下一节的标题」，插在它之前
+_SECTION_VIEWS = "四、不同视图预测结果与概率"
+_SECTION_FEATURES = "五、特征加权条件概率（Top 10）"
+
+
+def build_chart_blocks(report_data) -> list:
+    """report_data → [(锚点标题, 图表 HTML)]。
+
+    没有 report_data（旧报告）或数据全空时返回空列表，导出结果与改动前一致。
+    """
+    if not isinstance(report_data, dict) or not report_data.get("report_info"):
+        return []
+
+    blocks = []
+
+    pred = report_data.get("prediction") or {}
+    charts = []
+    dist = pred.get("label_distribution") or []
+    if dist and any((d.get("count") or 0) for d in dist):
+        charts.append(
+            _vbar_svg(
+                "预测标签分布",
+                [d.get("label") or "未知" for d in dist],
+                [d.get("count") or 0 for d in dist],
+            )
+        )
+    probs = [
+        (c.get("class") or "未知", float(c.get("probability") or 0))
+        for c in (pred.get("class_probability") or [])
+    ]
+    if probs and any(v > 0 for _c, v in probs):
+        charts.append(
+            _donut_svg(
+                "类别概率",
+                [
+                    {"label": c, "value": v, "color": _PALETTE[i % len(_PALETTE)]}
+                    for i, (c, v) in enumerate(probs)
+                ],
+            )
+        )
+    buckets = pred.get("risk_prob_buckets") or []
+    if buckets and any((b.get("count") or 0) for b in buckets):
+        charts.append(
+            _hbar_svg(
+                "风险概率区间分布",
+                [b.get("range") or "—" for b in buckets],
+                [b.get("count") or 0 for b in buckets],
+            )
+        )
+    if charts:
+        blocks.append((_SECTION_VIEWS, "".join(charts)))
+
+    charts = []
+    for m in report_data.get("model_analysis") or []:
+        views = [v for v in (m.get("views") or []) if v.get("distribution")]
+        if len(views) < 2:
+            continue
+        categories = [d.get("class") for d in views[0]["distribution"]]
+        if not categories:
+            continue
+        series = []
+        for v in views:
+            lookup = {d.get("class"): d.get("probability") or 0 for d in v["distribution"]}
+            series.append(
+                {
+                    "name": v.get("name") or "视图",
+                    "data": [float(lookup.get(c) or 0) for c in categories],
+                }
+            )
+        name = m.get("algorithm_name") or m.get("algorithm_code") or "模型"
+        charts.append(
+            _grouped_bar_svg(
+                f"{name}（模型 {m.get('model_version_id')}）多视图概率对比", categories, series
+            )
+        )
+    if charts:
+        blocks.append((_SECTION_FEATURES, "".join(charts)))
+
+    return blocks
+
+
+def _inject_charts(body: str, report_data) -> str:
+    """把图表插到对应章节末尾（即「下一节标题」之前）。
+
+    找不到锚点（正文被改过或结构不同）时退化为追加到文末，宁可位置差一点，
+    也不要整块图丢掉。
+    """
+    blocks = build_chart_blocks(report_data)
+    if not blocks:
+        return body
+    for heading, charts in blocks:
+        html = f'<div class="chart-block">{charts}</div>'
+        marker = f"<h2>{heading}</h2>"
+        idx = body.find(marker)
+        if idx == -1:
+            body = body + html
+        else:
+            body = body[:idx] + html + body[idx:]
+    return body
+
 
 def markdown_to_html(markdown_text: str) -> str:
     """Markdown 正文 → HTML 片段。"""
     return _MD.render(markdown_text or "")
 
 
-def render_html_document(title: str, markdown_text: str) -> str:
-    """Markdown 正文 → 完整的 HTML 文档（带打印友好样式）。"""
-    body = markdown_to_html(markdown_text)
+def render_html_document(title: str, markdown_text: str, report_data=None) -> str:
+    """Markdown 正文 → 完整的 HTML 文档（带打印友好样式 + 图表）。"""
+    body = _inject_charts(markdown_to_html(markdown_text), report_data)
     safe_title = (title or "态势报告").replace("<", "&lt;").replace(">", "&gt;")
     return _HTML_TEMPLATE.format(title=safe_title, body=body)
 
@@ -351,14 +830,24 @@ def content_disposition(filename: str, report_id: int, fmt: str) -> str:
     return f"attachment; filename=\"report_{report_id}.{ext}\"; filename*=UTF-8''{quoted}"
 
 
-def build_export(title: str, markdown_text: str, report_id: int, fmt: str) -> ExportFile:
-    """按目标格式产出可下载文件。"""
+def build_export(
+    title: str,
+    markdown_text: str,
+    report_id: int,
+    fmt: str,
+    report_data=None,
+) -> ExportFile:
+    """按目标格式产出可下载文件。
+
+    report_data 用于给 html / pdf 补图表（见模块头「图表」一节）；不传或为 None 时
+    产物与改动前完全一致，markdown 格式也始终只用正文。
+    """
     if fmt == "markdown":
         content = (markdown_text or "").encode("utf-8")
     elif fmt == "html":
-        content = render_html_document(title, markdown_text).encode("utf-8")
+        content = render_html_document(title, markdown_text, report_data).encode("utf-8")
     elif fmt == "pdf":
-        content = html_to_pdf(render_html_document(title, markdown_text))
+        content = html_to_pdf(render_html_document(title, markdown_text, report_data))
     else:
         raise ValueError(f"不支持的导出格式: {fmt}")
     return ExportFile(

@@ -123,6 +123,8 @@ export interface BatchInferenceJob extends BatchJobReceipt {
   risk_count: number;
   /** 任务整体失败时的原因 */
   error: string | null;
+  /** 提交时刻（epoch 秒，服务端时钟）：已用时间以它为准，刷新后不会归零 */
+  created_at: number;
   /** 终态（DONE / FAILED）才有；进行中为 null */
   result: BatchInferenceResult | null;
 }
@@ -159,6 +161,18 @@ export const submitInferenceBatchUpload = async (params: {
 /** 批量研判任务进度（GET /inference-records/predict-batch/jobs/{job_id}，仅发起人） */
 export const getInferenceBatchJob = async (jobId: string): Promise<BatchInferenceJob> =>
   unwrapData(await request.get(`/api/v1/inference-records/predict-batch/jobs/${jobId}`));
+
+/** 任务列表视图：不含逐条明细（明细走单任务接口，列表只用来恢复在途状态） */
+export type BatchInferenceJobBrief = Omit<BatchInferenceJob, 'result'>;
+
+/**
+ * 我的批量研判任务列表（GET /inference-records/predict-batch/jobs，最近的在前）
+ *
+ * 任务表在服务端进程内，前端这侧的状态随页面一起没；刷新 / 切页回来靠它把未完成的
+ * 任务接回轮询，这样离开研判页也不会丢掉完成通知。
+ */
+export const listInferenceBatchJobs = async (): Promise<BatchInferenceJobBrief[]> =>
+  unwrapData(await request.get('/api/v1/inference-records/predict-batch/jobs'));
 
 /** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */
 export const getInferenceRecordList = async (params?: {

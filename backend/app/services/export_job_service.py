@@ -67,7 +67,7 @@ class ExportJob:
     finished_at: Optional[float] = None
 
     def to_dict(self) -> dict:
-        """对外视图：不下发文件内容。"""
+        """对外视图：不下发文件内容。created_at 是 epoch 秒，前端据此算已用时间。"""
         return {
             "job_id": self.id,
             "report_id": self.report_id,
@@ -76,6 +76,7 @@ class ExportJob:
             "error": self.error,
             "filename": self.filename,
             "ready": self.status == STATUS_DONE,
+            "created_at": self.created_at,
         }
 
 
@@ -193,9 +194,9 @@ def _execute(job_id: str) -> None:
 
     db = SessionLocal()
     try:
-        # 权限已在提交时校验过；这里只取标题与正文，正文体积大，放在渲染前才读。
-        title, content = ReportService(db).load_export_source(job.report_id)
-        exported = build_export(title, content, job.report_id, job.fmt)
+        # 权限已在提交时校验过；这里才取正文与结构化数据（体积大，放在渲染前才读）。
+        title, content, report_data = ReportService(db).load_export_source(job.report_id)
+        exported = build_export(title, content, job.report_id, job.fmt, report_data)
     except Exception as exc:  # noqa: BLE001 - 后台任务：失败写进任务表
         db.rollback()
         job.status = STATUS_FAILED

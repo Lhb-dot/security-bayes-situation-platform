@@ -420,8 +420,8 @@ onBeforeUnmount(() => {
       <div>
         <p class="eyebrow">{{ isAdmin ? 'System Settings' : 'My Settings' }}</p>
         <h2>{{ isAdmin ? '系统设置' : '设置' }}</h2>
-        <p v-if="isAdmin" class="settings-page__desc">风险阈值按当前账号和场景配置，其余为全局基础参数</p>
-        <p v-else class="settings-page__desc">选择你感兴趣的场景（可多选），其它页面将实时更新；下方为个人设置</p>
+        <p v-if="isAdmin" class="settings-page__desc">全局基础参数与风险阈值配置</p>
+        <p v-else class="settings-page__desc">关注场景与账号安全设置</p>
       </div>
     </div>
 
@@ -747,11 +747,12 @@ onBeforeUnmount(() => {
 .settings-page__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .settings-page__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 

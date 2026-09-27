@@ -144,6 +144,8 @@ export interface ReportGenerateJob {
   report_id: string | null;
   /** 产物就绪 */
   ready: boolean;
+  /** 提交时刻（epoch 秒，服务端时钟）：已用时间以它为准，刷新后不会归零 */
+  created_at: number;
 }
 
 /**
@@ -209,6 +211,8 @@ export interface ReportExportJob extends ReportExportReceipt {
   ready: boolean;
   filename: string | null;
   error: string | null;
+  /** 提交时刻（epoch 秒，服务端时钟） */
+  created_at: number;
 }
 
 /**
@@ -231,6 +235,15 @@ export const submitReportExport = async (
 /** 导出任务进度（GET /reports/export/jobs/{job_id}，仅发起人） */
 export const getReportExportJob = async (jobId: string): Promise<ReportExportJob> =>
   unwrapData(await request.get(`/api/v1/reports/export/jobs/${jobId}`));
+
+/**
+ * 我的导出任务列表（GET /reports/export/jobs，最近的在前）。
+ *
+ * 服务端的 list_jobs 不按状态过滤，终态任务也在返回里（TTL 900 秒内保留），
+ * 所以刷新后能把「还在导出」的接回轮询，也能靠它判定「已完成但没看过」。
+ */
+export const listReportExportJobs = async (): Promise<ReportExportJob[]> =>
+  ((await unwrapData(await request.get('/api/v1/reports/export/jobs'))) ?? []) as ReportExportJob[];
 
 /** 下载导出任务产出的文件（GET /reports/export/jobs/{job_id}/file，成功时直接回文件流） */
 export const downloadReportExportFile = async (jobId: string): Promise<Blob> =>

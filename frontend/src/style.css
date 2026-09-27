@@ -19,10 +19,27 @@
   box-sizing: border-box;
 }
 
+/* 滚动条占位恒定。
+   页面滚动条挂在 viewport 上，内容高度跨过视口高度时它会从无到有，可用宽度瞬间少 15px，
+   整页内容左右各缩 7.5px —— 看起来就是「跳一下」。典型触发点：用户管理列表加载完成
+   （空表 660px → 10 行 1120px，1080 高的视口刚好越线）。
+   预留 gutter 后所有页面的可用宽度一致，切换和加载都不再跳。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+}
+
+/* Element Plus 打开弹窗时给 body 内联了 width: calc(100% - 15px) —— 它假设滚动条会消失、
+   用这 15px 把背景宽度补回来。但上面已用 scrollbar-gutter 预留了 gutter，包含块宽度本来就
+   恒定，这个补偿就成了「双重扣减」，背景会右缩 15px。覆盖掉，让宽度始终跟随包含块。
+   注意：这条与上面的 scrollbar-gutter 是一对，别单独删其中一个。 */
+body.el-popup-parent--hidden {
+  width: 100% !important;
 }
 
 button,
@@ -111,6 +128,8 @@ button {
   overflow-x: auto; /* 极端窄屏时内部横向滚动，不挤压标题 */
   scrollbar-width: none;
   white-space: nowrap;
+  /* 顶栏铃铛的悬停走廊会横跨导航区域，抬一层保证导航的 hover / 点击永远优先 */
+  z-index: 1;
 }
 
 .nav-tabs::-webkit-scrollbar {
@@ -1049,6 +1068,38 @@ button {
   animation: spin 1s linear infinite;
 }
 
+/* 列表局部刷新的加载遮罩：翻页时保留原列表、只盖一层。
+   换成整块状态卡会让内容高度骤降，外层滚动位置被夹 → 页面自己跳，
+   所以列表相关的加载态一律走这层遮罩，宿主容器需 position: relative。 */
+.pane-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5; /* 高于 el-table 的固定列（EP 给的是 3） */
+}
+
+/* 底色和模糊放伪元素上：backdrop-filter 会给后代当定位参照，
+   写在 .pane-loading 上会让下面那个 fixed 的转圈退回「相对遮罩居中」 */
+.pane-loading::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(5, 12, 22, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.pane-loading .loader {
+  /* 表格可能有几屏高，居中于遮罩会把转圈推到视口外/边缘，用户看不到反馈。
+     钉在视口中心 —— 遮罩铺满容器，转圈永远在眼皮底下。 */
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  margin: -15px 0 0 -15px;
+  width: 30px;
+  height: 30px;
+  border-width: 2px;
+}
+
 @keyframes pulse {
   0% {
     opacity: 0;
@@ -1157,8 +1208,12 @@ button {
  * append-to-body 的弹窗渲染在 body，scoped 样式够不到，故放全局。
  * ------------------------------------------------------------------ */
 
-/* 弹窗遮罩 */
-.el-overlay {
+/* 弹窗遮罩。
+ * 类名叠一次是为了提权重：main.ts 现在显式引入了 el-overlay.css（含
+ * `.el-overlay{background-color:var(--el-overlay-color-lighter)}`），它加载在本文件之后，
+ * 同权重会盖掉这里的暗色与模糊。叠类名（同 .el-notification.el-notification 的做法）
+ * 比 !important 干净，也不会误伤别的 overlay。 */
+.el-overlay.el-overlay {
   background: rgba(3, 8, 16, 0.72);
   backdrop-filter: blur(4px);
 }

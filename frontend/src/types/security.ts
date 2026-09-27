@@ -339,6 +339,8 @@ export interface ReportData {
     status: string;
     key_features: string[];
   }>;
+  /** key_events 是概率最高的前 N 条，这里是总起数 */
+  key_events_total: number;
   data_notes: string;
   analysis_nl: string;
   guidance_nl: string;

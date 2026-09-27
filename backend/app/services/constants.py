@@ -36,6 +36,26 @@ ROLE_USER = ROLE_SCENARIO_USER
 # 管理级角色集合（能做管理操作的角色）
 ADMIN_ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
 
+# ---------------------------------------------------------------------------
+# AI 产物的两级受众（模型级评价与样本级研判解释共用同一套键）
+#
+# 三级角色压成两级：超管与场景管理员拿到的解释裁剪结果一致（见
+# schemas/explanation_contract.explanation_for_role），归入 management；
+# 场景用户归入 user。产物按受众分格存储，管理员版不会被用户版覆盖。
+# ---------------------------------------------------------------------------
+EVALUATION_AUDIENCE_MANAGEMENT = "management"
+EVALUATION_AUDIENCE_USER = "user"
+EVALUATION_AUDIENCES = (EVALUATION_AUDIENCE_MANAGEMENT, EVALUATION_AUDIENCE_USER)
+
+
+def evaluation_audience(role: str | None) -> str:
+    """三级角色 → AI 产物受众键（management / user）。"""
+    return (
+        EVALUATION_AUDIENCE_MANAGEMENT
+        if role in ADMIN_ROLES
+        else EVALUATION_AUDIENCE_USER
+    )
+
 USER_STATUS_ENABLED = "ENABLED"
 USER_STATUS_DISABLED = "DISABLED"
 USER_STATUSES = (USER_STATUS_ENABLED, USER_STATUS_DISABLED)

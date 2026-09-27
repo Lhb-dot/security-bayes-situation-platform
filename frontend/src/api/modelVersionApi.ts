@@ -36,6 +36,35 @@ export interface BackendModelVersion {
   model_attributes?: Record<string, unknown>;
 }
 
+/** 模型版本分页结果（GET /model-versions 的 data） */
+export interface ModelVersionPage {
+  items: BackendModelVersion[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/**
+ * 模型版本分页列表（含 total，列表页服务端分页用；普通用户仅见 PUBLISHED）。
+ *
+ * status 支持逗号分隔多值（如 `TRAINING,FAILED,DRAFT`），供「未发布」这类跨状态筛选下推。
+ */
+export const getModelVersionPage = async (params?: {
+  scenario_id?: ScenarioId | number;
+  dataset_id?: string | number;
+  status?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<ModelVersionPage> => {
+  const data = await unwrapData(await request.get('/api/v1/model-versions', { params }));
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    page: data.page ?? 1,
+    page_size: data.page_size ?? 10,
+  };
+};
+
 /** 模型版本列表（GET /model-versions，普通用户仅见 PUBLISHED） */
 export const getModelVersionList = async (params?: {
   scenario_id?: ScenarioId | number;
@@ -43,10 +72,7 @@ export const getModelVersionList = async (params?: {
   status?: ModelStatus;
   page?: number;
   page_size?: number;
-}): Promise<BackendModelVersion[]> => {
-  const data = await unwrapData(await request.get('/api/v1/model-versions', { params }));
-  return data.items ?? [];
-};
+}): Promise<BackendModelVersion[]> => (await getModelVersionPage(params)).items;
 
 /** 获取场景+数据集的默认推荐模型（GET /model-versions/default；无默认时 data 为 null） */
 export const getDefaultModel = async (params: {

@@ -70,12 +70,7 @@ export const useUserStore = defineStore('user', {
         new_password: newPassword,
       });
     },
-    async fetchUsers(params?: {
-      page?: number;
-      page_size?: number;
-      keyword?: string;
-      role?: UserRole;
-    }): Promise<void> {
+    async fetchUsers(params?: userApi.UserListParams): Promise<void> {
       this.loading = true;
       try {
         const result = await userApi.getUserList(params);
@@ -85,26 +80,37 @@ export const useUserStore = defineStore('user', {
         this.loading = false;
       }
     },
-    async createUser(params: {
-      username: string;
-      password: string;
-      role: UserRole;
-      scenario_id?: number | null;
-    }): Promise<UserAccount> {
+    async createUser(
+      params: {
+        username: string;
+        password: string;
+        role: UserRole;
+        scenario_id?: number | null;
+      },
+      listParams?: userApi.UserListParams,
+    ): Promise<UserAccount> {
       const created = await userApi.createUser(params);
-      await this.fetchUsers();
+      await this.fetchUsers(listParams);
       return created;
     },
-    async updateUserScenario(userId: string, scenarioId: number): Promise<void> {
+    async updateUserScenario(
+      userId: string,
+      scenarioId: number,
+      listParams?: userApi.UserListParams,
+    ): Promise<void> {
       await userApi.updateUserScenario(userId, scenarioId);
-      await this.fetchUsers();
+      await this.fetchUsers(listParams);
     },
     async resetUserPassword(userId: string, newPassword: string): Promise<void> {
       await userApi.resetPassword(userId, newPassword);
     },
-    async setUserStatus(userId: string, status: 'active' | 'disabled'): Promise<void> {
+    async setUserStatus(
+      userId: string,
+      status: 'active' | 'disabled',
+      listParams?: userApi.UserListParams,
+    ): Promise<void> {
       await userApi.setUserStatus(userId, status);
-      await this.fetchUsers();
+      await this.fetchUsers(listParams);
     },
   },
 });

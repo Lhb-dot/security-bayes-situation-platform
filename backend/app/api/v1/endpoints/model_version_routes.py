@@ -37,7 +37,10 @@ def list_model_versions(
     dataset_id: Optional[int] = Query(None, description="按数据集过滤"),
     status: Optional[str] = Query(
         None,
-        description="按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED",
+        description=(
+            "按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED，"
+            "支持逗号分隔多值"
+        ),
     ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
@@ -148,6 +151,27 @@ def train_model_version_async(
             dataset_id=payload.dataset_id,
             algorithm_id=payload.algorithm_id,
             training_parameters=payload.training_parameters,
+        )
+    )
+
+
+@router.get(
+    "/training-jobs",
+    response_model=ResponseModel,
+    summary="我的在途训练任务（刷新/切页回来能恢复「训练中」的状态）",
+)
+def list_training_jobs(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+    include_finished: bool = Query(
+        False,
+        description="是否把已完成（DRAFT/FAILED）的版本一并返回，供顶栏任务面板判定未读",
+    ),
+):
+    # 必须声明在 /{model_id} 之前：否则 "training-jobs" 会被当成 model_id 做整型校验
+    return unwrap(
+        ModelVersionService(db).list_training_jobs(
+            current_user, include_finished=include_finished
         )
     )
 

@@ -3,19 +3,23 @@
  * InferenceRecords - 推理记录
  *
  * 需求 6.2（P0）：普通用户只能查询本人推理记录；管理员可以查询平台全部推理记录。
- * 需求 6.8.4：管理员查看单个用户数据时，可以按用户ID筛选。
+ * 需求 6.8.4（管理员按用户ID筛选）**未实现**：后端 list_inference_records 没有 user_id 参数，
+ * 本页也没有筛选栏。原先预留的 .records-filters / .filter-item / .filter-select 等 36 行 CSS
+ * 从未被模板引用，已于 2026-09-27 删除。要做时前后端一起加。
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import {
   getInferenceExplain,
   getInferenceRecordPage,
+  removeInferenceRecord,
   streamInferenceExplanation,
 } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
+import { keepScroll } from '@/utils/scrollAnchor';
 
 /** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
 interface InferenceRecordItem {
@@ -60,6 +64,16 @@ const total = ref(0);
 /** 是否管理员（决定描述文案） */
 const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
 
+/**
+ * 是否平台超管 —— 只有超管能删推理记录。
+ *
+ * 用 store 的 `isSuperAdmin`（= role 恰为 SUPER_ADMIN），**不要**复用本文件上面的 `isAdmin`
+ * —— 那个是 `SUPER_ADMIN || SCENARIO_ADMIN`（等于 store 的 `isManagement`，名字有歧义，
+ * 只用于描述文案）。后端删除接口走 `require_admin`，场景管理员会拿到 403，
+ * 所以入口必须窄一级，否则他看到一个必然失败的按钮。
+ */
+const canDelete = computed(() => userStore.isSuperAdmin);
+
 /** 场景数字 ID → 名称 */
 const SCENARIO_META: Record<number, { code: string; name: string }> = {
   1: { code: 'network_security', name: '网络安全' },
@@ -68,16 +82,6 @@ const SCENARIO_META: Record<number, { code: string; name: string }> = {
   4: { code: 'geological_risk', name: '地质风险' },
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
-
-/**
- * 算法显示名统一为「中文名(英文缩写)」（见 alembic 20260822_000006），
- * 例如「双视图示例加权朴素贝叶斯(DIWNB)」。列表列宽有限，只展示括号里的英文缩写，
- * 完整名称通过 title 悬浮查看。格式不含括号时原样返回。
- */
-const algorithmShortName = (name: string | null) => {
-  const matched = /\(([^()]+)\)\s*$/.exec(name ?? '');
-  return matched ? matched[1] : name || '—';
-};
 
 const loadRecords = async (targetPage: number = page.value) => {
   loading.value = true;
@@ -90,6 +94,11 @@ const loadRecords = async (targetPage: number = page.value) => {
     loading.value = false;
   }
 };
+
+const tableWrapRef = ref<HTMLElement | null>(null);
+
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadRecords(target), tableWrapRef.value);
 
 // 查看输入特征
 const featureTarget = ref<InferenceRecordItem | null>(null);
@@ -302,6 +311,39 @@ const goEventDetail = (r: InferenceRecordItem) => {
   router.push({ path: `/events/${r.risk_event_id}` });
 };
 
+/** 正在删除的记录 id（按钮转 loading 用） */
+const deletingId = ref<number | null>(null);
+
+/**
+ * 删除推理记录（仅超管）。
+ *
+ * 已生成风险事件的记录**不展示入口** —— 后端会直接拒绝（风险事件是审计对象，
+ * 记录被删了事件就悬空了）。所以这里不是「点了才知道不行」，而是压根不给点。
+ */
+const handleDelete = async (r: InferenceRecordItem) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除推理记录 #${r.id}？删除后不可恢复。`,
+      '删除推理记录',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  deletingId.value = r.id;
+  try {
+    await removeInferenceRecord(String(r.id));
+    ElMessage.success('推理记录已删除');
+    // 删掉当前页最后一条时往前退一页，否则会停在一个空页上
+    if (records.value.length === 1 && page.value > 1) page.value -= 1;
+    await loadRecords();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '删除失败');
+  } finally {
+    deletingId.value = null;
+  }
+};
+
 onMounted(() => {
   loadRecords();
 });
@@ -314,29 +356,29 @@ onMounted(() => {
         <p class="eyebrow">Inference Records</p>
         <h2>推理记录</h2>
         <p class="records-page__desc">
-          {{ isAdmin ? '平台全部推理记录（可筛选用户）' : '仅显示本人发起的推理记录' }}
+          {{ isAdmin ? '全部用户的模型推理记录' : '本人发起的模型推理记录' }}
         </p>
       </div>
     </div>
 
     <section class="card records-section">
-      <div class="records-table-wrap">
+      <div ref="tableWrapRef" class="records-table-wrap">
+        <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
         <table class="records-table">
-          <!-- 13 列宽度合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
-               表格宽度恒等于容器宽度，因此不会出现横向滚动条；
-               固定内容的列按内容给足，数据集/算法两列吃掉剩余空间，窄窗口优先让它们省略号截断。 -->
+          <!-- 8 列宽度合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
+               表格宽度恒等于容器宽度，因此不会出现横向滚动条。
+
+               2026-09-27 两次瘦身，13 列 → 8 列：
+               ① 删「数据集 / 版本 / 算法」—— 数据集名和算法名都是 30 字符级别的长串，
+                  在这张表里本来就只显示省略号，占着 19.6% 宽度没有信息量。
+               ② 「风险类型 / 等级 / 风险概率」三列合成一列「研判结果」—— 见下方 .verdict 注释。 -->
           <colgroup>
             <col class="col-id" />
             <col class="col-user" />
             <col class="col-scenario" />
-            <col class="col-dataset" />
-            <col class="col-dataset-version" />
-            <col class="col-algorithm" />
             <col class="col-model-version" />
             <col class="col-original-label" />
-            <col class="col-risk-type" />
-            <col class="col-risk-level" />
-            <col class="col-risk-score" />
+            <col class="col-verdict" />
             <col class="col-time" />
             <col class="col-actions" />
           </colgroup>
@@ -345,14 +387,9 @@ onMounted(() => {
               <th>推理记录ID</th>
               <th>发起人</th>
               <th>场景</th>
-              <th>数据集</th>
-              <th>版本</th>
-              <th>算法</th>
               <th>模型版本</th>
               <th>原始标签</th>
-              <th>风险类型</th>
-              <th>等级</th>
-              <th>风险概率</th>
+              <th class="cell-verdict">研判结果</th>
               <th>时间</th>
               <th>操作</th>
             </tr>
@@ -362,33 +399,36 @@ onMounted(() => {
               <td>{{ r.id }}</td>
               <td>{{ r.user_id }}</td>
               <td>{{ scenarioName(r.scenario_id) }}</td>
-              <td :title="r.dataset_name || r.dataset_logical_id || ''">{{ r.dataset_name || r.dataset_logical_id }}</td>
-              <td>{{ r.dataset_version }}</td>
-              <td :title="r.algorithm_name || ''">{{ algorithmShortName(r.algorithm_name) }}</td>
               <td>{{ r.model_version_id }}</td>
               <td>{{ r.original_label }}</td>
-              <td>
-                <span v-if="r.is_risk_event" class="risk-badge">{{ r.risk_type }}</span>
-                <span v-else class="normal-badge">正常</span>
+              <td class="cell-verdict">
+                <div class="verdict">
+                  <template v-if="r.is_risk_event">
+                    <span class="risk-badge">异常</span>
+                    <span class="level-badge" :class="`level-badge--${r.risk_level}`">{{ r.risk_level }}</span>
+                    <span class="verdict-score">{{ ((r.risk_score ?? 0) * 100).toFixed(1) }}%</span>
+                  </template>
+                  <span v-else class="normal-badge">正常</span>
+                </div>
               </td>
-              <td>
-                <span v-if="r.is_risk_event" class="level-badge" :class="`level-badge--${r.risk_level}`">{{ r.risk_level }}</span>
-                <span v-else>—</span>
-              </td>
-              <td>{{ r.is_risk_event ? ((r.risk_score ?? 0) * 100).toFixed(1) + '%' : '—' }}</td>
               <td>{{ r.executed_at }}</td>
               <td>
                 <div class="op-group">
                   <button class="op-btn" @click="openFeatures(r)">输入特征</button>
                   <button class="op-btn" @click="openExplanation(r)">查看解释</button>
                   <button v-if="r.is_risk_event" class="op-btn" @click="goEventDetail(r)">查看事件</button>
+                  <button
+                    v-else-if="canDelete"
+                    class="op-btn op-btn--danger"
+                    :disabled="deletingId === r.id"
+                    @click="handleDelete(r)"
+                  >{{ deletingId === r.id ? '删除中' : '删除' }}</button>
                 </div>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-if="loading" class="records-empty">加载中...</p>
-        <p v-else-if="records.length === 0" class="records-empty">暂无推理记录</p>
+        <p v-if="!loading && records.length === 0" class="records-empty">暂无推理记录</p>
       </div>
       <div v-if="total > 0" class="records-pager">
         <span class="records-pager__total">共 {{ total }} 条</span>
@@ -399,7 +439,7 @@ onMounted(() => {
           :total="total"
           :disabled="loading"
           background
-          @current-change="loadRecords"
+          @current-change="changePage"
         />
       </div>
     </section>
@@ -502,45 +542,13 @@ onMounted(() => {
 .records-page__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .records-page__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
-}
-
-.records-filters {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 18px;
-  flex-wrap: wrap;
-}
-
-.filter-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.filter-item__label {
-  font-size: 0.85rem;
-  color: rgba(220, 234, 255, 0.7);
-}
-
-.filter-select {
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(125, 201, 255, 0.2);
-  background: rgba(8, 17, 31, 0.6);
-  color: #e8f1ff;
-  font-size: 0.88rem;
-  outline: none;
-}
-
-.filter-select option {
-  background: #0b1628;
-  color: #e8f1ff;
 }
 
 .records-section {
@@ -548,6 +556,7 @@ onMounted(() => {
 }
 
 .records-table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   overflow-x: auto;
 }
 
@@ -561,24 +570,31 @@ onMounted(() => {
   font-size: 0.85rem;
 }
 
-/* 列宽：13 列合计 100%（与模板 colgroup 一一对应）。
-   取值按「容器约 1228px 时各列刚好容纳表头与内容」反推 —— 实测（13.6px 字体、24px 左右内边距）
-   各列所需：表头 92/65/52/65/52/52/79/79/79/52/79/52/52，内容最宽
-   算法 EMAWNB=82、时间=148、数据集 KDDTrain_20Percent=144、操作两按钮同行=184。
-   因此在 1366 及以上宽度的窗口里都不会截断；更窄时按比例缩小，由省略号兜底，但不会溢出容器。 */
-.col-id { width: 7.5%; }
-.col-user { width: 5.3%; }
-.col-scenario { width: 6.4%; }
-.col-dataset { width: 12.1%; }
-.col-dataset-version { width: 4.3%; }
-.col-algorithm { width: 6.7%; }
-.col-model-version { width: 6.5%; }
-.col-original-label { width: 6.5%; }
-.col-risk-type { width: 6.5%; }
-.col-risk-level { width: 4.3%; }
-.col-risk-score { width: 6.5%; }
-.col-time { width: 12.1%; }
-.col-actions { width: 15.3%; }
+/* 列宽：8 列合计 100%（与模板 colgroup 一一对应）。
+
+   「研判结果」按**最宽的那一行**定宽，不是按表头：异常行是「异常 + 等级 + 概率」三个元素，
+   实测 `异常` 徽章 42.3px、`MEDIUM` 徽章 66.1px（最长的等级）、概率 `96.0%` 约 38px，
+   加 2 个 6px 间距 = 158.4px，再算单元格左右 padding 24px → **182.4px**。
+   17.4% 在 1440px 下给到 224px、1280px 下 196px、1100px 下 165px，
+   三档都装得下（1100px 是余量最小的，还剩 3.5px）。
+   不要为了「填满」把这一列拉宽 —— 空白留在中间最显眼，宁可匀给「时间」。
+
+   「操作」25% —— 最宽一行是「输入特征 / 查看解释 / 查看事件」三个按钮，
+   每个 = 4 个中文字 × 12.8px（0.8rem）+ 24px padding + 2px border = 77.2px，
+   三个 + 2 个 6px 间距 = 243.6px，加单元格 padding 24px = 267.6px。
+   25% 在 1440px 下给到 322px、1280px 下 282px，都排在同一行。
+
+   其余各列按「表头刚好放下」给。更窄（<1280px）时表头会开始截断、操作列可能折行 ——
+   这是 8 列 + `table-layout: fixed` 的固有代价，`flex-wrap: wrap` 留着兜底，
+   宁可折行也不要把按钮裁掉（td 是 overflow: hidden）。 */
+.col-id { width: 9.4%; }
+.col-user { width: 6.2%; }
+.col-scenario { width: 8.2%; }
+.col-model-version { width: 8.2%; }
+.col-original-label { width: 8.2%; }
+.col-verdict { width: 17.4%; }
+.col-time { width: 17.4%; }
+.col-actions { width: 25%; }
 
 .records-table th {
   text-align: left;
@@ -624,12 +640,74 @@ onMounted(() => {
   background: rgba(91, 166, 255, 0.2);
 }
 
+/* 删除是破坏性动作，单独用红调，别和上面三个查看类按钮长一样 */
+.op-btn--danger {
+  border-color: rgba(255, 123, 114, 0.32);
+  background: rgba(255, 123, 114, 0.1);
+  color: #ff8c84;
+}
+
+.op-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 123, 114, 0.2);
+}
+
+.op-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .op-group {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
 
+/* 「研判结果」= 原来「风险类型 / 等级 / 风险概率」三列合一（2026-09-27）。
+
+   为什么能合：这三列各自都只有「异常行有值 / 正常行是 `—`」两种状态 ——
+   实测 `inference_record` 里 `is_risk_event=false` 的 1720 条，`risk_score` 与 `risk_level`
+   **全为 NULL**（`count(risk_score)` = 0）；`=true` 的 674 条全部有值。所以
+   「正常/异常」⇔「等级列是不是 `—`」⇔「概率列是不是 `—`」，同一个比特说了三遍。
+
+   而「风险类型」那列更彻底：它不由记录算出来，是按数据集查表得来
+   （`risk_event_service.py:300` 的 `DATASET_RISK_TYPES.get(dataset.logical_id)`，
+   取不到映射直接 400），而每个数据集属于唯一场景、同场景内所有数据集映射到同一类型
+   → 与「场景」列 **1:1 重复**，整列删除，不再显示 `POWER_SYSTEM_RISK` 这种裸枚举。
+
+   异常行 = 「异常」红徽章 + 等级徽章 + 概率；正常行 = 单个「正常」绿徽章。
+   `flex-wrap: nowrap`（默认）—— 概率数字被截断比折行好，整格溢出交给 td 的 overflow 兜底。
+
+   整列居中（表头一起）—— 这一列比内容宽不少，左对齐会在右边留一截空白，
+   居中了视觉重心才落在列中间。
+   ⚠️ td 上的 `text-align` **管不到 flex 子项**，只对表头那种纯文本生效，
+   所以内容居中必须另给 `.verdict` 加 `justify-content`。 */
+.records-table th.cell-verdict,
+.records-table td.cell-verdict {
+  text-align: center;
+}
+
+.verdict {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.verdict-score {
+  color: rgba(217, 232, 255, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 徽章不许超出自己的格子，超长枚举要在格内截断成省略号。
+
+   坑：全局 `style.css` 里有一条 `.risk-badge { min-width: 86px }`（告警流在用），
+   它按类名命中了这张表里的徽章，把这里的宽度约束**全部顶掉** —— min-width 优先级高于 width。
+   结果徽章宽度恒为 86px、跟列宽无关：1440px 下溢出格子 16px、1280px 下 26px、820px 下 55px，
+   一路压到右邻列上（就是「两个胶囊挤在一起」的真因）。所以必须显式 `min-width: 0` 解除泄漏。
+
+   `max-width: 100%` 负责「内容装得下就贴合、装不下就截断」—— 它在 table-cell 里是生效的。
+   不要写 `width: 100%`：那会把短徽章（`正常` / `HIGH`）也拉满整格，胶囊就不像胶囊了。 */
 .risk-badge,
 .normal-badge,
 .level-badge {
@@ -637,6 +715,11 @@ onMounted(() => {
   padding: 2px 9px;
   border-radius: 20px;
   font-size: 0.76rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .risk-badge {

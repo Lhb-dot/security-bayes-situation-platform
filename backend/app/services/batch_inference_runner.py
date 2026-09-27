@@ -71,7 +71,10 @@ class BatchJob:
     finished_at: Optional[float] = None
 
     def to_dict(self) -> dict:
-        """对外视图：终态时才带逐条明细，进行中只给计数。"""
+        """对外视图：终态时才带逐条明细，进行中只给计数。
+
+        created_at 是 epoch 秒，前端据此算已用时间（前端自己记的话刷新会归零）。
+        """
         return {
             "job_id": self.id,
             "status": self.status,
@@ -83,6 +86,7 @@ class BatchJob:
             "risk_count": self.risk_count,
             "truncated": self.truncated,
             "error": self.error,
+            "created_at": self.created_at,
             "result": (
                 {
                     "total": self.total,
@@ -96,6 +100,16 @@ class BatchJob:
                 else None
             ),
         }
+
+    def to_brief(self) -> dict:
+        """列表视图：不带逐条明细。
+
+        明细最多 200 条，一份任务就是几十 KB；列表接口只用来恢复「还在跑」的状态，
+        明细仍走单任务接口取。
+        """
+        view = self.to_dict()
+        view.pop("result", None)
+        return view
 
 
 def is_running() -> bool:
@@ -132,6 +146,14 @@ def get_job(job_id: str, user_id: int) -> Optional[dict]:
         if job is None or job.user_id != int(user_id):
             return None
         return job.to_dict()
+
+
+def list_jobs(user_id: int) -> List[dict]:
+    """当前用户的批量研判任务列表，最近的在前（刷新 / 切页回来能恢复在途状态）。"""
+    with _jobs_lock:
+        mine = [job for job in _jobs.values() if job.user_id == int(user_id)]
+        mine.sort(key=lambda job: job.created_at, reverse=True)
+        return [job.to_brief() for job in mine]
 
 
 def _ttl_seconds() -> int:

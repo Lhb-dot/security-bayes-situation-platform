@@ -23,6 +23,7 @@ class EvaluationDb:
         self.model = model
         self.setting = setting
         self.commits = 0
+        self.refreshes = 0
 
     def get(self, model_type, identifier):
         name = getattr(model_type, "__name__", "")
@@ -38,6 +39,11 @@ class EvaluationDb:
 
     def commit(self):
         self.commits += 1
+
+    def refresh(self, instance, with_for_update=False):
+        """真实 Session 在这里对模型版本行加锁；假 DB 只需接受这次调用。"""
+        self.refreshes += 1
+        return instance
 
 
 def make_model(status="PUBLISHED"):

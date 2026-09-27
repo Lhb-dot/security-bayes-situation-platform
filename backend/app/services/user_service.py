@@ -93,6 +93,8 @@ class UserService(ServiceBase):
         page_size: int = 10,
         keyword: Optional[str] = None,
         role: Optional[str] = None,
+        status: Optional[str] = None,
+        scenario_id: Optional[int] = None,
     ):
         """用户列表（管理级角色）。
 
@@ -110,6 +112,13 @@ class UserService(ServiceBase):
             if err:
                 raise ServiceError(400, err)
             filters.append(AppUser.role == role)
+        if status:
+            err = validate_enum(status, USER_STATUSES, "status")
+            if err:
+                raise ServiceError(400, err)
+            filters.append(AppUser.status == status)
+        if scenario_id is not None:
+            filters.append(AppUser.scenario_id == int(scenario_id))
 
         page = max(1, int(page or 1))
         page_size = min(max(1, int(page_size or 10)), 200)

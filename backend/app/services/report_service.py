@@ -178,7 +178,11 @@ class ReportService(ServiceBase):
 
         - 内容由调用方给出；数据范围仅用于场景绑定校验（不指定单个用户）。
         - 场景管理员/用户：scenario_id 强制为本人绑定场景。
-        - 格式 / 定时：format 取值 markdown/html/pdf；定时时 interval_days 必填。
+        - 格式：format 取值 markdown/html/pdf。
+        - **不支持定时**：定时报告要求到期时能按真实数据重新生成，而本接口的 content
+          是外部给的、无法重生成。以前允许传 scheduled=True，结果写了一条
+          next_run_at 为空的记录 —— 出现在「定时报告」列表里显示「下次生成 —」，
+          调度器却永远不认（它要求 next_run_at 非空）。现在直接拒绝，指向 /reports/generate。
         """
         self.require_login(current_user)
         err = validate_enum(report_type, REPORT_TYPES, "report_type")
@@ -190,8 +194,11 @@ class ReportService(ServiceBase):
         err = validate_required({"title": title, "content": content}, ("title", "content"))
         if err:
             raise ServiceError(400, err)
-        if scheduled and (interval_days is None or interval_days < 1):
-            raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
+        if scheduled:
+            raise ServiceError(
+                400,
+                "本接口不支持定时报告；定时报告请用 POST /reports/generate 创建",
+            )
 
         _, scenario_id, _ = self._resolve_generation_scope(current_user, scenario_id, "self")
 
@@ -204,8 +211,8 @@ class ReportService(ServiceBase):
             file_path=file_path,
             scenario_id=scenario_id,
             format=format,
-            scheduled=scheduled,
-            interval_days=interval_days if scheduled else None,
+            scheduled=False,
+            interval_days=None,
             generated_at=datetime.now(timezone.utc),
         )
         self.db.add(report)
@@ -319,17 +326,28 @@ class ReportService(ServiceBase):
     def _gather_events(self, current_user, role, scenario_id, scope):
         """汇总风险事件。
 
-        - SUPER_ADMIN：仅平台数据集派生的风险事件（公司/个人数据集对超管不可见）；
+        - SUPER_ADMIN：**聚合范围**下仅平台数据集派生的事件（公司/个人数据集对超管不可见）；
         - SCENARIO_ADMIN：绑定场景内全部风险事件；
-        - scope=self（个人数据）：额外限定为当前账号本人创建的事件。
+        - scope=self（个人数据）：只按创建者限定为当前账号本人。
+          个人数据 = 自己产生的事件，不叠加数据集可见性 —— 否则超管自己的记录
+          会因为数据集归属被静默筛掉。
         """
+        if role in (ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER) and scenario_id is None:
+            # 场景角色必须有绑定场景。这里返回空，而不是退化成「不加场景过滤」——
+            # 后者一旦账号层允许解绑场景，报告会静默变成全平台可见。
+            return []
+
         stmt = select(RiskEvent)
         if scenario_id is not None:
             stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
-        if role == ROLE_SUPER_ADMIN:
+
+        # 可见性规则：与 scope 无关
+        if role == ROLE_SUPER_ADMIN and scope != "self":
             stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
                 Dataset.visibility == DATASET_VISIBILITY_PLATFORM
             )
+
+        # 数据范围
         if scope == "self":
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())
@@ -338,25 +356,32 @@ class ReportService(ServiceBase):
     def _gather_records(self, current_user, role, scenario_id, scope):
         """汇总推理记录（含所属模型版本）。
 
-        - SUPER_ADMIN：仅平台数据集训练出的模型版本；
+        - SUPER_ADMIN：**聚合范围**下仅平台数据集训练出的模型版本；
         - SCENARIO_ADMIN：绑定场景内全部记录（含未发布模型）；
-        - 场景用户：仅已发布模型；
-        - scope=self（个人数据）：额外限定为当前账号本人的推理记录。
+        - 场景用户：仅已发布模型（可见性规则，不因 scope=self 而放开）；
+        - scope=self（个人数据）：只按创建者限定为当前账号本人。
         """
+        if role in (ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER) and scenario_id is None:
+            return []
+
         stmt = (
             select(InferenceRecord, ModelVersion)
             .join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id)
         )
         if scenario_id is not None:
             stmt = stmt.where(ModelVersion.scenario_id == scenario_id)
-        if role == ROLE_SUPER_ADMIN:
-            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
-                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
-            )
-        elif role == ROLE_SCENARIO_USER:
+
+        # 可见性规则：与 scope 无关，不能因为「只看本人」就放开
+        if role == ROLE_SCENARIO_USER:
             stmt = stmt.where(
                 ModelVersion.status.in_(USER_VISIBLE_MODEL_STATUSES),
             )
+        elif role == ROLE_SUPER_ADMIN and scope != "self":
+            stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
+                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
+
+        # 数据范围
         if scope == "self":
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
@@ -382,6 +407,9 @@ class ReportService(ServiceBase):
                 algorithms[model.algorithm.code] = model.algorithm.display_name
             models[model.id] = model.algorithm.code if model.algorithm else None
 
+        # 阈值只取一次：overview 判级、key_events 判级、data_notes 声明都要用
+        thresholds = risk_view.load_thresholds(self.db, current_user)
+
         report_info = {
             "title": title.strip(),
             "generated_at": beijing_now_str("%Y-%m-%d %H:%M"),
@@ -390,16 +418,17 @@ class ReportService(ServiceBase):
             or getattr(current_user, "username", ""),
             "scenario_name": scenario.name if scenario else None,
             "scenario_code": scenario.code if scenario else None,
-            "data_scope": self._data_scope_label(role, scope),
+            "data_scope": self._data_scope_label(role, scope, scenario_id),
             "datasets": [{"logical_id": k, "version": v} for k, v in datasets.items()],
             "algorithms": [{"code": k, "name": v} for k, v in algorithms.items()],
             "model_versions": [{"id": k, "algorithm_code": v} for k, v in models.items()],
         }
 
-        overview = self._overview(
-            events, records, risk_view.load_thresholds(self.db, current_user)
-        )
+        overview = self._overview(events, records, thresholds)
         model_analysis = self._model_analysis(records)
+        key_events, key_events_total = self._key_events(
+            events, records, thresholds=thresholds
+        )
 
         return {
             "report_info": report_info,
@@ -408,18 +437,24 @@ class ReportService(ServiceBase):
             "model_analysis": model_analysis,
             "feature_analysis": self._feature_analysis(records),
             "trend": self._trend(records),
-            "key_events": self._key_events(
-                events, records, thresholds=risk_view.load_thresholds(self.db, current_user)
+            # key_events 是概率最高的前 N 条；总数单独给，正文/界面据此说明"共 N 起"
+            "key_events": key_events,
+            "key_events_total": key_events_total,
+            "data_notes": self._data_notes(
+                report_info, overview, model_analysis, thresholds, scenario_id
             ),
-            "data_notes": self._data_notes(report_info, overview, model_analysis),
         }
 
     @staticmethod
-    def _data_scope_label(role, scope) -> str:
-        """数据范围的中文口径，供报告正文与详情页展示。"""
+    def _data_scope_label(role, scope, scenario_id=None) -> str:
+        """数据范围的中文口径，供报告正文与详情页展示。
+
+        超管也要看 scenario_id：指定了具体场景，统计范围就是那一个场景，
+        再标「全平台数据」与实际口径不符（实测与场景管理员的同场景报告逐条一致）。
+        """
         if scope == "self":
             return "本人个人数据"
-        if role == ROLE_SUPER_ADMIN:
+        if role == ROLE_SUPER_ADMIN and scenario_id is None:
             return "全平台数据"
         return "本场景全部用户数据"
 
@@ -687,7 +722,12 @@ class ReportService(ServiceBase):
 
     @staticmethod
     def _key_events(events, records, limit=10, thresholds=None):
-        """重点风险事件。等级按报告生成者的阈值重算，不透传落库的创建者视角。"""
+        """重点风险事件 → ``(前 limit 条, 总起数)``。
+
+        等级按报告生成者的阈值重算，不透传落库的创建者视角。
+        **总起数必须一起返回**：只给截断后的列表，正文会把它当成总数
+        （历史问题：666 条风险、604 条高危的报告写着「重点风险事件 10 起」）。
+        """
         thresholds = thresholds or {}
         event_map = {e.inference_record_id: e for e in events}
         key = []
@@ -710,13 +750,21 @@ class ReportService(ServiceBase):
                 }
             )
         key.sort(key=lambda x: (x["probability"] is not None, x["probability"] or 0), reverse=True)
-        return key[:limit]
+        return key[:limit], len(key)
 
     @staticmethod
-    def _data_notes(report_info, overview, model_analysis):
+    def _data_notes(report_info, overview, model_analysis, thresholds=None, scenario_id=None):
         parts = [
             f"数据范围：{report_info.get('data_scope')}；样本（推理记录）{overview.get('total_inferences', 0)} 条。"
         ]
+        # 阈值随账号：同一份数据在不同账号下等级计数不同，必须声明，否则读者会当成客观事实
+        medium, high = risk_view.thresholds_for(thresholds or {}, scenario_id)
+        configured = scenario_id is not None and int(scenario_id) in (thresholds or {})
+        fallback = "" if configured else "（本账号未配置该场景阈值，使用系统默认值）"
+        parts.append(
+            f"风险等级按本报告生成账号的阈值判定：中危 ≥ {medium:g}、高危 ≥ {high:g}{fallback}；"
+            "同一份数据在不同账号的阈值下，等级计数可能不同。"
+        )
         algos = report_info.get("algorithms") or []
         if algos:
             parts.append("涉及算法：" + "、".join(f"{a['name']}({a['code']})" for a in algos) + "。")
@@ -752,7 +800,7 @@ class ReportService(ServiceBase):
             "## 二、态势概况",
             f"- 推理总量：{ov.get('total_inferences', 0)}（风险 {ov.get('risk_count', 0)} / 正常 {ov.get('normal_count', 0)}）",
             f"- 风险等级：高危 {ov.get('high_count', 0)} / 中危 {ov.get('medium_count', 0)} / 低危 {ov.get('low_count', 0)}",
-            f"- 平均风险概率：{(ov.get('avg_risk_prob') or 0):.3f}",
+            f"- 风险样本平均概率：{(ov.get('avg_risk_prob') or 0):.3f}",
             f"- 风险变化方向：{ov.get('risk_trend')}",
             "",
             "## 三、最终预测结果与概率",
@@ -791,9 +839,19 @@ class ReportService(ServiceBase):
                 f"- {t['date']}：推理 {t['inference_count']}，风险 {t['risk_count']}，"
                 f"风险占比 {(t['risk_ratio'] * 100):.0f}%"
             )
-        if report_data.get("key_events"):
-            lines.append("重点风险事件：")
-            for e in report_data["key_events"]:
+        shown_events = report_data.get("key_events") or []
+        if shown_events:
+            total = report_data.get("key_events_total")
+            if total is None:
+                # 修复前生成的报告没有总起数：宁可不写数量，也不要拿截断后的长度冒充
+                lines.append("重点风险事件：")
+            elif total > len(shown_events):
+                lines.append(
+                    f"重点风险事件（共 {total} 起，下列为概率最高的 {len(shown_events)} 起）："
+                )
+            else:
+                lines.append(f"重点风险事件（共 {total} 起）：")
+            for e in shown_events:
                 lines.append(f"- [{e['risk_level']}] {e['time']} · 概率 {e['probability']} · {e['status']}")
 
         lines += [
@@ -867,18 +925,21 @@ class ReportService(ServiceBase):
         return ok(data=self._serialize(report, include_report_data=True))
 
     def _export_inputs(self, current_user, report_id: int, fmt: Optional[str]):
-        """导出前的权限与格式校验，返回 (report_id, title, content, target_format)。"""
+        """导出前的权限与格式校验，返回 (report, target_format)。
+
+        返回整条 report 而不是拆散的字段：导出 html/pdf 时还要用 report_data 补图表。
+        """
         report = self._load_visible(current_user, report_id)
         target = (fmt or report.format or "markdown").lower()
         err = validate_enum(target, REPORT_FORMATS, "format")
         if err:
             raise ServiceError(400, err)
-        return report.id, report.title, report.content or "", target
+        return report, target
 
     def load_export_source(self, report_id: int):
-        """取导出所需的标题与正文（后台导出任务用；权限已在提交时校验）。"""
+        """取导出所需的标题、正文与结构化数据（后台导出任务用；权限已在提交时校验）。"""
         report = self._get(report_id)
-        return report.title, report.content or ""
+        return report.title, report.content or "", report.report_data
 
     @service_call
     def export(self, current_user, report_id: int, fmt: Optional[str] = None):
@@ -887,11 +948,13 @@ class ReportService(ServiceBase):
         不传 fmt 时按报告自身的格式导出；传了则以传入值为准 —— 同一条报告
         可以随时换个格式下载，不必重建。
         """
-        rid, title, content, target = self._export_inputs(current_user, report_id, fmt)
+        report, target = self._export_inputs(current_user, report_id, fmt)
         try:
-            exported = build_export(title, content, rid, target)
+            exported = build_export(
+                report.title, report.content or "", report.id, target, report.report_data
+            )
         except Exception:
-            logger.exception("报告导出失败: report_id=%s format=%s", rid, target)
+            logger.exception("报告导出失败: report_id=%s format=%s", report.id, target)
             raise ServiceError(500, f"报告导出失败（{target}）")
         return ok(
             data={
@@ -915,7 +978,8 @@ class ReportService(ServiceBase):
             is_running,
         )
 
-        rid, title, content, target = self._export_inputs(current_user, report_id, fmt)
+        report, target = self._export_inputs(current_user, report_id, fmt)
+        rid, title, content = report.id, report.title, report.content or ""
 
         if target == "pdf":
             if not is_running():
@@ -926,7 +990,9 @@ class ReportService(ServiceBase):
             message = "导出任务已提交"
         else:
             try:
-                exported = build_export(title, content, rid, target)
+                exported = build_export(
+                    title, content, rid, target, getattr(report, "report_data", None)
+                )
             except Exception:
                 logger.exception("报告导出失败: report_id=%s format=%s", rid, target)
                 raise ServiceError(500, f"报告导出失败（{target}）")

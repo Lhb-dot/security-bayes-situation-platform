@@ -13,7 +13,16 @@ import { setUnauthorizedHandler } from '@/utils/request';
 // 但 ElMessage / ElMessageBox / ElNotification 在若干文件里是**显式 import** 的服务式调用，
 // 不会被 AutoImport 接管，样式也不会被自动注入 —— 必须在此显式引入，
 // 否则消息提示、确认弹窗与后台任务完成通知会变成无样式裸文本。
+//
+// el-overlay.css 必须单独引：`.el-overlay{position:fixed;inset:0}` 只在这个文件里，
+// el-message-box.css / base.css 都不含它。它平时被 el-dialog 的样式间接带进来，
+// 于是只在「本页用了 el-dialog」的页面（推理记录、报告中心）才生效 ——
+// 像 /alerts、/inference、/overview 这些没有 el-dialog 的页面，overlay 是 position:static，
+// 弹窗会被排到正文之后（实测 y≈1433，视口才 1000），而 EP 同时给 body 加了
+// `.el-popup-parent--hidden{overflow:hidden}` → 页面滚不动、弹窗在屏幕外，
+// 表现就是「点了确认没反应、页面像卡住」（2026-09-27 排查「隐藏点了没反应」时定位）。
 import 'element-plus/theme-chalk/base.css';
+import 'element-plus/theme-chalk/el-overlay.css';
 import 'element-plus/theme-chalk/el-message.css';
 import 'element-plus/theme-chalk/el-message-box.css';
 import 'element-plus/theme-chalk/el-notification.css';

@@ -45,7 +45,8 @@ const levelLabel: Record<string, string> = {
   white-space: nowrap;
 }
 
-/* 尺寸变体 */
+/* 尺寸变体（height 显式钉住，避免字号 × 行高算出 33.28px 这类非整数值，
+   与同排的 32px 按钮对不齐） */
 .risk-level-small {
   min-width: 44px;
   padding: 2px 8px;
@@ -54,8 +55,9 @@ const levelLabel: Record<string, string> = {
 
 .risk-level-large {
   min-width: 80px;
-  padding: 8px 16px;
-  font-size: 0.9rem;
+  height: 32px;
+  padding: 0 16px;
+  font-size: 0.85rem;
 }
 
 /* 风险等级颜色（与全局 style.css 中的 .risk-badge 保持一致） */

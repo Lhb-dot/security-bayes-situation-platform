@@ -346,7 +346,7 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Dataset Center</p>
         <h2>数据集中心</h2>
-        <p class="dataset-center__desc">全平台数据集统一管理，支持按业务场景筛选</p>
+        <p class="dataset-center__desc">管理各场景数据集及其样本数据</p>
       </div>
       <button v-if="canUpload" class="upload-btn" @click="openUploadDialog">+ 上传数据集</button>
     </div>

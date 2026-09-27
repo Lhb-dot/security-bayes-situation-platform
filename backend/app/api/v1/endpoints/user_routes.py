@@ -40,6 +40,11 @@ def list_users(
         None,
         description="按角色筛选：SUPER_ADMIN / SCENARIO_ADMIN / SCENARIO_USER",
     ),
+    status: Optional[str] = Query(
+        None,
+        description="按启用状态筛选：ENABLED / DISABLED",
+    ),
+    scenario_id: Optional[int] = Query(None, description="按绑定场景筛选"),
 ):
     return unwrap(
         UserService(db).get_list(
@@ -48,6 +53,8 @@ def list_users(
             page_size=page_size,
             keyword=keyword,
             role=role,
+            status=status,
+            scenario_id=scenario_id,
         )
     )
 

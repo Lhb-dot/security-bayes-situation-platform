@@ -41,7 +41,12 @@ class AppUser(Base):
     ai_setting: Mapped["UserAISetting | None"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    risk_events: Mapped[list["RiskEvent"]] = relationship(back_populates="creator")
+    # foreign_keys 必须显式指定：risk_event 表有两条指向 app_user 的外键
+    # （created_by_user_id 与 hidden_by_user_id，后者见 2026-09-27 的隐藏功能），
+    # 不写 SQLAlchemy 推断不出该走哪条，mapper 初始化会直接抛 InvalidRequestError。
+    risk_events: Mapped[list["RiskEvent"]] = relationship(
+        back_populates="creator", foreign_keys="RiskEvent.created_by_user_id"
+    )
     handling_records: Mapped[list["HandlingRecord"]] = relationship(back_populates="handler")
     reports_generated: Mapped[list["Report"]] = relationship(
         back_populates="generator", foreign_keys="Report.generated_by"

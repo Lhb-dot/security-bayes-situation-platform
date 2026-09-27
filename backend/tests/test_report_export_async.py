@@ -195,7 +195,7 @@ class ExportJobStoreTests(unittest.TestCase):
             content=PDF_BYTES, filename="测试报告.pdf", media_type="application/pdf"
         )
         with patch("app.db.SessionLocal", return_value=db), patch.object(
-            ReportService, "load_export_source", return_value=("测试报告", "# 正文")
+            ReportService, "load_export_source", return_value=("测试报告", "# 正文", None)
         ), patch("app.services.report_export.build_export", return_value=exported):
             export_job_service._execute(job_id)
 
@@ -382,6 +382,143 @@ class BuildExportContractTests(unittest.TestCase):
             "attachment; filename=\"report_7.pdf\"; "
             "filename*=UTF-8''%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A.pdf",
         )
+
+
+class ChartExportTests(unittest.TestCase):
+    """导出文件里要带上界面上那些图（report_data → SVG）。"""
+
+    #: 模板 CSS 里也有 `.chart-block`，所以断言只认带 class= 的那个
+    MARKER = 'class="chart-block"'
+
+    CONTENT = "\n".join(
+        [
+            "# 月度态势报告",
+            "## 三、最终预测结果与概率",
+            "- 预测标签分布：风险 7 条、正常 3 条",
+            "## 四、不同视图预测结果与概率",
+            "- PMWNB（模型 12）：",
+            "## 五、特征加权条件概率（Top 10）",
+            "- 无特征解释数据",
+        ]
+    )
+
+    @staticmethod
+    def report_data():
+        return {
+            "report_info": {"title": "月度态势报告", "generated_by": "admin"},
+            "prediction": {
+                "label_distribution": [
+                    {"label": "风险", "count": 7},
+                    {"label": "正常", "count": 3},
+                ],
+                "class_probability": [
+                    {"class": "风险", "probability": 0.72},
+                    {"class": "正常", "probability": 0.28},
+                ],
+                "risk_prob_buckets": [
+                    {"range": "0-0.2", "count": 0},
+                    {"range": "0.6-0.8", "count": 3},
+                ],
+                "low_confidence_count": 2,
+            },
+            "model_analysis": [
+                {
+                    "model_version_id": 12,
+                    "algorithm_name": "PMWNB",
+                    "algorithm_code": "PMWNB",
+                    "has_views": True,
+                    "views": [
+                        {
+                            "name": "流量视图",
+                            "distribution": [
+                                {"class": "风险", "probability": 0.8},
+                                {"class": "正常", "probability": 0.2},
+                            ],
+                        },
+                        {
+                            "name": "载荷视图",
+                            "distribution": [
+                                {"class": "风险", "probability": 0.6},
+                                {"class": "正常", "probability": 0.4},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def html(self, report_data):
+        exported = build_export("月度态势报告", self.CONTENT, 7, "html", report_data)
+        return exported.content.decode("utf-8")
+
+    def test_html_embeds_charts_inside_the_right_sections(self):
+        html = self.html(self.report_data())
+
+        self.assertIn(self.MARKER, html)
+        self.assertEqual(html.count("<svg"), html.count("</svg>"))
+        self.assertGreater(html.count("<svg"), 1)
+        # 三节的图插在「四、」之前，四节的图插在「五、」之前
+        self.assertLess(html.index(self.MARKER), html.index("<h2>四、"))
+        self.assertLess(html.index("<h2>四、"), html.rindex(self.MARKER))
+        self.assertLess(html.rindex(self.MARKER), html.index("<h2>五、"))
+
+    def test_html_without_report_data_stays_text_only(self):
+        html = self.html(None)
+
+        self.assertNotIn(self.MARKER, html)
+        self.assertNotIn("<svg", html)
+
+    def test_legacy_report_data_without_report_info_is_ignored(self):
+        html = self.html({"prediction": {"label_distribution": [{"label": "风险", "count": 1}]}})
+
+        self.assertNotIn("<svg", html)
+
+    def test_markdown_export_never_carries_charts(self):
+        exported = build_export("月度态势报告", self.CONTENT, 7, "markdown", self.report_data())
+
+        self.assertEqual(exported.content.decode("utf-8"), self.CONTENT)
+
+    def test_pdf_renders_the_same_html_with_charts(self):
+        with patch(
+            "app.services.report_export.html_to_pdf", return_value=PDF_BYTES
+        ) as render:
+            build_export("月度态势报告", self.CONTENT, 7, "pdf", self.report_data())
+
+        self.assertIn(self.MARKER, render.call_args.args[0])
+
+    def test_chart_labels_are_xml_escaped(self):
+        data = self.report_data()
+        data["prediction"]["label_distribution"] = [
+            {"label": "<script>x</script>", "count": 4}
+        ]
+        html = self.html(data)
+
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_all_zero_data_skips_the_charts(self):
+        data = self.report_data()
+        data["prediction"]["label_distribution"] = [{"label": "风险", "count": 0}]
+        data["prediction"]["class_probability"] = [{"class": "风险", "probability": 0}]
+        data["prediction"]["risk_prob_buckets"] = [{"range": "0-0.2", "count": 0}]
+        data["model_analysis"] = []
+
+        self.assertNotIn("<svg", self.html(data))
+
+    def test_single_view_model_has_no_grouped_chart(self):
+        data = self.report_data()
+        data["model_analysis"][0]["views"] = data["model_analysis"][0]["views"][:1]
+        html = self.html(data)
+
+        self.assertNotIn("多视图概率对比", html)
+
+    def test_chart_anchor_falls_back_to_document_end(self):
+        """正文结构变了也不能把图整块丢掉。"""
+        exported = build_export("月度态势报告", "# 只有标题", 7, "html", self.report_data())
+        html = exported.content.decode("utf-8")
+
+        self.assertIn(self.MARKER, html)
+        self.assertLess(html.index("</h1>"), html.index(self.MARKER))
 
 
 class RouteWiringTests(unittest.TestCase):

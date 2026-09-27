@@ -61,6 +61,11 @@ from app.utils.common import (
 )
 logger = get_logger("model_version")
 
+# list_training_jobs(include_finished=True) 最多回多少个已完成的版本。
+# 顶栏任务面板只需要「最近完成且没看过的」，取最近 20 个足够，也避免把几十个
+# 模型的完整 evaluation_metrics 一次性拉下来。
+TRAINING_FINISHED_LIMIT = 20
+
 
 class ModelVersionService(ServiceBase):
     """模型版本管理：训练启动/完成/失败、发布、下线、默认推荐、查询。"""
@@ -386,6 +391,39 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(503, "训练执行器未启用，无法提交后台训练")
         return ok(data=created.data, message="训练已提交，模型版本进入 TRAINING")
 
+    @service_call
+    def list_training_jobs(self, current_user, include_finished: bool = False):
+        """当前用户「还在训练中」的模型版本（刷新 / 切页回来能恢复在途状态）。
+
+        训练没有独立任务表：在途状态本身就落在 model_version.status 上，所以
+        「在途任务」= 本人创建且仍为 TRAINING 的版本。这比进程内任务表更结实 ——
+        服务重启后照样查得到，超时未完成的由 training_runner.reap_stale 兜底。
+
+        include_finished=True 时把 DRAFT / FAILED 也一并返回，供顶栏任务面板判定
+        「已完成但没看过」。**model_version 没有完成时间字段**（只有 trained_at，
+        那是提交时刻），所以前端按 id 集合差判定 —— id 自增，没见过的就是没看过，
+        不需要任何时间戳。条数上限 TRAINING_FINISHED_LIMIT，避免把几十个模型的
+        完整指标都拉下来。
+        """
+        self.require_login(current_user)
+        statuses = (
+            (MODEL_STATUS_TRAINING, MODEL_STATUS_DRAFT, MODEL_STATUS_FAILED)
+            if include_finished
+            else (MODEL_STATUS_TRAINING,)
+        )
+        statement = (
+            select(ModelVersion)
+            .where(
+                ModelVersion.trained_by == current_user.id,
+                ModelVersion.status.in_(statuses),
+            )
+            .order_by(ModelVersion.trained_at.desc())
+        )
+        if include_finished:
+            statement = statement.limit(TRAINING_FINISHED_LIMIT)
+        models = self.db.scalars(statement).all()
+        return ok(data=[self._to_dict(model, current_user) for model in models])
+
     def apply_training_success(self, model: ModelVersion, metrics: dict) -> None:
         """训练成功落库：TRAINING → DRAFT，写评估指标与模型属性。"""
         self._transition(model, MODEL_STATUS_DRAFT)
@@ -581,15 +619,19 @@ class ModelVersionService(ServiceBase):
         - 最外层管理员：仅自己训练的模型，可按状态过滤。
         - 场景管理员：自己场景内全部模型版本（管理视角）。
         - 场景用户：仅已发布模型（需求 6.7.3.4 / 6.7.5.1）。
+
+        status 支持逗号分隔的多值（如 "TRAINING,FAILED,DRAFT"），供前端「未发布」
+        这类跨状态筛选用；仅管理员生效。
         """
         self.require_login(current_user)
+        statuses = [s.strip() for s in (status or "").split(",") if s.strip()]
         role = getattr(current_user, "role", None)
         stmt = select(ModelVersion)
         if role == ROLE_SUPER_ADMIN:
             # 系统管理员不能看到场景管理员训练的模型，避免跨管理员泄露模型资产。
             stmt = stmt.where(ModelVersion.trained_by == current_user.id)
-            if status:
-                stmt = stmt.where(ModelVersion.status == status)
+            if statuses:
+                stmt = stmt.where(ModelVersion.status.in_(statuses))
         elif role == ROLE_SCENARIO_ADMIN:
             # 普通管理员可以管理本场景模型，但不展示系统管理员尚未发布的模型。
             # 系统管理员已发布的模型仍可作为本场景可用模型展示。
@@ -605,8 +647,8 @@ class ModelVersionService(ServiceBase):
                     ),
                 )
             )
-            if status:
-                stmt = stmt.where(ModelVersion.status == status)
+            if statuses:
+                stmt = stmt.where(ModelVersion.status.in_(statuses))
         else:
             # 场景用户：仅看到绑定场景中可用的已发布模型；个人模型仅限本人。
             stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(

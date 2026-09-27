@@ -22,6 +22,7 @@ from openai import OpenAI
 from app.data.scenario_feature_catalog import expand_scenario_feature_catalog
 from app.models.user_ai_setting import UserAISetting
 from app.services.base import ServiceError, ServiceBase, service_call
+from app.services.constants import EVALUATION_AUDIENCE_MANAGEMENT, evaluation_audience
 from app.schemas.explanation_contract import (
     EXPLANATION_CONTRACT_VERSION,
     availability,
@@ -60,6 +61,24 @@ AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 
 # 任何人为上限都可能把正文挤掉：实测 1200 时正文为空、676 字时被截断在句子中间。
 # 个别网关强制要求该字段时，用 AI_EXPLANATION_MAX_TOKENS 显式给一个正值。
 AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 0, 0)
+
+#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+EXPLANATION_PROMPT_VERSION = "1.0"
+
+_EXPLANATION_SYSTEM_BASE = (
+    "你是模型结果表达助手。只能使用用户消息中的事实数据和场景配置，输出 Markdown。"
+    "不得重新计算或改变 prediction、risk_probability、risk_threshold、confidence。"
+    "所有数字必须直接来自输入；不得编造字段、因果关系或处置措施。信息不足时明确写出。"
+    "固定输出：### 研判结论、### 主要依据、### 场景分析、### 风险规避建议、### 注意事项。"
+    "风险规避建议只能引用 recommended_actions；统计关联不得写成确定因果。"
+)
+
+#: 普通用户版追加约束。事实本身已按受众裁剪（algorithm_details / model_quality
+#: 不会下发），这里再约束措辞，避免模型用「模型内部权重显示」这类表述凭空指代。
+_EXPLANATION_SYSTEM_USER_SUFFIX = (
+    "面向场景普通用户：不得提及算法内部实现细节（视图权重、子模型明细、"
+    "特征加权条件概率、交叉验证指标），不得引用原始输入快照。"
+)
 
 
 class AIOutputTruncated(RuntimeError):
@@ -560,14 +579,12 @@ def _classify_ai_error(exc: Exception) -> tuple[str, str]:
     return "provider_error", "AI 服务暂时不可用"
 
 
-def build_prompt(explanation: dict[str, Any]) -> list[dict[str, str]]:
-    system = (
-        "你是模型结果表达助手。只能使用用户消息中的事实数据和场景配置，输出 Markdown。"
-        "不得重新计算或改变 prediction、risk_probability、risk_threshold、confidence。"
-        "所有数字必须直接来自输入；不得编造字段、因果关系或处置措施。信息不足时明确写出。"
-        "固定输出：### 研判结论、### 主要依据、### 场景分析、### 风险规避建议、### 注意事项。"
-        "风险规避建议只能引用 recommended_actions；统计关联不得写成确定因果。"
-    )
+def build_prompt(
+    explanation: dict[str, Any], audience: str = EVALUATION_AUDIENCE_MANAGEMENT
+) -> list[dict[str, str]]:
+    system = _EXPLANATION_SYSTEM_BASE
+    if audience != EVALUATION_AUDIENCE_MANAGEMENT:
+        system += _EXPLANATION_SYSTEM_USER_SUFFIX
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(explanation, ensure_ascii=False, sort_keys=True)},
@@ -587,6 +604,8 @@ def build_explanation_facts(explanation: dict[str, Any]) -> dict[str, Any]:
 
 def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
     facts = build_explanation_facts(explanation)
+    # 受众从调用者角色推导，不接收前端入参 —— 否则普通用户可以要一份管理员版正文。
+    audience = evaluation_audience(getattr(current_user, "role", None))
     setting = db.get(UserAISetting, current_user.id)
     yield "start", {"status": "开始分析"}
     if setting is None or not setting.enabled:
@@ -602,7 +621,7 @@ def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterabl
             setting.model,
         )
         emitted = False
-        for kind, text in _openai_stream(setting, build_prompt(facts)):
+        for kind, text in _openai_stream(setting, build_prompt(facts, audience)):
             if kind == "reasoning":
                 # 思维链只透传给前端做「正在生成」的反馈，不进 markdown_parts、不落库。
                 yield "reasoning", {"content": text}

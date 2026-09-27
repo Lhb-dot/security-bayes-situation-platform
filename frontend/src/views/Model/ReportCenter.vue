@@ -8,9 +8,10 @@
  *          到期由服务端调度器原地重新生成，前端不做调度。
  *
  * 生成与导出都是服务端后台任务：提交后立刻返回，页面不等结果（详见 reportJobStore）。
- * 在途任务显示在标题下方的任务条上，完成 / 失败由 store 弹通知。
+ * 在途 / 已完成任务统一显示在顶栏铃铛里（App.vue 的 runningTasks / finishedTasks），
+ * 页面内不放任务条；完成 / 失败另由 store 弹通知。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
 import BarChart from '@/components/charts/BarChart.vue';
 import PieChart from '@/components/charts/PieChart.vue';
@@ -25,6 +26,7 @@ import {
   submitReportExport,
   submitReportGenerateJob,
 } from '@/api/reportApi';
+import { keepScroll } from '@/utils/scrollAnchor';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 const reports = ref<Report[]>([]);
@@ -56,12 +58,61 @@ const loadReports = async (targetPage: number = page.value) => {
     error.value = err instanceof Error ? err.message : '报告数据加载失败';
   } finally {
     loading.value = false;
+    await nextTick();
+    measureTitleColWidth();
   }
 };
 
 const goPage = (target: number) => {
   if (target < 1 || target > totalPages.value || target === page.value) return;
-  loadReports(target);
+  void changePage(target);
+};
+
+// ===================== 报告名称列宽 =====================
+// 标题长短差得远（"123" 到 "flightdeck_operation 场景态势聚合报告"），
+// 定宽会让短标题那几行空出半屏。改成按当前页最长标题量出的宽度，
+// 富余的宽度由后面几列分掉，表格仍然是满宽。
+const TITLE_COL_MIN = 200;
+const TITLE_COL_MAX = 460;
+/** .el-table .cell 左右内边距各 12px，再加 8px 余量 */
+const TITLE_CELL_PADDING = 32;
+/** 另外几列的基准宽度：场景 / 格式 / 创建时间 / 状态（弹性下限）与操作（定宽） */
+const OTHER_COLS_MIN = 120 + 120 + 160 + 100 + 340;
+
+const titleColWidth = ref(220);
+const tableWrapRef = ref<HTMLElement | null>(null);
+const titleProbeRef = ref<HTMLElement | null>(null);
+const intervalProbeRef = ref<HTMLElement | null>(null);
+
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadReports(target), tableWrapRef.value);
+
+/** 用隐藏探针量文字宽度 —— 探针挂的就是单元格里的那两个 class，字体不用另抄一份 */
+const measureTitleColWidth = () => {
+  const probe = titleProbeRef.value;
+  if (!probe) return;
+  let widest = 0;
+  for (const report of reports.value) {
+    probe.textContent = report.title ?? '';
+    let width = probe.getBoundingClientRect().width;
+    if (report.scheduled) {
+      // 闹钟标志 14px，左右各 6px 间距；后面跟周期数字时再加它自己的宽度
+      width += 14 + 12;
+      const intervalProbe = intervalProbeRef.value;
+      if (intervalProbe && report.interval_days) {
+        intervalProbe.textContent = String(report.interval_days);
+        width += intervalProbe.getBoundingClientRect().width;
+      }
+    }
+    widest = Math.max(widest, width);
+  }
+  probe.textContent = '';
+  if (intervalProbeRef.value) intervalProbeRef.value.textContent = '';
+  // 窗口放不下时收窄名称列（长标题换行），别把表格撑出横向滚动条
+  const wrap = tableWrapRef.value;
+  const roomForTitle = wrap ? wrap.clientWidth - OTHER_COLS_MIN : TITLE_COL_MAX;
+  const upper = Math.max(TITLE_COL_MIN, Math.min(TITLE_COL_MAX, roomForTitle));
+  titleColWidth.value = Math.min(upper, Math.max(TITLE_COL_MIN, Math.ceil(widest) + TITLE_CELL_PADDING));
 };
 
 /** 本账号配置的定时报告（「定时报告」弹窗用，跟随账号，只看本人生成的） */
@@ -94,7 +145,7 @@ const handleView = async (report: Report) => {
 
 // ===== 操作中的 UI 状态 =====
 // 提交本身是毫秒级的，这几个状态只覆盖「POST 在途」这一小段，防止连点重复提交；
-// 真正的等待由后台任务承担，进度看标题下方那条任务条。
+// 真正的等待由后台任务承担，进度在顶栏铃铛里看。
 const submittingGenerate = ref(false);                // 生成弹窗提交中
 const exportSubmittingId = ref<string | null>(null);  // 正在提交导出的报告
 const regeneratingId = ref<string | null>(null);      // 正在提交重新生成的报告
@@ -281,7 +332,7 @@ const overviewMetrics = computed(() => {
     { label: '中危', value: String(o.medium_count), tone: 'medium' },
     { label: '低危', value: String(o.low_count), tone: 'low' },
     { label: '待处置/已处置', value: `${o.pending_count}/${o.resolved_count}` },
-    { label: '平均风险概率', value: o.avg_risk_prob == null ? '—' : o.avg_risk_prob.toFixed(3) },
+    { label: '风险样本平均概率', value: o.avg_risk_prob == null ? '—' : o.avg_risk_prob.toFixed(3) },
     { label: '风险变化方向', value: o.risk_trend },
   ];
 });
@@ -342,10 +393,35 @@ const trendRows = computed(() => viewReportData.value?.trend ?? []);
 /** 重点风险事件 */
 const keyEvents = computed(() => viewReportData.value?.key_events ?? []);
 
+/** 总起数：key_events 只是概率最高的前 N 条，不能拿它的长度当总数 */
+const keyEventsLabel = computed(() => {
+  const total = viewReportData.value?.key_events_total;
+  // 修复前生成的报告没有总起数：宁可不写数量，也不要拿截断后的长度冒充
+  if (typeof total !== 'number') return '重点风险事件';
+  const shown = keyEvents.value.length;
+  return total > shown
+    ? `重点风险事件（共 ${total} 起，下列为概率最高的 ${shown} 起）`
+    : `重点风险事件（共 ${total} 起）`;
+});
+
 onMounted(async () => {
   if (!userStore.initialized) await userStore.bootstrap();
   await scenarioStore.fetchScenarioList();
   await loadReports();
+});
+
+// 容器宽度变了就重算（窗口缩放、侧栏收起都算）；只认容器自身的尺寸，
+// 不然会漏掉那些不触发 window resize 的布局变化
+let wrapObserver: ResizeObserver | null = null;
+watch(tableWrapRef, (el) => {
+  wrapObserver?.disconnect();
+  if (!el) return;
+  wrapObserver = new ResizeObserver(() => measureTitleColWidth());
+  wrapObserver.observe(el);
+});
+
+onBeforeUnmount(() => {
+  wrapObserver?.disconnect();
 });
 
 // 后台任务完成 → 重新拉列表（生成与重新生成都会新增一条报告记录）
@@ -363,6 +439,7 @@ watch(
       <div>
         <p class="eyebrow">Report Center</p>
         <h2>报告中心</h2>
+        <p class="report-center__desc">报告生成、导出与定时任务管理</p>
       </div>
       <div class="report-center__actions">
         <button class="gen-btn" @click="openGenerate()">+ 生成报告</button>
@@ -370,19 +447,9 @@ watch(
       </div>
     </div>
 
-    <!-- 后台任务条：提交后弹窗就关了，进度在这里持续可见（完成时另外弹通知） -->
-    <section v-if="jobStore.runningJobs.length" class="job-strip">
-      <div v-for="job in jobStore.runningJobs" :key="job.jobId" class="job-strip__item">
-        <span class="job-strip__spinner"></span>
-        <span class="job-strip__label">
-          {{ job.kind === 'generate' ? '生成' : '导出' }}《{{ job.title }}》
-        </span>
-        <span class="job-strip__time">{{ job.elapsed }} 秒</span>
-      </div>
-    </section>
-
-    <!-- 加载状态 -->
-    <section v-if="loading" class="state-card">
+    <!-- 加载状态：只有首屏（列表还是空的）才用整块状态卡。
+         翻页时保留列表、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <section v-if="loading && !reports.length" class="state-card">
       <div class="loader"></div>
       <p>正在加载报告数据...</p>
     </section>
@@ -394,7 +461,11 @@ watch(
     </section>
 
     <!-- 报告列表 -->
-    <div v-else class="report-center__table-wrap">
+    <div v-else ref="tableWrapRef" class="report-center__table-wrap">
+      <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
+      <!-- 列宽探针：只为量最长标题的宽度存在，绝对定位、不可见 -->
+      <span ref="titleProbeRef" class="report-table__title report-table__probe" aria-hidden="true"></span>
+      <span ref="intervalProbeRef" class="report-table__interval report-table__probe" aria-hidden="true"></span>
       <el-table
         :data="reports"
         stripe
@@ -402,7 +473,7 @@ watch(
         empty-text="暂无报告"
         row-class-name="report-table-row"
       >
-        <el-table-column prop="title" label="报告名称" min-width="220">
+        <el-table-column prop="title" label="报告名称" :width="titleColWidth">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__title-cell">
               <span class="report-table__title">{{ row.title }}</span>
@@ -431,13 +502,13 @@ watch(
           </template>
         </el-table-column>
 
-        <el-table-column label="所属场景" width="120" align="center">
+        <el-table-column label="所属场景" min-width="120" align="center">
           <template #default="{ row }: { row: Report }">
             <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="格式" width="120" align="center">
+        <el-table-column label="格式" min-width="120" align="center">
           <template #default="{ row }: { row: Report }">
             <span
               class="report-table__format-badge"
@@ -448,9 +519,9 @@ watch(
           </template>
         </el-table-column>
 
-        <el-table-column prop="created_at" label="创建时间" width="160" align="center" />
+        <el-table-column prop="created_at" label="创建时间" min-width="160" align="center" />
 
-        <el-table-column label="状态" width="100" align="center">
+        <el-table-column label="状态" min-width="100" align="center">
           <template #default="{ row }: { row: Report }">
             <span
               class="report-table__status"
@@ -492,8 +563,8 @@ watch(
       </el-table>
     </div>
 
-    <!-- 页码条：每页 10 条 -->
-    <div v-if="!loading && !error && total > 0" class="report-pager">
+    <!-- 页码条：每页 10 条。翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
+    <div v-if="!error && total > 0" class="report-pager">
       <span class="report-pager__info">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
       <div class="report-pager__ctrl">
         <button
@@ -509,7 +580,7 @@ watch(
           :total="total"
           :disabled="loading"
           background
-          @current-change="loadReports"
+          @current-change="changePage"
         />
         <button
           class="report-pager__edge"
@@ -567,7 +638,7 @@ watch(
           <label class="gen-field__label">定时生成</label>
           <div class="gen-schedule">
             <el-switch v-model="genForm.scheduled" />
-            <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭（手动生成）' }}</span>
+            <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭' }}</span>
           </div>
         </div>
         <div v-if="genForm.scheduled" class="gen-field">
@@ -774,7 +845,7 @@ watch(
             </tbody>
           </table>
           <template v-if="keyEvents.length">
-            <p class="report-section__hint report-section__hint--mt">重点风险事件</p>
+            <p class="report-section__hint report-section__hint--mt">{{ keyEventsLabel }}</p>
             <table class="mini-table">
               <thead><tr><th>时间</th><th>等级</th><th>概率</th><th>状态</th></tr></thead>
               <tbody>
@@ -835,57 +906,21 @@ watch(
 .report-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
+}
+
+.report-center__desc {
+  margin: 0;
+  color: rgba(180, 200, 235, 0.55);
+  font-size: 0.95rem;
 }
 
 .report-center__table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   border: 1px solid rgba(125, 201, 255, 0.10);
   border-radius: 18px;
   overflow: hidden;
   background: rgba(8, 18, 34, 0.7);
-}
-
-/* ---------------- 后台任务条 ----------------
-   提交后弹窗即关，进度在这里持续可见；完成 / 失败走 ElNotification。 */
-.job-strip {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.job-strip__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(91, 166, 255, 0.28);
-  background: rgba(91, 166, 255, 0.08);
-  font-size: 0.86rem;
-  color: #cfe2ff;
-}
-
-.job-strip__spinner {
-  flex-shrink: 0;
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgba(91, 166, 255, 0.3);
-  border-top-color: #5ba6ff;
-  border-radius: 50%;
-  animation: gen-spin 0.6s linear infinite;
-}
-
-.job-strip__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.job-strip__time {
-  margin-left: auto;
-  flex-shrink: 0;
-  color: rgba(154, 214, 255, 0.8);
-  font-size: 0.8rem;
 }
 
 /* ---------------- 页码条（暗色） ----------------
@@ -966,6 +1001,14 @@ watch(
 
 .report-table-row {
   background: transparent !important;
+}
+
+/* 列宽探针：脱离文档流的量宽标尺，不参与布局也不可见 */
+.report-table__probe {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .report-table__title-cell {
@@ -1451,6 +1494,9 @@ watch(
 }
 
 .report-dialog .el-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
   padding: 12px 24px 18px !important;
 }
 

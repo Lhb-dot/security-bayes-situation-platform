@@ -2,7 +2,8 @@
 
 对应 Service：RiskEventService（backend/app/services/risk_event_service.py）。
 权限（需求 5.2/6.5.2）：查看/处置 → 登录用户（普通用户仅本人事件，后端强制按
-created_by_user_id 过滤）；删除 → 禁止（历史事件必须保持可追溯，Service 返回 400）。
+created_by_user_id 过滤）；删除 → 禁止（历史事件必须保持可追溯，Service 返回 400）；
+隐藏 → 软删除（POST /{id}/hide、/{id}/unhide），数据一行不动，只切可见性。
 """
 from typing import Optional
 
@@ -35,6 +36,9 @@ def list_risk_events(
     risk_level: Optional[str] = Query(
         None, description="按风险等级过滤（按查看者阈值判级）：HIGH/MEDIUM/LOW"
     ),
+    include_hidden: bool = Query(
+        False, description="是否带上已隐藏的事件（默认不带；隐藏是可见性开关不是删除）"
+    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):
@@ -44,6 +48,7 @@ def list_risk_events(
             scenario_id=scenario_id,
             status=status,
             risk_level=risk_level,
+            include_hidden=include_hidden,
             page=page,
             page_size=page_size,
         )
@@ -116,4 +121,38 @@ def delete_risk_event(
 ):
     return unwrap(
         RiskEventService(db).delete(current_user=current_user, event_id=event_id)
+    )
+
+
+@router.post(
+    "/{event_id}/hide",
+    response_model=ResponseModel,
+    summary="隐藏风险事件（软隐藏，数据不删；需求 5.2 禁止真删）",
+)
+def hide_risk_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        RiskEventService(db).set_hidden(
+            current_user=current_user, event_id=event_id, hidden=True
+        )
+    )
+
+
+@router.post(
+    "/{event_id}/unhide",
+    response_model=ResponseModel,
+    summary="取消隐藏风险事件",
+)
+def unhide_risk_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        RiskEventService(db).set_hidden(
+            current_user=current_user, event_id=event_id, hidden=False
+        )
     )

@@ -7,11 +7,13 @@
  * - SUPER_ADMIN：可看全部用户与场景管理员，可创建 SCENARIO_ADMIN / SCENARIO_USER 并绑定场景
  * - SCENARIO_ADMIN：仅管理本场景用户，只能创建 SCENARIO_USER
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import request, { unwrapData } from '@/utils/request';
+import { keepScroll } from '@/utils/scrollAnchor';
 import { useUserStore } from '@/stores/userStore';
 import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { UserListParams } from '@/api/userApi';
 
 interface ScenarioOption {
   id: number;
@@ -26,6 +28,34 @@ const currentUser = computed(() => userStore.currentUser);
 const users = computed(() => userStore.users);
 const loading = computed(() => userStore.loading);
 const keyword = ref('');
+const filterRole = ref<'' | UserRole>('');
+const filterStatus = ref<'' | 'ENABLED' | 'DISABLED'>('');
+const filterScenarioId = ref<number | ''>('');
+
+const PAGE_SIZE = 10;
+const currentPage = ref(1);
+const usersTotal = computed(() => userStore.usersTotal);
+const totalPages = computed(() => Math.max(1, Math.ceil(usersTotal.value / PAGE_SIZE)));
+
+/** 页数多时收成 `1 2 … 末` */
+const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
+  const total = totalPages.value;
+  const cur = currentPage.value;
+  const nums =
+    total <= 7
+      ? Array.from({ length: total }, (_, i) => i + 1)
+      : [...new Set([1, total, cur - 1, cur, cur + 1])]
+          .filter((p) => p >= 1 && p <= total)
+          .sort((a, b) => a - b);
+  const out: Array<{ gap: boolean; value: number }> = [];
+  let prev = 0;
+  for (const p of nums) {
+    if (prev && p - prev > 1) out.push({ gap: true, value: 0 });
+    out.push({ gap: false, value: p });
+    prev = p;
+  }
+  return out;
+});
 
 const scenarioOptions = ref<ScenarioOption[]>([]);
 const scenarioNameByCode = ref<Record<string, string>>({});
@@ -80,12 +110,47 @@ const loadScenarios = async () => {
   scenarioNameById.value = Object.fromEntries(options.map((item) => [item.id, item.name]));
 };
 
+/** 当前筛选条件 —— 增删改后重拉列表也要带上，否则下拉还显示着筛选值、列表却跳回全量 */
+const currentListParams = (): UserListParams => ({
+  page: currentPage.value,
+  page_size: PAGE_SIZE,
+  keyword: keyword.value.trim() || undefined,
+  role: filterRole.value || undefined,
+  status: filterStatus.value || undefined,
+  scenario_id: filterScenarioId.value === '' ? undefined : Number(filterScenarioId.value),
+});
+
 const loadUsers = async () => {
-  await userStore.fetchUsers({
-    page: 1,
-    page_size: 200,
-    keyword: keyword.value.trim() || undefined,
-  });
+  await userStore.fetchUsers(currentListParams());
+};
+
+const tableWrapRef = ref<HTMLElement | null>(null);
+
+/** 筛选条件变化 → 回到第 1 页；顺带清掉还压在防抖里的搜索 */
+const applyFilter = async () => {
+  if (keywordTimer) {
+    clearTimeout(keywordTimer);
+    keywordTimer = null;
+  }
+  currentPage.value = 1;
+  await loadUsers();
+};
+
+/** 搜索框实时响应：连续输入合并成一次请求 */
+let keywordTimer: ReturnType<typeof setTimeout> | null = null;
+watch(keyword, () => {
+  if (keywordTimer) clearTimeout(keywordTimer);
+  keywordTimer = setTimeout(() => {
+    keywordTimer = null;
+    void applyFilter();
+  }, 300);
+});
+
+const goPage = async (p: number) => {
+  if (p < 1 || p > totalPages.value || p === currentPage.value) return;
+  currentPage.value = p;
+  // 包一层滚动锚定：换页后视口停在原处（见 utils/scrollAnchor.ts）
+  await keepScroll(() => loadUsers(), tableWrapRef.value);
 };
 
 // ========== 创建用户 ==========
@@ -132,12 +197,15 @@ const submitCreate = async () => {
   }
   createSubmitting.value = true;
   try {
-    await userStore.createUser({
-      username: createForm.value.username.trim(),
-      password: createForm.value.password,
-      role: createForm.value.role,
-      scenario_id: Number(createForm.value.scenario_id),
-    });
+    await userStore.createUser(
+      {
+        username: createForm.value.username.trim(),
+        password: createForm.value.password,
+        role: createForm.value.role,
+        scenario_id: Number(createForm.value.scenario_id),
+      },
+      currentListParams(),
+    );
     ElMessage.success('账号创建成功');
     createOpen.value = false;
   } catch (err) {
@@ -183,7 +251,7 @@ const toggleStatus = async (user: UserAccount) => {
   }
   const next = user.status === 'active' ? 'disabled' : 'active';
   try {
-    await userStore.setUserStatus(user.user_id, next);
+    await userStore.setUserStatus(user.user_id, next, currentListParams());
     ElMessage.success(next === 'active' ? '账号已启用' : '账号已禁用');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '操作失败');
@@ -211,7 +279,11 @@ const submitBind = async () => {
   }
   bindSubmitting.value = true;
   try {
-    await userStore.updateUserScenario(bindTarget.value.user_id, Number(bindScenarioId.value));
+    await userStore.updateUserScenario(
+      bindTarget.value.user_id,
+      Number(bindScenarioId.value),
+      currentListParams(),
+    );
     ElMessage.success('场景绑定已更新');
     bindTarget.value = null;
   } catch (err) {
@@ -243,11 +315,7 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
-        <p class="users-page__desc">
-          当前登录：{{ currentUser?.username }}（{{ roleLabel(currentUser?.role || 'SCENARIO_USER') }}）
-          <template v-if="isSuperAdmin"> · 可查看全部用户与场景管理员，并创建账号绑定场景</template>
-          <template v-else-if="isManagement"> · 仅管理本场景用户</template>
-        </p>
+        <p class="users-page__desc">平台账号、角色与场景绑定管理</p>
       </div>
       <button v-if="isManagement" class="users-btn users-btn--primary" @click="openCreate">
         {{ isSuperAdmin ? '创建账号' : '创建用户' }}
@@ -256,23 +324,55 @@ onMounted(async () => {
 
     <section v-if="isManagement" class="card users-section">
       <div class="section-heading">
-        <div>
-          <p class="eyebrow">User Directory</p>
-          <h3>{{ isSuperAdmin ? '全部用户 / 场景管理员' : '本场景用户' }}</h3>
+        <div class="users-filters">
+          <select v-model="filterRole" class="pwd-form__input users-filter" @change="applyFilter">
+            <option value="">全部角色</option>
+            <option v-if="isSuperAdmin" value="SUPER_ADMIN">系统管理员</option>
+            <option value="SCENARIO_ADMIN">场景管理员</option>
+            <option value="SCENARIO_USER">普通用户</option>
+          </select>
+          <select
+            v-if="isSuperAdmin"
+            v-model="filterScenarioId"
+            class="pwd-form__input users-filter"
+            @change="applyFilter"
+          >
+            <option value="">全部场景</option>
+            <option v-for="sc in scenarioOptions" :key="sc.id" :value="sc.id">
+              {{ sc.name }}
+            </option>
+          </select>
+          <select v-model="filterStatus" class="pwd-form__input users-filter" @change="applyFilter">
+            <option value="">全部状态</option>
+            <option value="ENABLED">启用</option>
+            <option value="DISABLED">禁用</option>
+          </select>
         </div>
         <div class="users-toolbar">
           <input
             v-model.trim="keyword"
             class="pwd-form__input users-search"
             placeholder="按用户名搜索"
-            @keyup.enter="loadUsers"
+            @keyup.enter="applyFilter"
           />
-          <button class="users-btn" :disabled="loading" @click="loadUsers">查询</button>
         </div>
       </div>
 
-      <div class="users-table-wrap">
+      <div ref="tableWrapRef" class="users-table-wrap">
+        <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
         <table class="users-table">
+          <!-- 列宽合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
+               空表和满表共用同一套列宽 —— 否则加载时按表头分、数据到了按内容重排，
+               整张表会「从宽变窄」跳一下。 -->
+          <colgroup>
+            <col class="col-id" />
+            <col class="col-name" />
+            <col class="col-role" />
+            <col class="col-status" />
+            <col class="col-scenario" />
+            <col class="col-created" />
+            <col class="col-ops" />
+          </colgroup>
           <thead>
             <tr>
               <th>用户ID</th>
@@ -332,8 +432,50 @@ onMounted(async () => {
             </tr>
           </tbody>
         </table>
-        <p v-if="loading" class="users-table__empty">加载中...</p>
-        <p v-else-if="!users.length" class="users-table__empty">暂无用户数据</p>
+        <p v-if="!loading && !users.length" class="users-table__empty">暂无用户数据</p>
+      </div>
+
+      <div v-if="usersTotal > 0" class="users-pager">
+        <span class="users-pager__info">
+          第 {{ currentPage }} / {{ totalPages }} 页 · 共 {{ usersTotal }} 条
+        </span>
+        <div class="users-pager__btns">
+          <button class="users-pager__btn" :disabled="currentPage === 1" @click="goPage(1)">
+            首页
+          </button>
+          <button
+            class="users-pager__btn"
+            :disabled="currentPage === 1"
+            @click="goPage(currentPage - 1)"
+          >
+            上一页
+          </button>
+          <template v-for="item in pageItems" :key="item.gap ? 'gap' : item.value">
+            <span v-if="item.gap" class="users-pager__gap">…</span>
+            <button
+              v-else
+              class="users-pager__btn users-pager__btn--num"
+              :class="{ 'is-active': item.value === currentPage }"
+              @click="goPage(item.value)"
+            >
+              {{ item.value }}
+            </button>
+          </template>
+          <button
+            class="users-pager__btn"
+            :disabled="currentPage === totalPages"
+            @click="goPage(currentPage + 1)"
+          >
+            下一页
+          </button>
+          <button
+            class="users-pager__btn"
+            :disabled="currentPage === totalPages"
+            @click="goPage(totalPages)"
+          >
+            末页
+          </button>
+        </div>
       </div>
     </section>
 
@@ -476,11 +618,12 @@ onMounted(async () => {
 .users-page__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .users-page__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -491,14 +634,23 @@ onMounted(async () => {
 
 .section-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
-.section-heading h3 {
-  margin: 0;
+.users-filters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.users-filter {
+  min-width: 132px;
+  cursor: pointer;
 }
 
 .users-toolbar {
@@ -512,14 +664,26 @@ onMounted(async () => {
 }
 
 .users-table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   overflow-x: auto;
 }
 
 .users-table {
   width: 100%;
+  /* 固定布局：列宽完全由下方 .col-* 决定，不随内容重排 */
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.88rem;
 }
+
+/* 列宽按「有数据时」的观感定（合计 100%），空表和满表共用一套 */
+.col-id { width: 8%; }
+.col-name { width: 12%; }
+.col-role { width: 13%; }
+.col-status { width: 8%; }
+.col-scenario { width: 13%; }
+.col-created { width: 18%; }
+.col-ops { width: 28%; }
 
 .users-table th {
   text-align: left;
@@ -554,6 +718,68 @@ onMounted(async () => {
 
 .users-table__muted {
   color: rgba(220, 234, 255, 0.4);
+}
+
+.users-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
+}
+
+.users-pager__info {
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.6);
+}
+
+.users-pager__btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.users-pager__btn {
+  min-width: 34px;
+  padding: 5px 10px;
+  border: 1px solid rgba(125, 201, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(91, 166, 255, 0.08);
+  color: rgba(200, 224, 255, 0.85);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.users-pager__btn:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.45);
+  color: #fff;
+}
+
+.users-pager__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.users-pager__btn--num {
+  padding: 5px 0;
+}
+
+.users-pager__btn.is-active {
+  background: rgba(91, 166, 255, 0.24);
+  border-color: rgba(91, 166, 255, 0.6);
+  color: #fff;
+  font-weight: 600;
+}
+
+.users-pager__gap {
+  padding: 0 2px;
+  color: rgba(220, 234, 255, 0.4);
+  font-size: 0.8rem;
 }
 
 .scenario-tag {
