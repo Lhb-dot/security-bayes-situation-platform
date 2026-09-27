@@ -74,7 +74,10 @@ def read_csv(path: str, sample_limit: int = _TYPE_SAMPLE_LIMIT):
                 "name": name,
                 "type": ftype,
                 "enum_values": enum,
-                "sample_values": list(distinct)[:2],
+                # 取「按行序出现的前 2 个不同值」，与 arff_reader 的样例值口径一致。
+                # 不能写 list(distinct)[:2]：set 的迭代顺序受 PYTHONHASHSEED 影响，
+                # 同一份 CSV 每次上传会得到不同的 sample_values。
+                "sample_values": list(dict.fromkeys(nonempty))[:2],
             }
         )
     return fields, rows

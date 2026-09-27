@@ -7,6 +7,21 @@
 import request, { unwrapData } from '@/utils/request';
 import type { Scenario, ScenarioId } from '@/types/security';
 
+/**
+ * 场景种子映射：后端数字 ID → 前端场景编码。
+ *
+ * 后端 risk_event / report / dataset 等接口下发的是数字 scenario_id，而前端路由与类型用编码，
+ * 各 api 模块都需要这张兜底表（后端 /scenarios 不可达、或返回列表里没有该 id 时使用）。
+ * **只在这里声明一份**：原先 datasetApi / reportApi / riskThresholdApi / situationApi 各写了一遍，
+ * 种子顺序一旦调整就会出现「有的模块认 3=地质、有的认 3=甲板」的口径分叉。
+ */
+export const SCENARIO_CODE_BY_ID: Record<number, ScenarioId> = {
+  1: 'network_security',
+  2: 'power_system',
+  3: 'flightdeck_operation',
+  4: 'geological_risk',
+};
+
 /** 后端 scenario 行 */
 export interface ApiScenario {
   id: number;

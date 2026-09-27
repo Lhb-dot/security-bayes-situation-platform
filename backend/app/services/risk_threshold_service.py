@@ -1,6 +1,5 @@
 """按账号和场景维护风险阈值，并记录每次修改。"""
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 
@@ -9,15 +8,19 @@ from app.models.scenario import Scenario
 from app.models.threshold_audit_log import ThresholdAuditLog
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
-from app.utils.common import get_logger, row_to_dict
-
-logger = get_logger("risk_threshold")
+from app.services.constants import ROLE_SUPER_ADMIN
+from app.utils.common import row_to_dict
 
 
 class RiskThresholdService(ServiceBase):
-    """风险阈值：配置归属当前账号，场景管理员只可操作绑定场景。"""
+    """风险阈值：以 (账号, 场景) 为键，账号只能读写**本人**的阈值行。
 
-    def _get_for_user(self, user_id: int, scenario_id: int) -> Optional[RiskThreshold]:
+    不存在场景级 / 平台级阈值（见 ``risk_view`` 模块说明），因此普通账号修改阈值
+    只影响自己的风险视图，不会波及他人；反之任何账号（含 SUPER_ADMIN）也无法通过
+    本 Service 改写他人的阈值行 —— upsert 的 user_id 恒为当前登录账号。
+    """
+
+    def _get_for_user(self, user_id: int, scenario_id: int) -> RiskThreshold | None:
         return self.db.scalar(
             select(RiskThreshold).where(
                 RiskThreshold.user_id == user_id,
@@ -34,8 +37,10 @@ class RiskThresholdService(ServiceBase):
             .where(RiskThreshold.user_id == current_user.id)
             .join(Scenario, Scenario.id == RiskThreshold.scenario_id)
         )
-        if getattr(current_user, "role", None) != "SUPER_ADMIN":
-            stmt = stmt.where(RiskThreshold.scenario_id == current_user.scenario_id)
+        if getattr(current_user, "role", None) != ROLE_SUPER_ADMIN:
+            stmt = stmt.where(
+                RiskThreshold.scenario_id == getattr(current_user, "scenario_id", None)
+            )
         rows = self.db.scalars(stmt.order_by(RiskThreshold.scenario_id)).all()
         return ok(data=[row_to_dict(row) for row in rows])
 

@@ -14,9 +14,11 @@
  */
 
 import { nextTick } from 'vue';
+// 可滚动判定与 scrollChain.ts 共用同一个正则：hidden 不算（隐藏溢出但不可滚动）
+import { SCROLLABLE_OVERFLOW } from '@/utils/scrollChain';
 
-/** 可滚动判定与 scrollChain.ts 保持一致：hidden 不算（隐藏溢出但不可滚动） */
-const SCROLLABLE_OVERFLOW = /^(auto|scroll|overlay)$/;
+/** 位置差小于半像素就不赋值，避免无意义的 scrollTop 写入触发 scroll 事件 */
+const POSITION_EPSILON_PX = 0.5;
 
 /** anchor 自身到根之间的全部滚动容器（含文档滚动体） */
 const scrollTargets = (anchor?: HTMLElement | null): HTMLElement[] => {
@@ -56,7 +58,7 @@ const restore = (anchors: Anchor[]): void => {
     // 贴着底部操作 → 保持「距底部距离」；离底部还远 → 保持绝对位置
     const target = bottomGap <= viewport ? nextMax - bottomGap : top;
     const clamped = Math.max(0, Math.min(nextMax, target));
-    if (Math.abs(el.scrollTop - clamped) > 0.5) el.scrollTop = clamped;
+    if (Math.abs(el.scrollTop - clamped) > POSITION_EPSILON_PX) el.scrollTop = clamped;
   }
 };
 

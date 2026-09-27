@@ -10,20 +10,21 @@
  * 因此本页**不再渲染任何研判图**（间距曲线、方向角雷达、接近率、碰撞对比、总航程等），
  * 后端字段按契约 §5.3 仍然保留（向后兼容），只是本页不使用。
  *
- * 数据来源三段，作用域不同：
- *   /profile   数据资产全量统计（由父组件 AdminProfilePage 以 prop 传入，页面主骨架）；
- *   /workspace 运行态水位，范围由后端按角色收窄（场景管理员 self_only=false）；
- *   /users     场景成员，前端按 scenario_id 过滤；
- *   三者用 Promise.allSettled 并行，任一失败只影响它自己那一块，不阻塞整页。
+ * 数据来源两段，作用域不同：
+ *   /profile   数据资产全量统计（由父组件 AdminProfilePage 以 prop 传入，页面主骨架）。
+ *              `modeling` / `redundancy` / `caliber_registered` 是契约 §4.1 / §5.3 的**必填**
+ *              字段，后端 `get_profile` 无条件下发（只读探针实测：4 个数据集 → modeling 4 行、
+ *              redundancy 五字段齐全、caliber_registered 与 is_risk_label 逐行同值），
+ *              故本页不再保留「旧后端未上线」的兜底分支，也不再并行请求 modelVersionApi。
+ *   /workspace 运行态水位 + /users 场景成员：两个额外接口用 Promise.allSettled 并行，
+ *              任一失败只影响它自己那一块，不阻塞主画像渲染。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import {
   getScenarioWorkspace,
   type FlightdeckProfile,
   type FlightdeckWorkspace,
-  type RedundancyStat,
 } from '@/api/dashboardApi';
-import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import { getUserList } from '@/api/userApi';
 import type { UserAccount } from '@/types/security';
 import DashKpis from '@/components/dashboard/DashKpis.vue';
@@ -34,37 +35,48 @@ import DashLine from '@/components/dashboard/DashLine.vue';
 import DashRows from '@/components/dashboard/DashRows.vue';
 import DashTable from '@/components/dashboard/DashTable.vue';
 import type { DashColumn } from '@/components/dashboard/DashTable.vue';
-import { fmtPercent } from '@/components/dashboard/dashFormat';
+import { fmtDate, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: FlightdeckProfile }>();
 
 /* ------------------------------------------------------------------ */
-/* 运行态 / 模型 / 成员（额外接口，各自静默降级）                        */
+/* 口径常量：枚举字面量 / 分页上限一律在此具名，computed 与模板共用       */
+/* ------------------------------------------------------------------ */
+
+/** 成员列表单页上限（后端分页硬上限 200） */
+const MEMBER_PAGE_SIZE = 200;
+/** 账号角色（frontend/src/types/security.ts）：只有这两种角色计入 S5 */
+const ROLE_SCENARIO_ADMIN = 'SCENARIO_ADMIN';
+const ROLE_SCENARIO_USER = 'SCENARIO_USER';
+/** 账号状态：非 active 一律计入「已禁用」 */
+const ACCOUNT_STATUS_ACTIVE = 'active';
+
+/* ------------------------------------------------------------------ */
+/* 运行态 / 成员（额外接口，各自静默降级）                               */
 /* ------------------------------------------------------------------ */
 
 const runtime = ref<FlightdeckWorkspace | null>(null);
-/** 场景内模型版本；null = 未取到（与「确实 0 个」区分开，避免误报「数据白躺」） */
-const models = ref<BackendModelVersion[] | null>(null);
-/** 场景成员；null = 未取到 */
+/** 场景成员；null = 未取到（与「确实 0 人」区分开，避免误报 0） */
 const members = ref<UserAccount[] | null>(null);
 
 /**
- * 三个接口并行、各自静默降级：任一失败只影响它自己那块，不阻塞主画像渲染。
- * 模型版本接口是 `modeling` 字段（后端任务 B 新增）未上线时的兜底数据源。
+ * 两个接口并行、各自静默降级：任一失败只影响它自己那块，不阻塞主画像渲染。
+ * 模型版本数**不**再单独请求 modelVersionApi —— 后端画像已直接下发 `modeling`
+ * （按 dataset 聚合 published/draft/total，无模型的数据集也在列并计 0），
+ * 前端再自行归集只会产生第二套口径。
  */
 const loadAll = async () => {
   const scenarioId = props.data.scenario_id;
-  const [runtimeResult, modelResult, memberResult] = await Promise.allSettled([
+  const [runtimeResult, memberResult] = await Promise.allSettled([
     getScenarioWorkspace(scenarioId),
-    getModelVersionList({ scenario_id: scenarioId, page_size: 100 }),
-    getUserList({ page_size: 200 }),
+    getUserList({ scenario_id: scenarioId, page_size: MEMBER_PAGE_SIZE }),
   ]);
 
   runtime.value =
     runtimeResult.status === 'fulfilled' && runtimeResult.value.scenario_key === 'flight_deck'
       ? (runtimeResult.value as FlightdeckWorkspace)
       : null;
-  models.value = modelResult.status === 'fulfilled' ? modelResult.value : null;
+  // 服务端只对 SCENARIO_ADMIN 自动收窄场景（SUPER_ADMIN 拿到全平台账号），故这里必须再按场景过滤
   members.value =
     memberResult.status === 'fulfilled'
       ? memberResult.value.items.filter((item) => item.scenario_id === scenarioId)
@@ -86,14 +98,15 @@ onMounted(loadAll);
  * 列表里就会出现多行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
  */
 const displayNames = computed(() => {
-  const list = props.data.datasets ?? [];
-  const names = list.map((item) => item.name || item.logical_id);
   const counts = new Map<string, number>();
-  names.forEach((name) => counts.set(name, (counts.get(name) ?? 0) + 1));
+  props.data.datasets.forEach((item) => {
+    const raw = item.name || item.logical_id;
+    counts.set(raw, (counts.get(raw) ?? 0) + 1);
+  });
   const map = new Map<string, string>();
-  list.forEach((item, index) => {
-    const name = names[index];
-    map.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
+  props.data.datasets.forEach((item) => {
+    const raw = item.name || item.logical_id;
+    map.set(item.logical_id, (counts.get(raw) ?? 0) > 1 ? `${raw}（${item.logical_id}）` : raw);
   });
   return map;
 });
@@ -120,32 +133,14 @@ const VISIBILITY_TEXT: Record<string, string> = {
 /* ------------------------------------------------------------------ */
 
 /**
- * 同源冗余度兜底。
+ * S1：前 3 个四场景一致，第 4 个是舰面调度特色（同源冗余率）。
  *
- * `redundancy` 是后端任务 B 新增的顶层字段，若后端尚未上线，运行时它是 undefined，
- * 直接读 `data.redundancy.redundancy_rate` 会在渲染期抛错导致整页白屏。
- * 兜底口径不引入新算法，只是把契约 §5.3 的同一个公式用画像里已有的字段现算一遍：
- *   file_count           = dataset_file_count（物理文件数）
- *   effective_group_count= dataset_count（同源去重后的有效数据集数）
- *   redundancy_rate      = 1 - 有效数据集数 / 文件数
+ * 冗余度直接取画像顶层 `redundancy`（契约 §5.3 必填字段，后端按
+ * 1 - 有效同源组数 / 文件数 算好下发）。前端不再按 dataset_file_count / dataset_count
+ * 现算一遍：那是同一个公式的第二份实现，只会在两边口径漂移时给出两个数。
  */
-const redundancy = computed<RedundancyStat>(() => {
-  const raw = props.data.redundancy;
-  if (raw) return raw;
-  const fileCount = Number(props.data.dataset_file_count ?? 0);
-  const groupCount = Number(props.data.dataset_count ?? 0);
-  return {
-    file_count: fileCount,
-    effective_group_count: groupCount,
-    redundancy_rate: fileCount > 0 ? 1 - groupCount / fileCount : 0,
-    raw_samples: Number(props.data.sample_count ?? 0),
-    deduped_samples: Number(props.data.sample_count ?? 0),
-  };
-});
-
-/** S1：前 3 个四场景一致，第 4 个是舰面调度特色（同源冗余率） */
 const assetKpis = computed(() => {
-  const stat = redundancy.value;
+  const stat = props.data.redundancy;
   return [
     {
       label: '有效数据集数',
@@ -188,15 +183,13 @@ const assetKpis = computed(() => {
  * 后端 `source_group` 是内容指纹（"{size}-{sha1前16位}"）或显式同源族 ID，
  * 直接上屏读者看不懂。这里按 `groups[]` 顺序编号并带上成员数：
  * 「同源组」一列取到相同值的行，就是同一批样本的不同编码 —— 这正是本表要传达的信息。
- * `groups` 缺失时退回原始 key（至少保证同组同值，不丢信息）。
+ * `groups[].group_id` 与 `groups[].fingerprint` 是同一个值（后端 `get_profile` 两处都写
+ * `group_key`，只读探针实测逐组相等），故只需登记一个键。
  */
 const groupLabels = computed(() => {
   const map = new Map<string, string>();
-  (props.data.groups ?? []).forEach((group, index) => {
-    const size = Number(group.file_count ?? (group.datasets ?? []).length);
-    const label = `G${index + 1} · ${size} 份`;
-    if (group.group_id) map.set(group.group_id, label);
-    if (group.fingerprint) map.set(group.fingerprint, label);
+  props.data.groups.forEach((group, index) => {
+    map.set(group.group_id, `G${index + 1} · ${group.file_count} 份`);
   });
   return map;
 });
@@ -220,10 +213,11 @@ const familyColumns: DashColumn[] = [
  * （同源组里只有代表份应该入模，多份入模等于把同一批样本重复喂给模型）。
  */
 const familyRows = computed<Array<Record<string, unknown>>>(() =>
-  (props.data.encoding_family ?? []).map((row) => ({
+  props.data.encoding_family.map((row) => ({
     logical_id: row.logical_id,
     name: nameOf(row.logical_id),
-    source_group: groupLabels.value.get(row.source_group) ?? row.source_group ?? '—',
+    // 组名查不到时退回原始 key（同组同值，不丢信息）；空串由 DashTable 渲染成「—」
+    source_group: groupLabels.value.get(row.source_group) ?? row.source_group,
     encoding: ENCODING_TEXT[row.encoding] ?? '未知',
     attribute_count: row.attribute_count,
     record_count: row.record_count,
@@ -242,15 +236,13 @@ const familyRows = computed<Array<Record<string, unknown>>>(() =>
 /* ------------------------------------------------------------------ */
 
 /** 被同源吸收掉的数据集数 = 文件数 - 有效数据集数（多出来的都是重复入模风险） */
-const absorbedCount = computed(() =>
-  Math.max(
-    Number(redundancy.value.file_count ?? 0) - Number(redundancy.value.effective_group_count ?? 0),
-    0,
-  ),
-);
+const absorbedCount = computed(() => {
+  const stat = props.data.redundancy;
+  return Math.max(stat.file_count - stat.effective_group_count, 0);
+});
 
 const redundancyKpis = computed(() => {
-  const stat = redundancy.value;
+  const stat = props.data.redundancy;
   return [
     {
       label: '同源冗余率',
@@ -285,49 +277,40 @@ const redundancyKpis = computed(() => {
 
 /** 每个同源组一根柱 = 组内物理文件数；标签用组内展示名连接，便于核对是哪几份文件同源 */
 const groupBars = computed(() =>
-  (props.data.groups ?? []).map((group) => ({
-    value: (group.datasets ?? []).map((id) => nameOf(id)).join(' / '),
-    count: Number(group.file_count ?? (group.datasets ?? []).length),
+  props.data.groups.map((group) => ({
+    value: group.datasets.map((id) => nameOf(id)).join(' / '),
+    count: group.file_count,
   })),
 );
 
 /* ------------------------------------------------------------------ */
-/* S2 数据集资产明细                                                    */
+/* S2 数据集资产明细 / S3 建模覆盖                                      */
 /* ------------------------------------------------------------------ */
 
 /**
- * 每数据集的模型版本数（published / total）。
- *
- * 优先用画像的 `modeling`（契约 §4.1，一次查询按 dataset_id 分组，无模型的数据集也在列）；
- * 该字段是后端任务 B 新增的，未上线时退回模型版本接口在前端归集，保证「已发布模型数」列
- * 不会因为后端未合并而整列空白。两者都取不到时显示「—」，而不是假装 0（会误报未建模）。
+ * 每数据集的模型版本数（published / total），直接取画像顶层 `modeling`
+ * （契约 §4.1：一次聚合查询按 dataset_id 分组，无模型的数据集也在列并计 0）。
  */
-const modelingKnown = computed(() => Array.isArray(props.data.modeling) || models.value !== null);
-
 const modelStats = computed(() => {
   const map = new Map<string, { published: number; total: number }>();
-  if (Array.isArray(props.data.modeling)) {
-    props.data.modeling.forEach((item) =>
-      map.set(item.logical_id, { published: item.published, total: item.total }),
-    );
-    return map;
-  }
-  (models.value ?? []).forEach((model) => {
-    const key = model.dataset_logical_id ?? String(model.dataset_id);
-    const entry = map.get(key) ?? { published: 0, total: 0 };
-    entry.total += 1;
-    if (model.status === 'PUBLISHED') entry.published += 1;
-    map.set(key, entry);
-  });
+  props.data.modeling.forEach((item) =>
+    map.set(item.logical_id, { published: item.published, total: item.total }),
+  );
   return map;
 });
 
-/** 已发布模型数单元格：`已发布 P / 共 T` */
-const modelTextOf = (logicalId: string): string => {
-  const stat = modelStats.value.get(logicalId);
-  if (!stat) return '—';
-  return `已发布 ${stat.published} / 共 ${stat.total}`;
-};
+/**
+ * 数据集基底行：S2（资产明细）与 S3（建模覆盖）共用的**唯一一次** datasets 遍历。
+ * 展示名与模型覆盖在这里各算一次，下游只做投影 —— 避免同一份 datasets 被多个 computed
+ * 各扫一遍、也避免展示名在两处各算一次而出现口径漂移。
+ */
+const datasetRows = computed(() =>
+  props.data.datasets.map((item) => ({
+    item,
+    name: nameOf(item.logical_id),
+    model: modelStats.value.get(item.logical_id),
+  })),
+);
 
 const assetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名' },
@@ -346,50 +329,31 @@ const assetColumns: DashColumn[] = [
  * 未登记风险口径的数据集**不隐藏**（契约 §0.1：不得用 is_risk_label 过滤掉未登记数据集），
  * 而是在「标签字段」列挂黄色告警标签 —— 未登记意味着它不会产生风险事件，
  * 这是管理端必须看见的信息，不是可以省略的行。
- * `caliber_registered` 是新增字段，未上线时用同值的 `is_risk_label` 兜底。
+ * 模型数查不到时给 undefined，由 DashTable 统一渲染「—」，而不是假装 0（会误报未建模）。
  */
 const assetRows = computed<Array<Record<string, unknown>>>(() =>
-  (props.data.datasets ?? []).map((item) => ({
+  datasetRows.value.map(({ item, name, model }) => ({
     logical_id: item.logical_id,
-    name: nameOf(item.logical_id),
+    name,
     record_count: item.record_count,
     label_field: item.label_field,
-    caliber_registered: item.caliber_registered ?? item.is_risk_label,
+    caliber_registered: item.caliber_registered,
     risk_rate: fmtPercent(item.risk_rate),
     attribute_count: item.attribute_count,
-    visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility ?? '—',
-    model: modelingKnown.value ? modelTextOf(item.logical_id) : '—',
+    visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility,
+    model: model ? `已发布 ${model.published} / 共 ${model.total}` : undefined,
     version: `v${item.version}`,
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S3 建模覆盖                                                         */
-/* ------------------------------------------------------------------ */
-
-/** 每数据集的模型版本总数（含草稿），按画像 datasets 顺序，与 S2/D1 行序一致 */
-const modelingRows = computed(() =>
-  (props.data.datasets ?? []).map((item) => {
-    const stat = modelStats.value.get(item.logical_id);
-    return {
-      logical_id: item.logical_id,
-      name: nameOf(item.logical_id),
-      total: stat?.total ?? 0,
-    };
-  }),
-);
-
+/** S3 每数据集一根柱 = 模型版本总数（含草稿），行序与 S2/D1 一致（按 datasets 顺序） */
 const modelingBars = computed(() =>
-  modelingKnown.value
-    ? modelingRows.value.map((row) => ({ value: row.name, count: row.total }))
-    : [],
+  datasetRows.value.map(({ name, model }) => ({ value: name, count: model?.total ?? 0 })),
 );
 
-/** 「数据白躺」= 该数据集一个模型版本都没有；模型数据取不到时不下这个结论 */
+/** 「数据白躺」= 该数据集一个模型版本都没有 */
 const idleNames = computed(() =>
-  modelingKnown.value
-    ? modelingRows.value.filter((row) => row.total === 0).map((row) => row.name)
-    : [],
+  datasetRows.value.filter(({ model }) => (model?.total ?? 0) === 0).map(({ name }) => name),
 );
 
 /* ------------------------------------------------------------------ */
@@ -415,6 +379,7 @@ const runtimeKpis = computed(() => {
     },
     {
       label: '已处置率',
+      // 分母为 0 时不下结论，交给 DashKpis 渲染「—」
       value: item && item.total ? fmtPercent(item.resolved / item.total) : null,
       tone: 'success' as const,
       raw: true,
@@ -435,10 +400,10 @@ const funnelItems = computed(() =>
   (summary.value?.status_funnel ?? []).map((item) => ({ label: item.label, count: item.count })),
 );
 
-/** 近 10 天活动趋势：推理量 / 其中判定为风险的量 */
+/** 近 10 天活动趋势：推理量 / 其中判定为风险的量（日期统一走 dashFormat 的 MM-DD 口径） */
 const trendPoints = computed(() =>
   (runtime.value?.activity_trend ?? []).map((item) => ({
-    label: item.date.slice(5),
+    label: fmtDate(item.date),
     value: item.total,
     value2: item.risk,
   })),
@@ -450,14 +415,15 @@ const trendPoints = computed(() =>
 
 /** 场景成员：按角色分组计数（范围限本场景，不是全平台账号） */
 const memberRows = computed(() => {
-  if (members.value === null) return [];
-  const admins = members.value.filter((item) => item.role === 'SCENARIO_ADMIN');
-  const users = members.value.filter((item) => item.role === 'SCENARIO_USER');
-  const disabled = members.value.filter((item) => item.status !== 'active');
+  const list = members.value;
+  if (list === null) return [];
+  const admins = list.filter((item) => item.role === ROLE_SCENARIO_ADMIN);
+  const users = list.filter((item) => item.role === ROLE_SCENARIO_USER);
+  const disabled = list.filter((item) => item.status !== ACCOUNT_STATUS_ACTIVE);
   const rows: Array<{ label: string; value: string }> = [
     { label: '场景管理员', value: `${admins.length} 人` },
     { label: '场景用户', value: `${users.length} 人` },
-    { label: '合计', value: `${members.value.length} 人` },
+    { label: '合计', value: `${list.length} 人` },
   ];
   if (disabled.length) {
     rows.push({ label: '已禁用账号', value: `${disabled.length} 人` });
@@ -516,7 +482,6 @@ const memberRows = computed(() => {
       <span class="d-tag d-tag--warn">数据白躺 {{ idleNames.length }} 份</span>
       <span style="margin-left: 6px">{{ idleNames.join('、') }}</span>
     </p>
-    <p v-else-if="!modelingKnown" class="d-src">模型版本数据未取到，暂不能判定「数据白躺」</p>
   </DashCard>
 
   <!-- S4 场景运行态水位 -->

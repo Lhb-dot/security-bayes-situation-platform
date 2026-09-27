@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-
-// 路由实例
-const router = useRouter();
-const route = useRoute();
-
 import type { UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
 import { useReportJobStore } from './stores/reportJobStore';
 import { useTrainingJobStore } from './stores/trainingJobStore';
 import { useBatchJobStore } from './stores/batchJobStore';
 import { onSeenIdsChange } from './utils/jobSeen';
+
+// 路由实例
+const router = useRouter();
+const route = useRoute();
 
 // ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
 // 登录/登出统一走 userStore，避免页面复制认证状态
@@ -176,6 +175,8 @@ const finishedTasks = computed<BellTask[]>(() => {
 
 const hasRunning = computed(() => runningTasks.value.length > 0);
 const unseenCount = computed(() => unseenKeys.value.size);
+/** 徽章文案：超过 99 条折叠成「99+」，避免三位数撑破圆形徽章 */
+const unseenBadge = computed(() => (unseenCount.value > 99 ? '99+' : String(unseenCount.value)));
 
 /**
  * 面板里有没有行。**不再用「有没有未读」门控面板** —— 悬停总要展开，
@@ -215,6 +216,8 @@ const formatElapsed = (seconds: number): string => {
 // 已读集合存在 localStorage，storage 事件只在**别的**标签页触发 —— 正好用来同步：
 // 一个标签页看过之后，另一个标签页的徽章跟着清掉。
 let stopSeenSync: (() => void) | null = null;
+/** 终态任务过期扫描间隔（1 分钟） */
+const TASK_EXPIRY_SWEEP_MS = 60_000;
 /**
  * 终态任务保留 24h。空闲时轮询已经停了，面板数据没有别的刷新时机 ——
  * 到点的行得靠这个低频定时器自己消失。三个 store 只在**真的有行被丢掉**时
@@ -231,7 +234,7 @@ onMounted(() => {
     reportJobStore.purgeExpired();
     trainingJobStore.purgeExpired();
     batchJobStore.purgeExpired();
-  }, 60_000);
+  }, TASK_EXPIRY_SWEEP_MS);
 });
 onBeforeUnmount(() => {
   stopSeenSync?.();
@@ -246,18 +249,20 @@ const roleLabel = computed(() => {
   return '场景用户';
 });
 
+/** 场景编码 → 中文名（顶栏展示用；未收录的原样显示） */
+const SCENARIO_NAME: Record<string, string> = {
+  network_security: '网络安全',
+  power_system: '电力系统',
+  geological_risk: '地质风险',
+  flightdeck_operation: '航母甲板',
+};
+
 /** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
 const myScenarioName = computed(() => {
   if (isSuperAdmin.value) return '';
   const id = userStore.currentUser?.scenario_code;
   if (!id) return '';
-  const map: Record<string, string> = {
-    network_security: '网络安全',
-    power_system: '电力系统',
-    geological_risk: '地质风险',
-    flightdeck_operation: '航母甲板',
-  };
-  return map[id] ?? id;
+  return SCENARIO_NAME[id] ?? id;
 });
 
 const handleLogout = async () => {
@@ -350,23 +355,13 @@ const goAlertsList = () => {
 // 不再渲染页面大标题——bar 下方的各页面自带标题/说明，避免重复。
 // 浏览器标签页标题全站统一为品牌名，由 index.html 的 <title> 静态提供，不随路由变化。
 
-// 落地页跳转不在这里做：路由 '/' 的 redirect 与 guards.ts 的 to.path === '/' 分支已覆盖。
+// 落地页跳转不在这里做：路由 '/' 的函数式 redirect 已覆盖（它复用 guards.ts 的 roleLanding）。
 // 此前这里另有一份 onMounted 跳转，它在 vue-router 首次导航 resolve 之前执行，
 // 此时 route.path 仍是 '/'，于是把用户请求的深链（如 #/reports）顶成角色落地页 —— 已移除。
 
 // ===================== 路由判断快捷变量（template用） =====================
 const isLoginPage = computed(() => route.path === '/login');
-const isAlertsListPage = computed(() => route.path === '/alerts');
 const isRiskPage = computed(() => route.path === '/risk');
-const isOverviewPage = computed(() => route.path === '/overview');
-const isScenarioCenterPage = computed(() => route.path === '/scenarios');
-const isDatasetCenterPage = computed(() => route.path === '/datasets');
-const isModelCenterPage = computed(() => route.path === '/models');
-const isRiskInferencePage = computed(() => route.path === '/inference');
-const isInferenceRecordsPage = computed(() => route.path === '/inference-records');
-const isReportCenterPage = computed(() => route.path === '/reports');
-const isUsersPage = computed(() => route.path === '/users');
-const isSettingsPage = computed(() => route.path === '/settings');
 // 内容区渲染不再维护「新页面白名单」：模板用 v-else 兜住所有非 /risk 路由。
 // 原先的白名单漏掉一条就会白屏（/situation 就这么烂了两年），且新增路由必须记得补。
 
@@ -374,29 +369,46 @@ const isSettingsPage = computed(() => route.path === '/settings');
 // 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
 interface NavItem {
   path: string;
+  /** 普通角色（场景管理员/场景用户）的显示文案 */
   label: string;
+  /** 系统管理员的显示文案（缺省沿用 label） */
+  superAdminLabel?: string;
   /** 允许访问的角色列表（缺省=所有角色） */
   roles?: UserRole[];
   /** 点击动作：复用原导航跳转函数，保持既有行为 */
-  action?: () => void;
+  action: () => void;
+  /** 激活态判定：与显示文案一样按角色区分（原先散在 isXxxPage 与 isNavActive 两处） */
+  isActive: () => boolean;
 }
 
 const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER'];
 const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
 
+/** 是否正停在某个路径上（精确匹配，与原 isXxxPage 判断一致） */
+const atPath = (path: string): boolean => route.path === path;
+
 const navItems: NavItem[] = [
   // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
-  { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview },
-  { path: '/scenarios', label: '场景中心', roles: ALL_ROLES, action: goScenarioCenter },
-  { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter },
-  { path: '/alerts', label: '告警中心', roles: ALL_ROLES, action: goAlertsList },
-  { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage },
-  { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter },
-  { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference },
-  { path: '/inference-records', label: '推理记录', roles: ALL_ROLES, action: goInferenceRecords },
-  { path: '/reports', label: '报告中心', roles: ALL_ROLES, action: goReportCenter },
-  { path: '/users', label: '用户管理', roles: MGMT_ROLES, action: goUsers },
-  { path: '/settings', label: '设置', roles: ALL_ROLES, action: goSettings },
+  { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview, isActive: () => atPath('/overview') },
+  {
+    path: '/scenarios',
+    label: '首页',
+    superAdminLabel: '场景中心',
+    roles: ALL_ROLES,
+    action: goScenarioCenter,
+    // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
+    isActive: () =>
+      isSuperAdmin.value ? atPath('/scenarios') : route.path.startsWith('/scenarios/') || atPath('/scenarios'),
+  },
+  { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter, isActive: () => atPath('/datasets') },
+  { path: '/alerts', label: '告警中心', roles: ALL_ROLES, action: goAlertsList, isActive: () => atPath('/alerts') },
+  { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage, isActive: () => atPath('/risk') },
+  { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter, isActive: () => atPath('/models') },
+  { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference, isActive: () => atPath('/inference') },
+  { path: '/inference-records', label: '推理记录', roles: ALL_ROLES, action: goInferenceRecords, isActive: () => atPath('/inference-records') },
+  { path: '/reports', label: '报告中心', roles: ALL_ROLES, action: goReportCenter, isActive: () => atPath('/reports') },
+  { path: '/users', label: '用户管理', roles: MGMT_ROLES, action: goUsers, isActive: () => atPath('/users') },
+  { path: '/settings', label: '设置', superAdminLabel: '系统设置', roles: ALL_ROLES, action: goSettings, isActive: () => atPath('/settings') },
 ];
 
 /** 按当前角色过滤可见导航项 */
@@ -405,35 +417,9 @@ const visibleNavItems = computed(() => {
   return navItems.filter((item) => !item.roles || (role ? item.roles.includes(role) : false));
 });
 
-/** 导航激活态：沿用原 isXxxPage 判断，保持既有高亮逻辑（含告警详情前缀高亮） */
-const isNavActive = (item: NavItem): boolean => {
-  switch (item.path) {
-    case '/overview': return isOverviewPage.value;
-    case '/scenarios':
-      // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
-      if (isSuperAdmin.value) return isScenarioCenterPage.value;
-      return route.path.startsWith('/scenarios/') || isScenarioCenterPage.value;
-    case '/datasets': return isDatasetCenterPage.value;
-    case '/alerts': return isAlertsListPage.value;
-    case '/risk': return isRiskPage.value;
-    case '/models': return isModelCenterPage.value;
-    case '/inference': return isRiskInferencePage.value;
-    case '/inference-records': return isInferenceRecordsPage.value;
-    case '/reports': return isReportCenterPage.value;
-    case '/users': return isUsersPage.value;
-    case '/settings': return isSettingsPage.value;
-    default: return false;
-  }
-};
-
-/** 导航点击：优先复用原导航跳转函数（含首页图表重置重载），兜底 router.push */
-const handleNavClick = (item: NavItem): void => {
-  if (item.action) {
-    item.action();
-    return;
-  }
-  router.push(item.path);
-};
+/** 导航显示文案：系统管理员用 superAdminLabel（缺省沿用 label） */
+const navLabel = (item: NavItem): string =>
+  isSuperAdmin.value ? (item.superAdminLabel ?? item.label) : item.label;
 </script>
 
 <template>
@@ -452,10 +438,10 @@ const handleNavClick = (item: NavItem): void => {
             v-for="item in visibleNavItems"
             :key="item.path"
             class="nav-tabs__item"
-            :class="{ 'is-active': isNavActive(item) }"
-            @click="handleNavClick(item)"
+            :class="{ 'is-active': item.isActive() }"
+            @click="item.action()"
           >
-            {{ item.path === '/settings' ? (isSuperAdmin ? '系统设置' : '设置') : (item.path === '/scenarios' ? (isSuperAdmin ? '场景中心' : '首页') : item.label) }}
+            {{ navLabel(item) }}
           </button>
         </nav>
         <div class="topbar-right">
@@ -479,9 +465,7 @@ const handleNavClick = (item: NavItem): void => {
                 <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
               </svg>
-              <span v-if="unseenCount" class="topbar-bell__badge">
-                {{ unseenCount > 99 ? '99+' : unseenCount }}
-              </span>
+              <span v-if="unseenCount" class="topbar-bell__badge">{{ unseenBadge }}</span>
             </button>
 
             <div class="topbar-bell__panel">

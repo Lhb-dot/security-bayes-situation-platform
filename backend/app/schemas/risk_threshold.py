@@ -13,7 +13,12 @@ def _max_2_decimals(v: float) -> float:
 
 
 class RiskThresholdUpdate(BaseModel):
-    """更新场景风险阈值（仅管理员；实时生效并写审计日志）。"""
+    """更新当前账号在某场景的风险阈值（实时生效并写审计日志）。
+
+    阈值按账号存储（``risk_threshold`` 主键 = user_id + scenario_id），
+    因此任何登录账号都只能改到**自己**那一行；路由用 require_bound_scenario
+    限制场景绑定，普通场景用户也在其列。
+    """
 
     medium_threshold: float = Field(..., ge=0, le=1, description="中风险阈值 [0,1]")
     high_threshold: float = Field(..., ge=0, le=1, description="高风险阈值 [0,1]，须大于 medium")

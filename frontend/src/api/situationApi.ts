@@ -5,7 +5,7 @@
  * 本模块负责调用与数据映射（后端真实统计 → 前端 SituationData/RiskEvent 结构）。
  */
 import request, { unwrapData } from '@/utils/request';
-import { resolveScenarioId, getScenarioOverview, toScenarioCard } from '@/api/scenarioApi';
+import { SCENARIO_CODE_BY_ID, resolveScenarioId, getScenarioOverview, toScenarioCard } from '@/api/scenarioApi';
 import { getRiskEventList } from '@/api/riskEventApi';
 import type {
   GlobalOverview,
@@ -37,14 +37,6 @@ const STATUS_LABEL: Record<string, string> = {
   PENDING: '待处置',
   PROCESSING: '处理中',
   RESOLVED: '已处置',
-};
-
-/** 场景数字 ID → 编码（后端 RiskEvent.scenario_id 是数字，前端 RiskEvent.scenario_id 是编码） */
-const SCENARIO_CODE_BY_ID: Record<number, string> = {
-  1: 'network_security',
-  2: 'power_system',
-  3: 'flightdeck_operation',
-  4: 'geological_risk',
 };
 
 /** 后端风险事件 → 前端 RiskEvent 结构（字段名/状态枚举映射） */
@@ -105,29 +97,31 @@ const buildDailyTrend = (events: RiskEvent[]): TrendPoint[] => {
     arr.push(e);
     byDay.set(day, arr);
   }
-  return [...byDay.keys()].sort().map((day) => {
-    const arr = byDay.get(day)!;
-    const typeCounts = new Map<string, number>();
-    for (const e of arr) {
-      const t = e.risk_type || '未知';
-      typeCounts.set(t, (typeCounts.get(t) ?? 0) + 1);
-    }
-    let primaryType = '—';
-    let max = 0;
-    for (const [t, n] of typeCounts) {
-      if (n > max) {
-        max = n;
-        primaryType = t;
+  // 按日期升序（等价于原 [...keys()].sort() 的字典序），直接迭代 entries 避免再取一次 map
+  return [...byDay.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([day, arr]) => {
+      const typeCounts = new Map<string, number>();
+      for (const e of arr) {
+        const t = e.risk_type || '未知';
+        typeCounts.set(t, (typeCounts.get(t) ?? 0) + 1);
       }
-    }
-    return {
-      label: day.slice(5),
-      value: arr.length,
-      blocked: arr.filter((e) => e.status === '已处置').length,
-      sources: new Set(arr.map((e) => e.dataset_id)).size,
-      primaryType,
-    };
-  });
+      let primaryType = '—';
+      let max = 0;
+      for (const [t, n] of typeCounts) {
+        if (n > max) {
+          max = n;
+          primaryType = t;
+        }
+      }
+      return {
+        label: day.slice(5),
+        value: arr.length,
+        blocked: arr.filter((e) => e.status === '已处置').length,
+        sources: new Set(arr.map((e) => e.dataset_id)).size,
+        primaryType,
+      };
+    });
 };
 
 /**

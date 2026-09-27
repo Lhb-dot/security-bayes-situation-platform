@@ -3,9 +3,7 @@
 对应 Service：ScenarioService（backend/app/services/scenario_service.py）。
 权限（需求 6.5.2）：查看场景列表/切换场景 → 登录用户；增删改 → 仅 ADMIN。
 """
-from typing import Optional
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin, require_bound_scenario
@@ -74,8 +72,6 @@ def get_explanation_config(
 ):
     scenario = db.get(Scenario, scenario_id)
     if scenario is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="场景不存在")
     return ok(data=get_scenario_config(scenario.code))
 
@@ -89,7 +85,9 @@ def get_scenario_insights(
     scenario_id: int,
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(require_bound_scenario),
-    dataset_id: Optional[int] = Query(None, description="指定数据集；缺省取场景下首个 ACTIVE 数据集"),
+    dataset_id: int | None = Query(
+        None, description="指定数据集；缺省取场景下首个 ACTIVE 数据集"
+    ),
     sample_rows: int = Query(500, ge=10, le=2000, description="参与计算的样本行数上限"),
 ):
     return unwrap(

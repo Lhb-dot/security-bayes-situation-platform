@@ -54,7 +54,7 @@ const gridStyle = computed(() => {
   };
 });
 
-const labelOf = (item: Record<string, unknown>) => String(item.value ?? item.label ?? '—');
+const labelOf = (item: { value?: unknown; label?: unknown }) => String(item.value ?? item.label ?? '—');
 
 const numberText = (value: unknown): string => {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
@@ -63,29 +63,33 @@ const numberText = (value: unknown): string => {
   return fmtInt(value) + props.suffix;
 };
 
-const barMax = () => {
+/**
+ * 条长基准。用 computed 而不是普通函数：模板里每行要读两次，
+ * 写成函数会变成「行数 × 行数」次遍历。
+ */
+const barMax = computed(() => {
   if (typeof props.max === 'number' && props.max > 0) return props.max;
   const values = props.items
     .map((item) => Math.abs(Number(item.count ?? 0)))
     .filter((value) => Number.isFinite(value));
   return values.length ? Math.max(...values) : 0;
-};
+});
 </script>
 
 <template>
   <div v-if="!items.length" class="d-empty">暂无数据</div>
   <div v-else class="d-hbars" :style="gridStyle">
-    <div v-for="(item, index) in items" :key="labelOf(item as never) + index" class="d-hbar">
+    <div v-for="(item, index) in items" :key="labelOf(item) + index" class="d-hbar">
       <span
         class="d-hbk"
         :style="labelWidth > 0 ? { width: labelWidth + 'px' } : undefined"
-        :title="labelOf(item as never)"
-      >{{ prefix }}{{ labelOf(item as never) }}</span>
+        :title="labelOf(item)"
+      >{{ prefix }}{{ labelOf(item) }}</span>
       <span class="d-hbt">
         <span
           class="d-hbf"
           :style="{
-            width: (barMax() ? Math.min(100, (Math.abs(Number(item.count ?? 0)) / barMax()) * 100) : 0) + '%',
+            width: (barMax ? Math.min(100, (Math.abs(Number(item.count ?? 0)) / barMax) * 100) : 0) + '%',
             background: color || colorAt(index),
           }"
         ></span>

@@ -78,6 +78,15 @@ const creatorName = computed(() =>
     : '--'
 );
 
+/**
+ * 后端文案常量（utils/request.js 把响应体 detail 原样塞进 Error.message）：
+ * 404 = risk_event_service._get「风险事件不存在」；403 = _require_event_access「无权限操作」。
+ * 旧代码比对的是「无权查看该事件 / 无权访问该场景」——后端从不产生这两条，
+ * 于是 denied 分支永远进不去，403 落到通用错误卡 + 一个必然失败的重试按钮。
+ */
+const NOT_FOUND_MESSAGE = '风险事件不存在';
+const DENIED_MESSAGE = '无权限操作';
+
 const loadData = async () => {
   loading.value = true;
   error.value = '';
@@ -87,8 +96,8 @@ const loadData = async () => {
     await riskEventStore.fetchDetail(eventId.value);
   } catch (err) {
     const msg = err instanceof Error ? err.message : '事件加载失败';
-    if (msg === '风险事件不存在') notFound.value = true;
-    else if (msg === '无权查看该事件' || msg === '无权访问该场景') denied.value = true;
+    if (msg === NOT_FOUND_MESSAGE) notFound.value = true;
+    else if (msg === DENIED_MESSAGE) denied.value = true;
     else error.value = msg;
   } finally {
     loading.value = false;
@@ -116,6 +125,9 @@ const handleStatusChange = async () => {
   }
 };
 
+/** 折叠状态下最多先展示多少条输入特征（超出部分点「展开全部」） */
+const FEATURE_PREVIEW_LIMIT = 50;
+
 /** 输入特征键值对（只读；超宽特征折叠滚动） */
 const featureEntries = computed<Array<{ key: string; value: string }>>(() =>
   Object.entries(event.value?.raw_features ?? {}).map(([key, value]) => ({
@@ -124,7 +136,7 @@ const featureEntries = computed<Array<{ key: string; value: string }>>(() =>
   }))
 );
 const visibleFeatureEntries = computed(() =>
-  featuresExpanded.value ? featureEntries.value : featureEntries.value.slice(0, 50)
+  featuresExpanded.value ? featureEntries.value : featureEntries.value.slice(0, FEATURE_PREVIEW_LIMIT)
 );
 
 onMounted(loadData);
@@ -217,7 +229,7 @@ onMounted(loadData);
           </div>
         </div>
         <el-button
-          v-if="featureEntries.length > 50"
+          v-if="featureEntries.length > FEATURE_PREVIEW_LIMIT"
           size="small"
           plain
           class="event-detail__expand"

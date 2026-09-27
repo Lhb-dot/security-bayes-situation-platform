@@ -3,7 +3,7 @@
 对应 Service：RiskEventService（backend/app/services/risk_event_service.py）。
 处置状态机：PENDING → PROCESSING / RESOLVED；PROCESSING → RESOLVED（Service 强制校验）。
 """
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,7 @@ class RiskEventHandle(BaseModel):
     """处置风险事件（更新状态并写入处置记录）。"""
 
     new_status: RiskEventStatus = Field(..., description="目标处置状态")
-    comment: Optional[str] = Field(None, description="处置说明")
+    comment: str | None = Field(None, description="处置说明")
 
 
 class RiskEventComment(BaseModel):

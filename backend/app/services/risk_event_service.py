@@ -15,7 +15,6 @@
 5. 历史风险事件不得被无痕删除或自动改写（需求 5.2 访问控制第 4 条）→ 不提供删除。
 """
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
 
 from sqlalchemy import select
 
@@ -30,6 +29,7 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services import risk_view
 from app.services.constants import (
     DATASET_RISK_TYPES,
+    DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     RISK_EVENT_STATUS_PENDING,
     RISK_LEVEL_HIGH,
@@ -40,7 +40,6 @@ from app.services.constants import (
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
-    ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
 )
@@ -77,7 +76,8 @@ class RiskEventService(ServiceBase):
             if (
                 event.scenario_id != getattr(current_user, "scenario_id", None)
                 or dataset is None
-                or dataset.visibility not in ("platform", "company")
+                or dataset.visibility
+                not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
             ):
                 raise ServiceError(403, "无权限操作")
             return
@@ -114,7 +114,7 @@ class RiskEventService(ServiceBase):
 
     @staticmethod
     def _calc_fault_position(
-        dataset_logical_id: str, input_features: Optional[Dict]
+        dataset_logical_id: str, input_features: dict | None
     ) -> tuple:
         """计算航母甲板故障点坐标（需求 V3.0 §7.4.1）。
 
@@ -147,7 +147,7 @@ class RiskEventService(ServiceBase):
     def _build_description(
         dataset_logical_id: str,
         prediction_label: str,
-        input_features: Dict,
+        input_features: dict,
         risk_score: float,
     ) -> str:
         """生成风险事件解释文本（需求 V3.0 §5.7.2：结合场景特征生成有信息量的说明）。
@@ -269,7 +269,7 @@ class RiskEventService(ServiceBase):
         record: InferenceRecord,
         model: ModelVersion,
         dataset: Dataset,
-        risk_score: Optional[float],
+        risk_score: float | None,
     ) -> RiskEvent:
         """公开入口：根据推理结果生成风险事件（由 InferenceRecordService 调用）。
 
@@ -351,9 +351,9 @@ class RiskEventService(ServiceBase):
     def get_list(
         self,
         current_user,
-        scenario_id: Optional[int] = None,
-        status: Optional[str] = None,
-        risk_level: Optional[str] = None,
+        scenario_id: int | None = None,
+        status: str | None = None,
+        risk_level: str | None = None,
         include_hidden: bool = False,
         page: int = 1,
         page_size: int = 10,
@@ -394,7 +394,9 @@ class RiskEventService(ServiceBase):
                 raise ServiceError(403, "无权限操作")
             stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
                 RiskEvent.scenario_id == bound,
-                Dataset.visibility.in_(("platform", "company")),
+                Dataset.visibility.in_(
+                    (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                ),
             )
         else:
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
@@ -464,12 +466,13 @@ class RiskEventService(ServiceBase):
         current_user,
         event_id: int,
         new_status: str,
-        comment: Optional[str] = None,
+        comment: str | None = None,
     ):
         """更新风险事件处置状态，并写入处置记录（handling_record）。
 
-        状态流转：PENDING → PROCESSING → RESOLVED（由 RISK_EVENT_STATUS_TRANSITIONS 约束）。
-        USER 仅能处置本人事件；ADMIN 可处置全部。
+        状态流转由 RISK_EVENT_STATUS_TRANSITIONS 约束（需求 5.2）：PENDING 可直达
+        PROCESSING 或 RESOLVED，PROCESSING → RESOLVED，RESOLVED 为终态。
+        USER 仅能处置本人事件；ADMIN 可处置其数据边界内的事件。
         """
         self.require_login(current_user)
         event = self._get(event_id)

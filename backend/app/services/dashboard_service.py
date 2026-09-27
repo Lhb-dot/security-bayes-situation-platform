@@ -33,7 +33,7 @@ import os
 import threading
 import time
 from statistics import mean, median, pstdev
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 from sqlalchemy import func, select
 
@@ -56,6 +56,7 @@ from app.services.constants import (
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
     dataset_display_name_of,
+    is_risk_label,
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
     RISK_EVENT_STATUS_PENDING,
@@ -360,9 +361,18 @@ def _grouped_pairs(rows: list[list[str]], left_index: int | None, right_index: i
     return grouped
 
 
-def _label_is_risk(value: Any) -> bool:
-    """标签是否为正类（风险）。数据字典：0/normal/no/false 为负类。"""
-    return _clean(value).lower() not in {"", "?", "0", "normal", "no", "false", "none"}
+def _label_is_risk(logical_id: str | None, value: Any) -> bool:
+    """标签是否为正类（风险）—— 唯一口径来源是 ``constants.DATASET_POSITIVE_LABELS``。
+
+    需求文档 §6.4.1 明令禁止按标签字符串 / 取值大小 / 文件排列顺序自动推断正类，
+    因此这里**不再**使用「非 ``0/normal/no/false/none`` 即风险」的历史兜底规则
+    （该规则对未登记数据集是"猜"，属违规实现），改为把判定完全委托给
+    :func:`constants.is_risk_label`。未登记的数据集一律返回 ``False``（宁少报、不猜）；
+    ``logical_id`` 缺失时同样返回 ``False``。
+    """
+    if not logical_id:
+        return False
+    return is_risk_label(logical_id, _clean(value))
 
 
 def _risk_score(scores: list[float]) -> int:
@@ -371,7 +381,30 @@ def _risk_score(scores: list[float]) -> int:
 
 
 def _percent(part: int, total: int) -> float:
+    """占比（0~1 小数）；分母为 0 记 0.0。
+
+    0/0 在语义上是「无数据」而不是「零占比」，但本函数被**要求数值**的口径复用：
+    ``_risk_level_of_rate`` 判档（前端 risk_level 契约只有 high/medium/low 三档）、
+    平台总览 / 场景卡片的各风险占比（前端类型声明为 ``number``）。这些调用点
+    不能接受 None，故 ``_percent`` 保持返回 0.0；需要区分「无数据 / 零占比」
+    的字段改用 ``_percent_or_none``。
+    """
     return round(part / total, 4) if total else 0.0
+
+
+def _percent_or_none(part: int, total: int) -> float | None:
+    """占比（0~1 小数）；分母为 0 返回 ``None``（下发 null）。
+
+    用于「0/0 是未定义而非 0」的字段：数据集 risk_rate（文件缺失 / 空表）、
+    工频合格率（无 PowerFrequencyHz 数据）、同源冗余率（无文件）。
+
+    注意：前端 ``components/dashboard/dashFormat.ts`` 的 ``fmtPercent`` 用
+    ``Number(value)`` 判有限性，而 ``Number(null) === 0``，**null 仍会渲染成
+    「0.0%」**。要让「—」真正生效，需 F7 侧把 ``fmtPercent`` / ``fmtInt`` 改为
+    ``value === null || value === undefined → '—'``（跨区提案 B1-P1）。
+    本函数先把「未定义」这一事实如实下发，不伪造 0.0。
+    """
+    return round(part / total, 4) if total else None
 
 
 def _label_kind(counts: Counter) -> str:
@@ -470,7 +503,7 @@ def _component_matrix_rows(
         counts = []
         total = 0
         for logical_id, values in per_dataset.items():
-            positives = sum(1 for item in values if _label_is_risk(item))
+            positives = sum(1 for item in values if _label_is_risk(logical_id, item))
             counts.append(
                 {
                     "logical_id": logical_id,
@@ -812,11 +845,19 @@ class _DatasetReader:
                 tallied = None
             if tallied is not None:
                 rows, counter = tallied
-                risk = sum(count for value, count in counter.items() if _label_is_risk(value))
+                risk = sum(
+                    count
+                    for value, count in counter.items()
+                    if _label_is_risk(dataset.logical_id, value)
+                )
                 return rows, risk
 
         _, rows = self.rows(dataset)
-        return len(rows), sum(1 for value in _raw_values(rows, index) if _label_is_risk(value))
+        return len(rows), sum(
+            1
+            for value in _raw_values(rows, index)
+            if _label_is_risk(dataset.logical_id, value)
+        )
 
     def label_value_counts(self, dataset: Dataset) -> Counter:
         """标签列取值计数（已去引号、已剔除缺失值）。
@@ -883,7 +924,8 @@ class _DatasetReader:
             "is_risk_label": registered,
             "record_count": total,
             "risk_count": risk,
-            "risk_rate": _percent(risk, total),
+            # 空表 / 文件缺失时 0/0 是未定义，下发 null 而非误导性的 0.0
+            "risk_rate": _percent_or_none(risk, total),
             # ---- 以下为管理员总览新增字段（只增不改，上方旧字段全部保留）----
             "attribute_count": len(fields),
             "field_names": [field.get("name") for field in fields],
@@ -927,10 +969,10 @@ def _effective_groups(datasets: list[Dataset]) -> dict[str, list[Dataset]]:
     groups: dict[str, list[Dataset]] = defaultdict(list)
     for dataset in datasets:
         fingerprint = content_fingerprint(dataset)
-        if dataset.logical_id in CARRIER_LOGICAL_IDS or fingerprint in carrier_fingerprints:
-            key = CARRIER_GROUP_ID
-        else:
-            key = fingerprint
+        # 白名单成员（logical_id ∈ CARRIER_LOGICAL_IDS）的指纹必然已在
+        # carrier_fingerprints 中 —— 第一遍就是用同一批 datasets 算的，
+        # 因此这里只按指纹判族，不必再单独判一次 logical_id（恒真的死分支）。
+        key = CARRIER_GROUP_ID if fingerprint in carrier_fingerprints else fingerprint
         groups[key].append(dataset)
     return groups
 
@@ -1016,8 +1058,8 @@ def _daily_trend(events: list[RiskEvent], days: int = 7) -> list[dict[str, Any]]
 def _event_summary(
     events: list[RiskEvent],
     days: int = 7,
-    thresholds: Optional[dict] = None,
-    scenario_id: Optional[int] = None,
+    thresholds: dict | None = None,
+    scenario_id: int | None = None,
 ) -> dict[str, Any]:
     """风险事件汇总。
 
@@ -1057,7 +1099,7 @@ def _event_summary(
     }
 
 
-def _recent_event(event: RiskEvent, thresholds: Optional[dict] = None) -> dict[str, Any]:
+def _recent_event(event: RiskEvent, thresholds: dict | None = None) -> dict[str, Any]:
     data = row_to_dict(event)
     # risk_level 按查看者阈值重算（落库值是创建者视角）
     data["risk_level"] = risk_view.level_of(event, thresholds or {})
@@ -1514,7 +1556,8 @@ class DashboardService(ServiceBase):
                     "record_count": info["record_count"],
                     "risk_count": info["risk_count"],
                     "risk_rate": rate,
-                    "deviation": round(rate / scene_rate, 4) if scene_rate else None,
+                    # rate 为 None（该数据集空表 / 文件缺失）时偏离度无法计算
+                    "deviation": round(rate / scene_rate, 4) if rate is not None and scene_rate else None,
                     "registered": info["caliber_registered"],
                 }
             )
@@ -1577,24 +1620,35 @@ class DashboardService(ServiceBase):
             )
 
         device_buckets: dict[str, list[str]] = defaultdict(list)
+        # 每个设备/系统的正类计数：按**该数据集自己的**显式登记表判定（§6.4.1）
+        device_risk: dict[str, int] = defaultdict(int)
         issue_values: list[str] = []
         component_values: list[str] = []
         system_values: list[str] = []
         target_values: list[str] = []
+        fault_count = 0
         for _item, fields, rows in rep_columns:
             cmap = _field_index(fields)
             component_index = cmap.get("Component")
             target_index = cmap.get("Target_Event")
             for component, values in _grouped_pairs(rows, component_index, target_index).items():
                 device_buckets[component].extend(values)
+                device_risk[component] += sum(
+                    1 for value in values if _label_is_risk(_item.logical_id, value)
+                )
             issue_values.extend(_raw_values(rows, cmap.get("IssueType")))
             component_values.extend(_raw_values(rows, component_index))
             system_values.extend(_raw_values(rows, cmap.get("SystemName")))
             target_values.extend(_raw_values(rows, target_index))
+            fault_count += sum(
+                1
+                for value in _raw_values(rows, target_index)
+                if _label_is_risk(_item.logical_id, value)
+            )
 
         device_rates = []
         for component, values in device_buckets.items():
-            positives = sum(1 for value in values if _label_is_risk(value))
+            positives = device_risk[component]
             device_rates.append(
                 {
                     "value": component,
@@ -1604,7 +1658,6 @@ class DashboardService(ServiceBase):
                 }
             )
 
-        fault_count = sum(1 for value in target_values if _label_is_risk(value))
         return {
             "params": params,
             "fault_count": fault_count,
@@ -1669,7 +1722,8 @@ class DashboardService(ServiceBase):
                     "name": dataset_display_name_of(item),
                     "record_count": total,
                     "params": row_params,
-                    "frequency_pass_rate": _percent(passed, len(frequency_values)),
+                    # 无 PowerFrequencyHz 数据时合格率未定义 → null
+                    "frequency_pass_rate": _percent_or_none(passed, len(frequency_values)),
                     "packet_loss_mean": means.get("Sensor_Packet_Loss_%"),
                     "baseline_ok": not violations,
                     "violations": violations,
@@ -1715,7 +1769,9 @@ class DashboardService(ServiceBase):
         collision_index = cmap.get("Collision")
         distance_index = cmap.get("inter_dist_min")
         collision_values = _raw_values(rows, collision_index)
-        collision_count = sum(1 for value in collision_values if _label_is_risk(value))
+        collision_count = sum(
+            1 for value in collision_values if _label_is_risk(item.logical_id, value)
+        )
 
         distance_curve = []
         for step in range(1, 51):
@@ -1730,7 +1786,9 @@ class DashboardService(ServiceBase):
                     continue
                 value = _num(row[distance_index])
                 if value is not None:
-                    paired.append((_label_is_risk(row[collision_index]), value))
+                    paired.append(
+                        (_label_is_risk(item.logical_id, row[collision_index]), value)
+                    )
 
         comparison = {}
         for label, want_risk in (("collision", True), ("normal", False)):
@@ -1848,8 +1906,9 @@ class DashboardService(ServiceBase):
         return {
             "file_count": file_count,
             "effective_group_count": effective_group_count,
+            # 无文件时冗余率未定义 → null，避免与真实的「零冗余」混淆
             "redundancy_rate": (
-                round(1 - effective_group_count / file_count, 4) if file_count else 0.0
+                round(1 - effective_group_count / file_count, 4) if file_count else None
             ),
             "raw_samples": raw_samples,
             "deduped_samples": deduped_samples,
@@ -1960,7 +2019,10 @@ class DashboardService(ServiceBase):
         thresholds = risk_view.load_thresholds(self.db, current_user)
         summary = _event_summary(events, thresholds=thresholds, scenario_id=scenario_id)
 
-        dataset = self.db.scalar(
+        # 一次取回该场景「当前账号可见」的数据集列表：既取首个作为代表数据集，也作为
+        # 地质工作台的同源兄弟集合。不用 dataset.scenario.datasets —— 那条 relationship
+        # 绕过可见性收窄，会把他人 personal 数据集元信息泄漏进 dataset_prior。
+        visible_datasets = self.db.scalars(
             select(Dataset)
             .where(
                 Dataset.scenario_id == scenario_id,
@@ -1968,7 +2030,8 @@ class DashboardService(ServiceBase):
                 Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
             )
             .order_by(Dataset.id)
-        )
+        ).all()
+        dataset = visible_datasets[0] if visible_datasets else None
         risk_type = events[0].risk_type if events else (DATASET_RISK_TYPES.get(dataset.logical_id) if dataset else None)
         key = _scenario_key(scenario.code, risk_type)
 
@@ -1994,7 +2057,7 @@ class DashboardService(ServiceBase):
         elif key == "flight_deck":
             data.update(self._flight_workspace(events))
         elif key == "geological":
-            data.update(self._geological_workspace(events, dataset))
+            data.update(self._geological_workspace(events, dataset, visible_datasets))
         return ok(data=data)
 
     def _activity_trend(self, current_user, dataset: Dataset | None) -> list[dict[str, Any]]:
@@ -2116,7 +2179,9 @@ class DashboardService(ServiceBase):
         }
 
     @classmethod
-    def _geological_workspace(cls, events: list[RiskEvent], dataset: Dataset | None) -> dict[str, Any]:
+    def _geological_workspace(
+        cls, events: list[RiskEvent], dataset: Dataset | None, siblings: list[Dataset]
+    ) -> dict[str, Any]:
         """地质工作台：因子贡献、触发因素、坡度档位风险排行、静态先验画像。"""
         # 因子贡献：告警样本的因子均值做 0-100 归一
         factor_means: list[dict[str, Any]] = []
@@ -2156,15 +2221,8 @@ class DashboardService(ServiceBase):
         prior = []
         if dataset is not None:
             reader = _DatasetReader()
-            siblings = (
-                [
-                    item
-                    for item in dataset.scenario.datasets
-                    if item.status == DATASET_STATUS_ACTIVE
-                ]
-                if getattr(dataset, "scenario", None) is not None
-                else []
-            )
+            # siblings 由调用方传入，已按 status + visibility 收窄（与代表数据集同口径）；
+            # 不要改用 dataset.scenario.datasets，那条 relationship 会绕过可见性过滤。
             # 只保留「标签字段为风险标签」的数据集：dis_global_catalog 的标签是 landslide_size（灾害规模），
             # 若计入会让「先验风险占比」出现恒 100% 的无意义值。
             prior = [

@@ -18,11 +18,13 @@ from app.models.user_ai_setting import UserAISetting
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     EVALUATION_AUDIENCE_MANAGEMENT,
     EVALUATION_AUDIENCE_USER,
     dataset_display_name_of,
     evaluation_audience,
+    MODEL_STATUS_PUBLISHED,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
@@ -274,22 +276,42 @@ class ModelEvaluationService(ServiceBase):
             raise ServiceError(404, "模型版本不存在")
         role = getattr(current_user, "role", None)
         dataset = self.db.get(Dataset, model.dataset_id)
+        # 可见性分档：平台数据（platform）全员可见；公司数据（company）仅场景内可见。
+        shared_visibility = (
+            dataset is not None
+            and dataset.visibility
+            in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+        )
+        in_own_scenario = model.scenario_id == getattr(current_user, "scenario_id", None)
         if role == ROLE_SUPER_ADMIN:
-            allowed = model.trained_by == getattr(current_user, "id", None) and dataset is not None and dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            allowed = (
+                model.trained_by == getattr(current_user, "id", None)
+                and dataset is not None
+                and dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
         elif role == ROLE_SCENARIO_ADMIN:
             trainer = self.db.get(AppUser, model.trained_by)
+            # 场景管理员看不到「超管训练但尚未发布」的模型（未定稿的中间产物）
+            draft_by_super_admin = (
+                trainer is not None
+                and trainer.role == ROLE_SUPER_ADMIN
+                and model.status != MODEL_STATUS_PUBLISHED
+            )
             allowed = (
-                model.scenario_id == getattr(current_user, "scenario_id", None)
-                and dataset is not None
-                and dataset.visibility in ("platform", "company")
-                and not (
-                    trainer is not None
-                    and trainer.role == ROLE_SUPER_ADMIN
-                    and model.status != "PUBLISHED"
-                )
+                in_own_scenario
+                and shared_visibility
+                and not draft_by_super_admin
             )
         else:
-            allowed = model.status in USER_VISIBLE_MODEL_STATUSES and model.scenario_id == getattr(current_user, "scenario_id", None) and dataset is not None and (dataset.visibility in ("platform", "company") or dataset.uploaded_by == getattr(current_user, "id", None))
+            allowed = (
+                model.status in USER_VISIBLE_MODEL_STATUSES
+                and in_own_scenario
+                and dataset is not None
+                and (
+                    shared_visibility
+                    or dataset.uploaded_by == getattr(current_user, "id", None)
+                )
+            )
         if not allowed:
             raise ServiceError(403, "无权限查看该模型评价")
         return model

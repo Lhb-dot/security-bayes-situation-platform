@@ -3,12 +3,10 @@
 对应 Service：UserService（backend/app/services/user_service.py）。
 权限（需求 6.5.2）：账号管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin, require_scenario_admin
+from app.api.deps import get_current_user, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -35,16 +33,16 @@ def list_users(
     current_user: AppUser = Depends(require_scenario_admin),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
-    keyword: Optional[str] = Query(None, description="用户名模糊搜索"),
-    role: Optional[str] = Query(
+    keyword: str | None = Query(None, description="用户名模糊搜索"),
+    role: str | None = Query(
         None,
         description="按角色筛选：SUPER_ADMIN / SCENARIO_ADMIN / SCENARIO_USER",
     ),
-    status: Optional[str] = Query(
+    status: str | None = Query(
         None,
         description="按启用状态筛选：ENABLED / DISABLED",
     ),
-    scenario_id: Optional[int] = Query(None, description="按绑定场景筛选"),
+    scenario_id: int | None = Query(None, description="按绑定场景筛选"),
 ):
     return unwrap(
         UserService(db).get_list(

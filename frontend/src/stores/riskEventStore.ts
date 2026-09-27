@@ -9,7 +9,14 @@ import { getRiskEventDetail, getRiskEventList, updateRiskEventStatus } from '@/a
 import { mapRiskEvent } from '@/api/situationApi';
 import type { RiskEvent, ScenarioId } from '@/types/security';
 
-const STATUS_VALUE: Record<string, string> = {
+/**
+ * 前端展示口径（中文）→ 后端处置枚举。
+ *
+ * 用 `Record<RiskEvent['status'], string>` 而不是 `Record<string, string>` 声明：
+ * `RiskEvent['status']` 的取值一旦增删，这里会直接编译报错，不会静默漏掉一种状态
+ * （原写法还带 `?? status` 兜底，在穷举后是不可达分支）。
+ */
+const STATUS_VALUE: Record<RiskEvent['status'], string> = {
   '待处置': 'PENDING',
   '处理中': 'PROCESSING',
   '已处置': 'RESOLVED',
@@ -49,7 +56,10 @@ export const useRiskEventStore = defineStore('riskEvent', {
       this.detail = null;
     },
     async updateStatus(eventId: string, status: RiskEvent['status']): Promise<void> {
-      const newStatus = (STATUS_VALUE[status] ?? status) as RiskEvent['status'];
+      // ⚠️ 后端 handle 接口收的是英文枚举，但 updateRiskEventStatus 的参数类型声明成了
+      // RiskEvent['status']（中文口径）—— 这个断言是为 api 层的错误类型打的补丁，
+      // 修好 riskEventApi.ts 的参数类型后应当删掉（见报告「跨区提案」）。
+      const newStatus = STATUS_VALUE[status] as RiskEvent['status'];
       const raw = await updateRiskEventStatus(eventId, { new_status: newStatus });
       this.detail = mapRiskEvent(raw as unknown as Record<string, unknown>);
       const target = this.events.find((e) => e.event_id === eventId);

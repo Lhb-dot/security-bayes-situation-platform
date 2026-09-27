@@ -19,17 +19,16 @@ declare module 'vue-router' {
      * 导致 /risk 的注释与守卫行为不一致（导航隐藏但手敲地址能进）。
      */
     roles?: UserRole[];
-    /** 普通用户隐藏导航入口（仅入口隐藏，不影响路由注册） */
-    hiddenForUser?: boolean;
   }
 }
 
-/** 角色落地页：
+/**
+ * 角色落地页（全站唯一实现，router/index.ts 的 `/` redirect 复用同一函数）：
  * - SUPER_ADMIN（最外层）→ 全局总览 /overview（监控所有场景）
  * - SCENARIO_ADMIN（场景管理员）→ 自己场景详情页
  * - SCENARIO_USER（场景用户）→ 自己场景详情页
  */
-const roleLanding = (user: UserAccount): string => {
+export const roleLanding = (user: UserAccount): string => {
   if (user.role === 'SUPER_ADMIN') return '/overview';
   const bound = user.scenario_code;
   if (bound) return `/scenarios/${bound}/dashboard`;

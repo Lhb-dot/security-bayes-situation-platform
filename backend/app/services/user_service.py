@@ -12,7 +12,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import joinedload
 
 from app.models.app_user import AppUser
@@ -20,6 +20,7 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    PASSWORD_MAX_LEN,
     PASSWORD_MIN_LEN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
@@ -31,7 +32,6 @@ from app.services.constants import (
     USERNAME_MAX_LEN,
 )
 from app.utils.common import (
-    get_logger,
     hash_password,
     row_to_dict,
     validate_enum,
@@ -39,8 +39,6 @@ from app.utils.common import (
     validate_required,
     verify_password,
 )
-
-logger = get_logger("user")
 
 
 class UserService(ServiceBase):
@@ -176,7 +174,7 @@ class UserService(ServiceBase):
         if err:
             raise ServiceError(400, err)
         # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
-        err = validate_length(password, "password", 128, min_len=PASSWORD_MIN_LEN)
+        err = validate_length(password, "password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN)
         if err:
             raise ServiceError(400, err)
         err = validate_enum(role, ROLES, "role")
@@ -272,7 +270,7 @@ class UserService(ServiceBase):
         if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "无权限操作")
         err = validate_length(
-            new_password, "new_password", 128, min_len=PASSWORD_MIN_LEN
+            new_password, "new_password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN
         )
         if err:
             raise ServiceError(400, err)
@@ -280,15 +278,17 @@ class UserService(ServiceBase):
         if old_password is not None:
             if not verify_password(old_password, user.password_hash):
                 raise ServiceError(400, "旧密码不正确")
+        now = datetime.now(timezone.utc)
         user.password_hash = hash_password(new_password)
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = now
         # Password changes invalidate every previously issued session for this account.
         from app.models.auth_session import AuthSession
-        now = datetime.now(timezone.utc)
-        self.db.query(AuthSession).filter(
-            AuthSession.user_id == user.id,
-            AuthSession.revoked_at.is_(None),
-        ).update({AuthSession.revoked_at: now}, synchronize_session=False)
+        self.db.execute(
+            update(AuthSession)
+            .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+            .values(revoked_at=now),
+            execution_options={"synchronize_session": False},
+        )
         self.commit()
         return ok(message="密码修改成功")
 

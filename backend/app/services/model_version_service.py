@@ -40,10 +40,11 @@ from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
     DATASET_POSITIVE_LABELS,
     dataset_display_name_of,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    EVALUATION_AUDIENCE_USER,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
-    MODEL_STATUS_OFFLINE,
     MODEL_STATUS_PUBLISHED,
     MODEL_STATUS_TRAINING,
     MODEL_STATUS_TRANSITIONS,
@@ -65,6 +66,14 @@ logger = get_logger("model_version")
 # 顶栏任务面板只需要「最近完成且没看过的」，取最近 20 个足够，也避免把几十个
 # 模型的完整 evaluation_metrics 一次性拉下来。
 TRAINING_FINISHED_LIMIT = 20
+
+#: 普通用户可见的质量指标键；管理级角色返回全量 evaluation_metrics。
+#: 与 model_evaluation_service.public_model_attributes 保持同一口径。
+_PUBLIC_METRIC_KEYS = ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+
+#: 管理级角色（场景管理员）可训练 / 可查看的数据集可见性口径：平台 + 公司。
+#: 与 inference_record_service._INFERABLE_VISIBILITIES 同一口径。
+_MANAGED_VISIBILITIES = (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
 
 
 class ModelVersionService(ServiceBase):
@@ -88,7 +97,7 @@ class ModelVersionService(ServiceBase):
         elif role == ROLE_SCENARIO_ADMIN:
             if (
                 model.scenario_id != getattr(current_user, "scenario_id", None)
-                or dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                or dataset.visibility not in _MANAGED_VISIBILITIES
             ):
                 raise ServiceError(403, "无权限操作")
         else:
@@ -118,10 +127,12 @@ class ModelVersionService(ServiceBase):
 
         # 状态与算法元数据不随模型冻结，读取时对齐实时值，避免下发陈旧描述。
         attributes = refresh_model_attributes(model)
+        quality_metrics = attributes.get("quality_metrics") or {}
         is_management = getattr(current_user, "role", None) in (
             ROLE_SUPER_ADMIN,
             ROLE_SCENARIO_ADMIN,
         )
+        role_key = EVALUATION_AUDIENCE_MANAGEMENT if is_management else EVALUATION_AUDIENCE_USER
         data.update(
             {
                 "model_version_id": model.id,
@@ -147,17 +158,17 @@ class ModelVersionService(ServiceBase):
                     "dataset": attributes.get("dataset"),
                     "algorithm": (attributes.get("algorithm") or {}) | {"parameter_schema": None},
                     "quality_metrics": {
-                        key: (attributes.get("quality_metrics") or {}).get(key)
-                        for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
-                        if key in (attributes.get("quality_metrics") or {})
+                        key: quality_metrics.get(key)
+                        for key in _PUBLIC_METRIC_KEYS
+                        if key in quality_metrics
                     },
                     "feature_profile": [],
                     "evaluation_scope": attributes.get("evaluation_scope"),
                 },
                 "model_evaluation_available": evaluation_is_current(
-                    (model.ai_evaluation or {}).get("management" if is_management else "user") or {},
+                    (model.ai_evaluation or {}).get(role_key) or {},
                     attributes,
-                    "management" if is_management else "user",
+                    role_key,
                 ),
             }
         )
@@ -170,7 +181,7 @@ class ModelVersionService(ServiceBase):
             return metrics
         return {
             key: metrics[key]
-            for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+            for key in _PUBLIC_METRIC_KEYS
             if key in metrics
         }
 
@@ -217,11 +228,8 @@ class ModelVersionService(ServiceBase):
         for field in schema:
             expect = field.get("type")
             got = actual_type.get(field["name"])
-            if expect == "numeric" and got != "numeric":
-                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
-            if expect == "enum" and got != "enum":
-                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
-            if expect == "string" and got != "string":
+            # 注册类型只可能取 numeric / enum / string（见 build_fields_schema）
+            if expect in ("numeric", "enum", "string") and got != expect:
                 return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
         return None
 
@@ -274,7 +282,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(403, "系统管理员只能使用平台数据集训练模型")
         if (
             getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
-            and dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+            and dataset.visibility not in _MANAGED_VISIBILITIES
         ):
             raise ServiceError(403, "场景管理员不能使用个人数据集训练模型")
 
@@ -640,7 +648,7 @@ class ModelVersionService(ServiceBase):
                 .join(AppUser, AppUser.id == ModelVersion.trained_by)
                 .where(
                     ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
+                    Dataset.visibility.in_(_MANAGED_VISIBILITIES),
                     or_(
                         AppUser.role != ROLE_SUPER_ADMIN,
                         ModelVersion.status == MODEL_STATUS_PUBLISHED,
@@ -659,7 +667,7 @@ class ModelVersionService(ServiceBase):
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
             stmt = stmt.where(
                 ModelVersion.scenario_id == bound,
-                Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY))
+                Dataset.visibility.in_(_MANAGED_VISIBILITIES)
                 | ((Dataset.visibility == DATASET_VISIBILITY_PERSONAL) & (Dataset.uploaded_by == current_user.id)),
             )
         if scenario_id is not None:
@@ -689,7 +697,7 @@ class ModelVersionService(ServiceBase):
             return (
                 model.scenario_id == getattr(current_user, "scenario_id", None)
                 and bool(dataset)
-                and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                and dataset.visibility in _MANAGED_VISIBILITIES
                 and not (
                     trainer
                     and trainer.role == ROLE_SUPER_ADMIN
@@ -702,7 +710,7 @@ class ModelVersionService(ServiceBase):
             and model.status in USER_VISIBLE_MODEL_STATUSES
             and bool(dataset)
             and (
-                dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                dataset.visibility in _MANAGED_VISIBILITIES
                 or (
                     dataset.visibility == DATASET_VISIBILITY_PERSONAL
                     and dataset.uploaded_by == getattr(current_user, "id", None)

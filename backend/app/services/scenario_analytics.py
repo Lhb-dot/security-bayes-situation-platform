@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from app.services.constants import (
@@ -20,12 +21,36 @@ from app.services.constants import (
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
+    is_risk_label,
 )
 
 
 def _col_map(fields: List[Dict]) -> Dict[str, int]:
     """字段名 → 列号映射。"""
     return {f["name"]: i for i, f in enumerate(fields)}
+
+
+def _pick_idx(cmap: Dict[str, int], *names: str) -> Optional[int]:
+    """按候选名依次取第一个存在的列号；候选名都不存在时返回 None。
+
+    各场景洞察原先各自定义了一份同名的闭包 ``idx``，此处收敛为单一实现。
+    """
+    for name in names:
+        if name in cmap:
+            return cmap[name]
+    return None
+
+
+def _label_is_risk(logical_id: Optional[str], value: str) -> bool:
+    """标签是否正类（风险）——只认显式登记表。
+
+    口径唯一真源是 ``constants.DATASET_POSITIVE_LABELS``。需求 6.4.1 明令禁止按标签字符串 /
+    取值大小 / 文件排列顺序自动推断正类，因此未登记的数据集（logical_id 缺失或未登记）
+    一律返回 False：宁可少报异常样本，也不猜（异常样本数会由 API 的 logical_id 字段自证口径）。
+    """
+    if not logical_id:
+        return False
+    return is_risk_label(logical_id, value)
 
 
 _INTERVAL_RE = re.compile(r"[\[(]\s*([-0-9.]+)\s*[-~,]\s*([-0-9.]+)\s*[\])]")
@@ -61,8 +86,6 @@ def _col(rows: List[List[str]], idx: int) -> List[float]:
 
 
 def _top_counts(values: List[str], top_n: int = 10) -> List[Dict[str, Any]]:
-    from collections import Counter
-
     cnt = Counter(v for v in values if v not in ("", "?"))
     return [{"value": k, "count": c} for k, c in cnt.most_common(top_n)]
 
@@ -70,21 +93,21 @@ def _top_counts(values: List[str], top_n: int = 10) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # 网络安全（§8.1）：窗口统计 / 端口会话聚合 / 流量分布
 # ---------------------------------------------------------------------------
-def network_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any]:
-    """网络场景洞察：核心指标、TOP 端口、协议分布、流量段分布。"""
+def network_insights(
+    fields: List[Dict], rows: List[List[str]], logical_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """网络场景洞察：核心指标、TOP 端口、协议分布、流量段分布。
+
+    logical_id：数据集登记编码，必须由调用方传入（API 层传 dataset.logical_id）。
+    未传入时正类判定一律为否，异常样本数恒为 0——不做任何自动推断（需求 6.4.1）。
+    """
     cmap = _col_map(fields)
 
-    def idx(*names):
-        for n in names:
-            if n in cmap:
-                return cmap[n]
-        return None
-
-    i_dport = idx("L4_DST_PORT")
-    i_proto = idx("PROTOCOL")
-    i_in = idx("IN_BYTES")
-    i_retrans_in = idx("RETRANSMITTED_IN_BYTES")
-    i_label = idx("Label", "class")
+    i_dport = _pick_idx(cmap, "L4_DST_PORT")
+    i_proto = _pick_idx(cmap, "PROTOCOL")
+    i_in = _pick_idx(cmap, "IN_BYTES")
+    i_retrans_in = _pick_idx(cmap, "RETRANSMITTED_IN_BYTES")
+    i_label = _pick_idx(cmap, "Label", "class")
 
     total = len(rows)
     ports = _top_counts(
@@ -112,13 +135,14 @@ def network_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any
         else:
             segments[4] += 1
 
-    # 异常占比：标签列非 0（normal）视为异常样本（若有标签列）
+    # 异常占比：正类判定只走显式登记表（DATASET_POSITIVE_LABELS，见 _label_is_risk），
+    # 不再按标签字符串「非 0/normal 即异常」自动推断（需求 6.4.1）；
+    # 未登记的数据集不计入异常（宁少报，不推断）。
     anomaly = 0
     if i_label is not None:
         for r in rows:
             if i_label < len(r) and r[i_label] not in ("", "?"):
-                v = r[i_label]
-                if v not in ("0", "normal"):
+                if _label_is_risk(logical_id, r[i_label]):
                     anomaly += 1
 
     return {
@@ -150,17 +174,17 @@ _POWER_LIMITS = {
 def power_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any]:
     """电力场景洞察：电参量均值/越限、设备健康度、IssueType 分布。"""
     cmap = _col_map(fields)
-
-    def idx(name):
-        return cmap.get(name)
-
-    i_component = idx("Component")
-    i_issue = idx("IssueType")
+    i_component = _pick_idx(cmap, "Component")
+    i_issue = _pick_idx(cmap, "IssueType")
+    # (参量名, 下限, 上限, 列号)：列号在行循环外算一次，避免每行重复查列号
+    limit_cols = [
+        (name, lo, hi, _pick_idx(cmap, name))
+        for name, (lo, hi) in _POWER_LIMITS.items()
+    ]
 
     # 各电参量统计 + 越限计数
     params = {}
-    for name, (lo, hi) in _POWER_LIMITS.items():
-        cidx = idx(name)
+    for name, lo, hi, cidx in limit_cols:
         vals = _col(rows, cidx) if cidx is not None else []
         if vals:
             over = sum(1 for v in vals if v > hi)
@@ -182,8 +206,7 @@ def power_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any]:
                 continue
             dev = device_viol.setdefault(comp, {"total": 0, "violations": 0})
             dev["total"] += 1
-            for name, (lo, hi) in _POWER_LIMITS.items():
-                cidx = idx(name)
+            for _, lo, hi, cidx in limit_cols:
                 if cidx is None or cidx >= len(r):
                     continue
                 try:
@@ -247,22 +270,22 @@ def geological_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, 
 # ---------------------------------------------------------------------------
 # 航母甲板（§8.4）：轨迹时序特征 / 碰撞风险评分
 # ---------------------------------------------------------------------------
+#: 碰撞风险占位公式的参数：间距归一分母（m）、接近率归一分母（m/s）、两项权重
+_COLLISION_DIST_SCALE = 100.0
+_COLLISION_RATE_SCALE = 10.0
+_COLLISION_WEIGHT_DIST = 0.6
+_COLLISION_WEIGHT_RATE = 0.4
+
+
 def carrier_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any]:
     """航母甲板场景洞察：KPI（最小间距/接近率/总航程）、间距序列、方向角统计。"""
     cmap = _col_map(fields)
-
-    def idx(*names):
-        for n in names:
-            if n in cmap:
-                return cmap[n]
-        return None
-
-    i_min = idx("inter_dist_min")
-    i_change_mean = idx("dist_change_mean_step", "dist_change_mean")
-    i_plane1 = idx("Plane1_dir_mean_deg")
-    i_plane2 = idx("Plane2_dir_mean_deg")
-    i_total1 = idx("Plane1_total_distance")
-    i_total2 = idx("Plane2_total_distance")
+    i_min = _pick_idx(cmap, "inter_dist_min")
+    i_change_mean = _pick_idx(cmap, "dist_change_mean_step", "dist_change_mean")
+    i_plane1 = _pick_idx(cmap, "Plane1_dir_mean_deg")
+    i_plane2 = _pick_idx(cmap, "Plane2_dir_mean_deg")
+    i_total1 = _pick_idx(cmap, "Plane1_total_distance")
+    i_total2 = _pick_idx(cmap, "Plane2_total_distance")
 
     min_dists = _col(rows, i_min) if i_min is not None else []
     changes = _col(rows, i_change_mean) if i_change_mean is not None else []
@@ -277,9 +300,12 @@ def carrier_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any
     # 碰撞风险评分（§8.4：最小间距越小、接近率越高 → 分越高，0-100 占位公式）
     score = 0
     if min_dist is not None and approach_rate is not None:
-        dist_part = max(0.0, min(1.0, (100.0 - min_dist) / 100.0))
-        rate_part = max(0.0, min(1.0, approach_rate / 10.0))
-        score = round((0.6 * dist_part + 0.4 * rate_part) * 100, 1)
+        dist_part = max(0.0, min(1.0, (_COLLISION_DIST_SCALE - min_dist) / _COLLISION_DIST_SCALE))
+        rate_part = max(0.0, min(1.0, approach_rate / _COLLISION_RATE_SCALE))
+        score = round(
+            (_COLLISION_WEIGHT_DIST * dist_part + _COLLISION_WEIGHT_RATE * rate_part) * 100,
+            1,
+        )
 
     return {
         "min_inter_distance": min_dist,
@@ -308,11 +334,21 @@ def _angle_stats(vals: List[float]) -> Dict[str, Any]:
 # 统一入口：按场景分发（供 API 层调用）
 # ---------------------------------------------------------------------------
 def compute_scenario_insights(
-    risk_type: str, fields: List[Dict], rows: List[List[str]]
+    risk_type: str,
+    fields: List[Dict],
+    rows: List[List[str]],
+    logical_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """按场景风险类型分发到各场景计算函数。未知场景返回空结构。"""
+    """按场景风险类型分发到各场景计算函数。未知场景返回空结构。
+
+    logical_id 为数据集登记编码，透传给需要判定正类的场景洞察（当前仅网络场景），
+    使正类口径唯一来自 ``constants.DATASET_POSITIVE_LABELS``。
+    """
     if risk_type == RISK_TYPE_NETWORK:
-        return {"scenario": "network", **network_insights(fields, rows)}
+        return {
+            "scenario": "network",
+            **network_insights(fields, rows, logical_id),
+        }
     if risk_type == RISK_TYPE_POWER:
         return {"scenario": "power", **power_insights(fields, rows)}
     if risk_type == RISK_TYPE_GEOLOGICAL:

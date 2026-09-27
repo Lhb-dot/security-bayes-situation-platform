@@ -39,6 +39,9 @@ const dots = computed(() =>
       cx: Math.round((PLOT_X + (Number(point.x) / props.domain) * PLOT_W) * 10) / 10,
       cy: Math.round((PLOT_Y + (Number(point.y) / props.domain) * PLOT_H) * 10) / 10,
       fill: color(point.risk_score),
+      // risk_score 为 null 时 fmtNum 会把 Number(null)=0 渲染成「0.00」，与「无风险分」混淆；
+      // 这里与 color() 的分色口径分开：颜色仍按 0 分兜底，文案则如实显示「—」。
+      scoreText: point.risk_score === null ? '—' : fmtNum(point.risk_score, 2),
     })),
 );
 </script>
@@ -56,7 +59,7 @@ const dots = computed(() =>
               :x2="PLOT_X + PLOT_W" :y2="PLOT_Y + (PLOT_H / 4) * index" />
       </g>
       <circle v-for="dot in dots" :key="dot.event_id" :cx="dot.cx" :cy="dot.cy" r="5" :fill="dot.fill" opacity=".82">
-        <title>事件 #{{ dot.event_id }} · 风险分 {{ fmtNum(dot.risk_score, 2) }}</title>
+        <title>事件 #{{ dot.event_id }} · 风险分 {{ dot.scoreText }}</title>
       </circle>
       <text :x="PLOT_X" :y="PLOT_Y + PLOT_H + 20" fill="rgba(220,234,255,.5)" font-size="9">坐标基准 0-{{ domain }}</text>
     </svg>

@@ -189,6 +189,18 @@ def _purge_locked() -> None:
         _jobs.pop(job.id, None)
 
 
+def _update_job(job: "BatchJob", **fields: Any) -> None:
+    """在 _jobs_lock 内更新任务字段。
+
+    读线程（get_job / list_jobs）是持锁遍历字段的，写线程不加锁就会让前端看到
+    「status 已 DONE、计数还是上一轮」这类半更新快照。锁只覆盖赋值，不覆盖逐条
+    研判本身，所以不会阻塞进度查询。
+    """
+    with _jobs_lock:
+        for key, value in fields.items():
+            setattr(job, key, value)
+
+
 def _execute(job_id: str) -> None:
     """在工作线程里独立开一个会话执行批量研判（请求会话已随响应关闭）。"""
     from app.db import SessionLocal
@@ -199,13 +211,16 @@ def _execute(job_id: str) -> None:
         job = _jobs.get(job_id)
     if job is None:
         return
-    job.status = STATUS_RUNNING
+    _update_job(job, status=STATUS_RUNNING)
 
     def on_progress(processed: int, succeeded: int, failed: int, risk_count: int) -> None:
-        job.processed = processed
-        job.succeeded = succeeded
-        job.failed = failed
-        job.risk_count = risk_count
+        _update_job(
+            job,
+            processed=processed,
+            succeeded=succeeded,
+            failed=failed,
+            risk_count=risk_count,
+        )
 
     db = SessionLocal()
     try:
@@ -220,16 +235,18 @@ def _execute(job_id: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001 - 后台任务：失败写进任务表
         db.rollback()
-        job.status = STATUS_FAILED
-        job.error = str(exc)
+        _update_job(job, status=STATUS_FAILED, error=str(exc))
         logger.exception("批量研判任务 %s 失败", job_id)
     else:
-        job.items = summary["items"]
-        job.succeeded = summary["succeeded"]
-        job.failed = summary["failed"]
-        job.risk_count = summary["risk_count"]
-        job.processed = job.total
-        job.status = STATUS_DONE
+        _update_job(
+            job,
+            items=summary["items"],
+            succeeded=summary["succeeded"],
+            failed=summary["failed"],
+            risk_count=summary["risk_count"],
+            processed=job.total,
+            status=STATUS_DONE,
+        )
         logger.info(
             "批量研判任务 %s 完成：成功 %s 条、风险 %s 条、失败 %s 条",
             job_id,
@@ -238,9 +255,8 @@ def _execute(job_id: str) -> None:
             job.failed,
         )
     finally:
-        job.finished_at = time.time()
         # 明细不再需要，及时释放
-        job.samples = []
+        _update_job(job, finished_at=time.time(), samples=[])
         db.close()
 
 

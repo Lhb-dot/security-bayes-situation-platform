@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';
 import type { UserRole } from '@/types/security';
-import { setupRouterGuards } from './guards';
+import { roleLanding, setupRouterGuards } from './guards';
 
 // 角色白名单常量。写成 UserRole[] 而不是内联数组字面量：
 // routes 的类型是独立推断的，内联字面量会退化成 string[]，传给 createRouter 时报类型错。
@@ -17,14 +17,12 @@ const routes = [
   },
   {
     path: '/',
-    // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；异常无场景账号 → 场景中心
+    // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；异常无场景账号 → 场景中心。
+    // 具体规则只有一份实现（guards.ts 的 roleLanding），此处复用，避免两份副本各自漂移。
+    // 未登录时同样先落到场景中心，再由守卫改写成 /login?redirect=...
     redirect: () => {
       const user = useUserStore().currentUser;
-      const role = user?.role;
-      if (role === 'SUPER_ADMIN') return '/overview';
-      const bound = user?.scenario_code;
-      if (bound) return `/scenarios/${bound}/dashboard`;
-      return '/scenarios';
+      return user ? roleLanding(user) : '/scenarios';
     },
     meta: { title: '首页' },
   },
@@ -49,7 +47,7 @@ const routes = [
     name: '管理员首页',
     component: () => import('@/views/Home/dashboard/DashboardHomeView.vue'),
     // 首页按角色分发：最外层管理员=平台总览；场景管理员=数据画像；场景用户=我的工作台
-    meta: { title: '平台运行总览', roles: SUPER_ADMIN_ROLES, hiddenForUser: true },
+    meta: { title: '平台运行总览', roles: SUPER_ADMIN_ROLES },
   },
   {
     path: '/scenarios',

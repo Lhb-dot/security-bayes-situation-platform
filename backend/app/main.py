@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.legacy_model_routes import router as legacy_model_router
 from app.api.v1 import api_router
-from app.paths import BACKEND_ROOT, PROJECT_ROOT
+from app.paths import PROJECT_ROOT
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,15 @@ class SPAStaticFiles(StaticFiles):
 
 def _warm_dataset_caches_async() -> None:
     """Warm ARFF caches after startup without delaying the first response."""
-    if os.getenv("WARM_DATASET_CACHES", "1") != "1" or "pytest" in sys.modules:
+    # 测试进程不预热：``running_under_test_runner()`` 覆盖 ``python -m unittest``
+    # （``"pytest" in sys.modules`` 覆盖不到它），与其余 5 个 runner 的判定口径一致。
+    from app.utils.common import running_under_test_runner
+
+    if (
+        os.getenv("WARM_DATASET_CACHES", "1") != "1"
+        or "pytest" in sys.modules
+        or running_under_test_runner()
+    ):
         return
 
     def warm() -> None:

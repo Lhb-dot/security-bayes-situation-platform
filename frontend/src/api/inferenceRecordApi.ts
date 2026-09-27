@@ -174,16 +174,6 @@ export type BatchInferenceJobBrief = Omit<BatchInferenceJob, 'result'>;
 export const listInferenceBatchJobs = async (): Promise<BatchInferenceJobBrief[]> =>
   unwrapData(await request.get('/api/v1/inference-records/predict-batch/jobs'));
 
-/** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */
-export const getInferenceRecordList = async (params?: {
-  model_version_id?: string;
-  page?: number;
-  page_size?: number;
-}): Promise<InferenceRecord[]> => {
-  const data = await unwrapData(await request.get('/api/v1/inference-records', { params }));
-  return data.items ?? [];
-};
-
 /** 推理记录分页列表（带 total，供列表页翻页用；后端分页结构与 getInferenceRecordList 同一接口） */
 export interface InferenceRecordPage {
   items: InferenceRecord[];
@@ -205,6 +195,13 @@ export const getInferenceRecordPage = async (params?: {
     page_size: data.page_size ?? 20,
   };
 };
+
+/** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部；取分页结果的 items） */
+export const getInferenceRecordList = async (params?: {
+  model_version_id?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<InferenceRecord[]> => (await getInferenceRecordPage(params)).items;
 
 /** 推理记录详情（GET /inference-records/{record_id}，普通用户仅本人） */
 export const getInferenceRecordDetail = async (recordId: string): Promise<InferenceRecord> =>

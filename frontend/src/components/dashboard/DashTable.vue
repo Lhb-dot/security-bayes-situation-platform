@@ -78,6 +78,24 @@ const asText = (value: unknown): string => {
 };
 
 const cellValues = computed(() => props.rows.map((row) => props.columns.map((col) => row[col.key])));
+
+/**
+ * 单元格渲染信息（预先算好，与 cellValues 同形）。
+ *
+ * 模板原先对同一个单元格连调 3 次 asTag()（v-if / :class / 文本），既重复求值，
+ * 又不得不用 `!` 非空断言把 null 压掉 —— 断言一旦被后续重构打破，就会静默渲染出
+ * 字面量 "null"。这里一次算清，模板只读结果。
+ */
+const cellRenders = computed(() =>
+  cellValues.value.map((row) =>
+    row.map((value) => {
+      const tag = asTag(value);
+      return tag
+        ? { isTag: true, text: tag.text, cls: `d-tag d-tag--${tag.tone}` }
+        : { isTag: false, text: asText(value), cls: '' };
+    }),
+  ),
+);
 </script>
 
 <template>
@@ -98,18 +116,14 @@ const cellValues = computed(() => props.rows.map((row) => props.columns.map((col
       <tbody>
         <tr v-for="(row, index) in rows" :key="keyOf(row, index)">
           <td
-            v-for="(col, colIndex) in columns"
-            :key="col.key"
-            :class="{ 'd-table-num': col.numeric }"
-            :style="{ textAlign: col.align || 'left' }"
+            v-for="(cell, colIndex) in cellRenders[index]"
+            :key="columns[colIndex].key"
+            :class="{ 'd-table-num': columns[colIndex].numeric }"
+            :style="{ textAlign: columns[colIndex].align || 'left' }"
           >
-            <slot :name="col.key" :row="row" :value="cellValues[index][colIndex]">
-              <span
-                v-if="asTag(cellValues[index][colIndex])"
-                class="d-tag"
-                :class="`d-tag--${asTag(cellValues[index][colIndex])!.tone}`"
-              >{{ asTag(cellValues[index][colIndex])!.text }}</span>
-              <template v-else>{{ asText(cellValues[index][colIndex]) }}</template>
+            <slot :name="columns[colIndex].key" :row="row" :value="cellValues[index][colIndex]">
+              <span v-if="cell.isTag" :class="cell.cls">{{ cell.text }}</span>
+              <template v-else>{{ cell.text }}</template>
             </slot>
           </td>
         </tr>

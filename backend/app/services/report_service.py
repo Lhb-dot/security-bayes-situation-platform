@@ -34,7 +34,11 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
-from app.services.report_export import build_export
+from app.services.report_export import (
+    SECTION_FEATURES,
+    SECTION_VIEWS,
+    build_export,
+)
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
     REPORT_FORMATS,
@@ -47,7 +51,6 @@ from app.services.constants import (
     USER_VISIBLE_MODEL_STATUSES,
     is_risk_label,
 )
-from app.services.situation_snapshot_service import SituationSnapshotService
 from app.utils.common import (
     beijing_now_str,
     get_logger,
@@ -62,6 +65,21 @@ logger = get_logger("report")
 
 # 定时报告重新生成失败后的重试间隔（分钟）：不占满整个周期，也不至于每轮空转
 RETRY_AFTER_MINUTES = 10
+
+# 风险概率分桶（报告「预测结果分布」章节）：上界用 1.01，保证 prob=1.0 落进最后一桶
+PROB_BUCKET_EDGES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.01)
+PROB_BUCKET_LABELS = ("0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0")
+# 概率落在该闭区间视为「接近阈值」，计入低置信度样本
+LOW_CONFIDENCE_MIN = 0.4
+LOW_CONFIDENCE_MAX = 0.6
+# 趋势判定：样本量下限，以及前后半段风险占比差达到多少才算上升/下降
+TREND_MIN_SAMPLES = 4
+TREND_DELTA = 0.05
+# 时间缺失时的排序兜底（必须带 tzinfo，否则与库里的 aware datetime 比较会 TypeError）
+_SORT_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+# 等级 / 处置状态的中文文案（报告正文与重点事件表共用）
+RISK_LEVEL_LABELS = {"HIGH": "高危", "MEDIUM": "中危", "LOW": "低危"}
+RISK_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOLVED": "已处置"}
 
 
 class ReportService(ServiceBase):
@@ -482,15 +500,22 @@ class ReportService(ServiceBase):
         total = len(records)
         risk_count = sum(1 for r, _m in records if r.is_risk_event)
         normal_count = total - risk_count
-        stats = SituationSnapshotService._aggregate(events, thresholds or {})
+        # 直接走 risk_view.aggregate：原来经 SituationSnapshotService._aggregate 中转，
+        # 而那个静态方法只是 `return risk_view.aggregate(events, thresholds or {})` 的空壳。
+        stats = risk_view.aggregate(events, thresholds or {})
         risk_scores = [
             float(r.risk_score) for r, _m in records if r.is_risk_event and r.risk_score is not None
         ]
         avg_risk_prob = (sum(risk_scores) / len(risk_scores)) if risk_scores else None
 
-        ordered = sorted(records, key=lambda x: x[0].executed_at or datetime(1970, 1, 1))
+        # 排序键统一换算成 aware 时间：原来用 naive 的 datetime(1970,1,1) 兜底，
+        # 只要有一条记录 executed_at 为空，就会和库里的 aware 值比较而抛 TypeError（500）。
+        ordered = sorted(
+            records,
+            key=lambda x: to_beijing(x[0].executed_at) if x[0].executed_at else _SORT_EPOCH,
+        )
         trend = "样本不足，无法判断"
-        if total >= 4:
+        if total >= TREND_MIN_SAMPLES:
             half = total // 2
 
             def ratio(recs):
@@ -499,9 +524,9 @@ class ReportService(ServiceBase):
                 return sum(1 for r, _m in recs if r.is_risk_event) / len(recs)
 
             r1, r2 = ratio(ordered[:half]), ratio(ordered[half:])
-            if r2 - r1 > 0.05:
+            if r2 - r1 > TREND_DELTA:
                 trend = "上升"
-            elif r1 - r2 > 0.05:
+            elif r1 - r2 > TREND_DELTA:
                 trend = "下降"
             else:
                 trend = "平稳"
@@ -536,7 +561,7 @@ class ReportService(ServiceBase):
             prob = explain.get("probability")
             if prob is None and record.risk_score is not None:
                 prob = float(record.risk_score)
-            if prob is not None and 0.4 <= float(prob) <= 0.6:
+            if prob is not None and LOW_CONFIDENCE_MIN <= float(prob) <= LOW_CONFIDENCE_MAX:
                 low_confidence += 1
             for cp in explain.get("class_distribution") or []:
                 c, p = cp.get("class"), cp.get("probability")
@@ -559,15 +584,16 @@ class ReportService(ServiceBase):
             for c in class_prob_sums
         ]
 
-        bucket_edges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.01]
-        bucket_labels = ["0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"]
-        counts = [0] * 5
+        bucket_count = len(PROB_BUCKET_LABELS)
+        counts = [0] * bucket_count
         for s in risk_scores:
-            for i in range(5):
-                if bucket_edges[i] <= s < bucket_edges[i + 1]:
+            for i in range(bucket_count):
+                if PROB_BUCKET_EDGES[i] <= s < PROB_BUCKET_EDGES[i + 1]:
                     counts[i] += 1
                     break
-        risk_prob_buckets = [{"range": bucket_labels[i], "count": counts[i]} for i in range(5)]
+        risk_prob_buckets = [
+            {"range": PROB_BUCKET_LABELS[i], "count": counts[i]} for i in range(bucket_count)
+        ]
 
         return {
             "label_distribution": label_distribution,
@@ -735,17 +761,14 @@ class ReportService(ServiceBase):
             e = event_map.get(record.id)
             if e is None:
                 continue
+            level = risk_view.level_of(e, thresholds)
             key.append(
                 {
                     "time": to_beijing(e.occurred_at).strftime("%Y-%m-%d %H:%M") if e.occurred_at else None,
-                    "risk_level": {"HIGH": "高危", "MEDIUM": "中危", "LOW": "低危"}.get(
-                        risk_view.level_of(e, thresholds), risk_view.level_of(e, thresholds)
-                    ),
+                    "risk_level": RISK_LEVEL_LABELS.get(level, level),
                     "probability": float(e.risk_score) if e.risk_score is not None else None,
                     "risk_type": e.risk_type,
-                    "status": {"PENDING": "待处置", "PROCESSING": "处理中", "RESOLVED": "已处置"}.get(
-                        e.status, e.status
-                    ),
+                    "status": RISK_STATUS_LABELS.get(e.status, e.status),
                     "key_features": list((e.raw_features or {}).keys())[:5],
                 }
             )
@@ -812,7 +835,7 @@ class ReportService(ServiceBase):
             )
         lines.append(f"- 低置信度/接近阈值样本：{pred.get('low_confidence_count', 0)} 条")
 
-        lines += ["", "## 四、不同视图预测结果与概率"]
+        lines += ["", f"## {SECTION_VIEWS}"]
         for m in report_data.get("model_analysis", []):
             name = m["algorithm_name"] or m["algorithm_code"] or "模型"
             if not m["has_views"]:
@@ -823,7 +846,7 @@ class ReportService(ServiceBase):
                     mark = "✓一致" if v["consistent_with_final"] else "✗分歧"
                     lines.append(f"  - {v['name']}：预测 {v['predicted_label']}（{mark}）")
 
-        lines += ["", "## 五、特征加权条件概率（Top 10）"]
+        lines += ["", f"## {SECTION_FEATURES}"]
         feats = (report_data.get("feature_analysis") or {}).get("top_features") or []
         if feats:
             for f in feats:
@@ -1194,6 +1217,11 @@ class ReportService(ServiceBase):
         for report_id, owner_id in claimed:
             report = self.db.get(Report, report_id)
             owner = self.db.get(AppUser, owner_id)
+            if report is None or owner is None:
+                # 抢占提交与这里重新取行之间，报告/账号可能已被删除。
+                # 原来直接 self._refresh(report, owner) 会在 None 上取属性抛 AttributeError。
+                logger.warning("定时报告 %s 或其创建者已不存在，跳过本轮", report_id)
+                continue
             try:
                 self._refresh(report, owner)
                 self.db.commit()
@@ -1206,11 +1234,12 @@ class ReportService(ServiceBase):
                 )
             except Exception:  # noqa: BLE001 - 单条失败不影响同批其它报告
                 self.db.rollback()
-                report = self.db.get(Report, report_id)
-                report.next_run_at = datetime.now(timezone.utc) + timedelta(
-                    minutes=RETRY_AFTER_MINUTES
-                )
-                self.db.commit()
+                stale = self.db.get(Report, report_id)
+                if stale is not None:
+                    stale.next_run_at = datetime.now(timezone.utc) + timedelta(
+                        minutes=RETRY_AFTER_MINUTES
+                    )
+                    self.db.commit()
                 logger.exception("定时报告重新生成失败: id=%s", report_id)
         return refreshed
 

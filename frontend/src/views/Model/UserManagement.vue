@@ -9,18 +9,11 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import request, { unwrapData } from '@/utils/request';
 import { keepScroll } from '@/utils/scrollAnchor';
 import { useUserStore } from '@/stores/userStore';
-import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
+import type { UserAccount, UserRole } from '@/types/security';
+import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
 import type { UserListParams } from '@/api/userApi';
-
-interface ScenarioOption {
-  id: number;
-  code: ScenarioId;
-  name: string;
-  access_status?: string;
-}
 
 const userStore = useUserStore();
 
@@ -57,16 +50,13 @@ const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
   return out;
 });
 
-const scenarioOptions = ref<ScenarioOption[]>([]);
+const scenarioOptions = ref<ApiScenario[]>([]);
 const scenarioNameByCode = ref<Record<string, string>>({});
 const scenarioNameById = ref<Record<number, string>>({});
 
-const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
-const isManagement = computed(
-  () =>
-    currentUser.value?.role === 'SUPER_ADMIN' ||
-    currentUser.value?.role === 'SCENARIO_ADMIN',
-);
+/** 管理级角色判断统一取自 userStore，不在页面内重复角色字符串 */
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
+const isManagement = computed(() => userStore.isManagement);
 
 const roleLabel = (role: UserRole) => {
   if (role === 'SUPER_ADMIN') return '系统管理员';
@@ -93,18 +83,7 @@ const scenarioLabel = (user: UserAccount) => {
 };
 
 const loadScenarios = async () => {
-  const rows = (await unwrapData(await request.get('/api/v1/scenarios'))) as Array<{
-    id: number;
-    code: string;
-    name: string;
-    access_status?: string;
-  }>;
-  const options = (rows ?? []).map((row) => ({
-    id: row.id,
-    code: row.code as ScenarioId,
-    name: row.name,
-    access_status: row.access_status,
-  }));
+  const options = await getScenarioList();
   scenarioOptions.value = options;
   scenarioNameByCode.value = Object.fromEntries(options.map((item) => [item.code, item.name]));
   scenarioNameById.value = Object.fromEntries(options.map((item) => [item.id, item.name]));
@@ -122,6 +101,12 @@ const currentListParams = (): UserListParams => ({
 
 const loadUsers = async () => {
   await userStore.fetchUsers(currentListParams());
+  // 增删改（尤其是停用/删除后带筛选条件重拉）会让总数变小：当前页超出末页时回落到末页重拉，
+  // 否则会出现「第 2 / 1 页 + 空表」的假空列表。
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = totalPages.value;
+    await userStore.fetchUsers(currentListParams());
+  }
 };
 
 const tableWrapRef = ref<HTMLElement | null>(null);
@@ -489,7 +474,7 @@ onMounted(async () => {
       lock-scroll
       :close-on-click-modal="false"
     >
-      <div class="pwd-form" style="display: grid; gap: 14px">
+      <div class="pwd-form">
         <div class="pwd-form__field">
           <label class="pwd-form__label">用户名（登录账号）</label>
           <input

@@ -12,6 +12,21 @@ const service = axios.create({
   // JSON 对象请求自动带 application/json，FormData 上传自动带 multipart/form-data(boundary)。
 });
 
+/**
+ * 隐私模式 / 浏览器禁用存储时，访问 storage 会直接抛 SecurityError。
+ * 这里存的都是可再生的缓存（CSRF 令牌有 cookie 兜底），所以统一降级成
+ * 「读不到 / 写不进」，绝不让它打断认证与请求主流程 ——
+ * 尤其 401 分支里的 `setCsrfToken(null)` 一旦抛出，后面的 unauthorizedHandler
+ * 就不会执行，用户会被卡在「已登出但界面还以为在登录」的状态。
+ */
+const safeStorage = (run, fallback = undefined) => {
+  try {
+    return run();
+  } catch {
+    return fallback;
+  }
+};
+
 const readCookie = (name) => {
   const prefix = `${encodeURIComponent(name)}=`;
   const item = document.cookie
@@ -21,16 +36,18 @@ const readCookie = (name) => {
 };
 
 export const setCsrfToken = (token) => {
-  if (token) {
-    window.sessionStorage.setItem(CSRF_STORAGE_KEY, token);
-  } else {
-    window.sessionStorage.removeItem(CSRF_STORAGE_KEY);
-  }
+  safeStorage(() => {
+    if (token) {
+      window.sessionStorage.setItem(CSRF_STORAGE_KEY, token);
+    } else {
+      window.sessionStorage.removeItem(CSRF_STORAGE_KEY);
+    }
+  });
 };
 
 const currentCsrfToken = () =>
   readCookie(import.meta.env.VITE_CSRF_COOKIE_NAME || 'bayes_csrf') ||
-  window.sessionStorage.getItem(CSRF_STORAGE_KEY);
+  safeStorage(() => window.sessionStorage.getItem(CSRF_STORAGE_KEY), null);
 
 export const getCsrfToken = () => currentCsrfToken();
 
@@ -90,7 +107,9 @@ service.interceptors.response.use(
   async (error) => {
     if (error.response?.status === 401) {
       setCsrfToken(null);
-      window.localStorage.removeItem('bayes_session_user_id');
+      // 老版本把当前用户 id 写在 localStorage 里，现在已无写入方；这里只是清残留，
+      // 清不掉（隐私模式）也不影响流程。
+      safeStorage(() => window.localStorage.removeItem('bayes_session_user_id'));
       if (unauthorizedHandler) unauthorizedHandler();
     }
     return Promise.reject(new Error(await extractErrorMessage(error)));

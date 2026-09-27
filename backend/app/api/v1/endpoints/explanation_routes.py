@@ -3,6 +3,7 @@ import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.utils import unwrap
@@ -27,7 +28,7 @@ def _sse(event: str, data: dict) -> str:
 def stream_model_explanation(
     payload: ExplanationStreamRequest,
     current_user: AppUser = Depends(get_current_user),
-    db=Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     if payload.inference_record_id is not None:
         source_response = InferenceRecordService(db).get_explanation_source(
@@ -38,7 +39,8 @@ def stream_model_explanation(
             return unwrap(source_response)
         explanation = source_response.data
     else:
-        scenario_code = (payload.scenario or {}).get("scenario_code") or (payload.scenario or {}).get("code")
+        scenario_payload = payload.scenario or {}
+        scenario_code = scenario_payload.get("scenario_code") or scenario_payload.get("code")
         scenario = get_scenario_config(scenario_code)
         explanation = {
             "scenario": scenario,
@@ -74,8 +76,12 @@ def stream_model_explanation(
         if done_data is not None:
             yield _sse("done", done_data)
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-    })
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

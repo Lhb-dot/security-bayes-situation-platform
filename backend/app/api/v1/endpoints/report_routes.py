@@ -22,6 +22,31 @@ from app.services.report_service import ReportService
 router = APIRouter(prefix="/reports", tags=["报告管理"])
 
 
+def _file_download_response(resp, report_id: int | None = None):
+    """把 Service 的导出结果转成文件流。
+
+    导出接口不走 unwrap 的统一 JSON 结构：成功时直接回文件流，失败时 unwrap
+    已经给出 JSONResponse，这里原样透传。
+
+    文件名里的 report_id 以 payload 为准（``read_export_file`` 的任务记录里存了报告
+    ID），路径参数只在 payload 没带时兜底（``export`` 的 payload 就不带）。
+    """
+    if isinstance(resp, JSONResponse):
+        return resp
+    payload = resp.data
+    return Response(
+        content=payload["content"],
+        media_type=payload["media_type"],
+        headers={
+            "Content-Disposition": content_disposition(
+                payload["filename"],
+                payload.get("report_id") or report_id,
+                payload["format"],
+            )
+        },
+    )
+
+
 @router.get(
     "",
     response_model=ResponseModel,
@@ -118,20 +143,10 @@ def download_export_job_file(
     current_user: AppUser = Depends(get_current_user),
 ):
     # 这里不走 unwrap 的统一 JSON 结构：成功时直接回文件流，失败时 unwrap 给出 JSONResponse
-    resp = unwrap(
-        ReportService(db).read_export_file(current_user=current_user, job_id=job_id)
-    )
-    if isinstance(resp, JSONResponse):
-        return resp
-    payload = resp.data
-    return Response(
-        content=payload["content"],
-        media_type=payload["media_type"],
-        headers={
-            "Content-Disposition": content_disposition(
-                payload["filename"], payload["report_id"], payload["format"]
-            )
-        },
+    return _file_download_response(
+        unwrap(
+            ReportService(db).read_export_file(current_user=current_user, job_id=job_id)
+        )
     )
 
 
@@ -218,22 +233,13 @@ def export_report(
     current_user: AppUser = Depends(get_current_user),
 ):
     # 这里不走 unwrap 的统一 JSON 结构：成功时直接回文件流，失败时 unwrap 给出 JSONResponse
-    resp = unwrap(
-        ReportService(db).export(
-            current_user=current_user, report_id=report_id, fmt=format
-        )
-    )
-    if isinstance(resp, JSONResponse):
-        return resp
-    payload = resp.data
-    return Response(
-        content=payload["content"],
-        media_type=payload["media_type"],
-        headers={
-            "Content-Disposition": content_disposition(
-                payload["filename"], report_id, payload["format"]
+    return _file_download_response(
+        unwrap(
+            ReportService(db).export(
+                current_user=current_user, report_id=report_id, fmt=format
             )
-        },
+        ),
+        report_id,
     )
 
 

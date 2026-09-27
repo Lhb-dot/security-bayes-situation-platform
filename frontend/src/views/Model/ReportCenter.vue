@@ -78,6 +78,8 @@ const TITLE_COL_MAX = 460;
 const TITLE_CELL_PADDING = 32;
 /** 另外几列的基准宽度：场景 / 格式 / 创建时间 / 状态（弹性下限）与操作（定宽） */
 const OTHER_COLS_MIN = 120 + 120 + 160 + 100 + 340;
+/** 定时报告标题后的闹钟标志占宽：SVG 14px + 前后各 6px 间距（与模板里的 width 及 gap 保持一致） */
+const CLOCK_ICON_WIDTH = 14 + 12;
 
 const titleColWidth = ref(220);
 const tableWrapRef = ref<HTMLElement | null>(null);
@@ -96,8 +98,8 @@ const measureTitleColWidth = () => {
     probe.textContent = report.title ?? '';
     let width = probe.getBoundingClientRect().width;
     if (report.scheduled) {
-      // 闹钟标志 14px，左右各 6px 间距；后面跟周期数字时再加它自己的宽度
-      width += 14 + 12;
+      // 闹钟标志；后面跟周期数字时再加它自己的宽度
+      width += CLOCK_ICON_WIDTH;
       const intervalProbe = intervalProbeRef.value;
       if (intervalProbe && report.interval_days) {
         intervalProbe.textContent = String(report.interval_days);
@@ -132,12 +134,18 @@ const reloadAll = async () => {
   await loadScheduled();
 };
 
+/** 查看详情的竞态令牌：连着点两行时，只认最后一次点击的结果 */
+let viewToken = 0;
+
 const handleView = async (report: Report) => {
+  const token = ++viewToken;
   viewTarget.value = report;
   viewVisible.value = true;
   try {
     // 拉取详情以获取结构化 report_data（列表接口不返回，避免载荷膨胀）
-    viewTarget.value = await getReportDetail(report.report_id);
+    const detail = await getReportDetail(report.report_id);
+    // 期间又点了别的行：这次响应已过期，丢掉，否则弹窗里显示的是上一行的报告
+    if (token === viewToken) viewTarget.value = detail;
   } catch {
     // 详情拉取失败时回退到列表数据（仅显示摘要文本）
   }
@@ -314,8 +322,9 @@ const formatLabel: Record<string, string> = {
 // ===================== 报告结构化详情（report_data 渲染，6.10.3） =====================
 const viewReportData = computed<ReportData | undefined>(() => {
   const d = viewTarget.value?.report_data;
-  // 旧结构报告（无 report_info）回退纯文本，避免模板访问 undefined 报错
-  return d && (d as ReportData).report_info ? (d as ReportData) : undefined;
+  // 旧结构报告（无 report_info）回退纯文本，避免模板访问 undefined 报错。
+  // report_info 在类型上是必填的，但历史报告里确实可能缺，所以按运行时真值判断。
+  return d && d.report_info ? d : undefined;
 });
 
 const pctText = (v: number | null | undefined): string => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
@@ -360,29 +369,34 @@ const classProbItems = computed(() => {
   }));
 });
 
-/** 有独立视图的模型 */
+/** 单个模型的多视图对比图数据（视图不足 2 个时不出图） */
+const buildViewChart = (model: ReportData['model_analysis'][number]) => {
+  const views = model.views ?? [];
+  if (views.length < 2) return null;
+  const categories = (views[0].distribution ?? []).map((d) => d.class);
+  return {
+    categories,
+    series: views.map((v) => {
+      // 先按类别建索引：原来每个「视图 × 类别」格子都做一次 distribution.find，
+      // 是 O(类别数²)；建一次 Map 后整张图降到 O(类别数)
+      const byClass = new Map((v.distribution ?? []).map((d) => [d.class, d.probability ?? 0] as const));
+      return { name: v.name, data: categories.map((c) => byClass.get(c) ?? 0) };
+    }),
+  };
+};
+
+/** 有独立视图的模型；对比图数据一并算好挂在 chart 上 ——
+ *  模板里一张图要读 data / categories / series 三处，内联调用会把同一份数据构造三遍 */
 const multiViewModels = computed(() =>
-  (viewReportData.value?.model_analysis ?? []).filter((m) => m.has_views),
+  (viewReportData.value?.model_analysis ?? [])
+    .filter((m) => m.has_views)
+    .map((m) => ({ ...m, chart: buildViewChart(m) })),
 );
 
 /** 无独立视图的模型 */
 const singleViewModels = computed(() =>
   (viewReportData.value?.model_analysis ?? []).filter((m) => !m.has_views),
 );
-
-/** 单个模型的多视图对比图数据 */
-const viewChartFor = (model: ReportData['model_analysis'][number]) => {
-  const views = model.views ?? [];
-  if (views.length < 2) return null;
-  const categories = (views[0].distribution ?? []).map((d) => d.class);
-  return {
-    categories,
-    series: views.map((v) => ({
-      name: v.name,
-      data: categories.map((c) => v.distribution.find((d) => d.class === c)?.probability ?? 0),
-    })),
-  };
-};
 
 /** 关键风险特征 Top-K */
 const topFeatures = computed(() => viewReportData.value?.feature_analysis?.top_features ?? []);
@@ -786,11 +800,11 @@ watch(
                 · 视图权重：{{ m.view_weights.map((w) => w.toFixed(2)).join(' / ') }}
               </template>
             </p>
-            <div v-if="viewChartFor(m)" class="chart-box">
+            <div v-if="m.chart" class="chart-box">
               <BarChart
-                :data="(viewChartFor(m)?.categories ?? []).map((name) => ({ name, score: 0 }))"
-                :categories="viewChartFor(m)?.categories ?? []"
-                :series="viewChartFor(m)?.series ?? []"
+                :data="(m.chart?.categories ?? []).map((name) => ({ name, score: 0 }))"
+                :categories="m.chart?.categories ?? []"
+                :series="m.chart?.series ?? []"
                 height="220px"
               />
             </div>
@@ -1257,46 +1271,6 @@ watch(
   color: rgba(220, 234, 255, 0.6);
 }
 
-.verdict-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  margin-bottom: 10px;
-  border: 1px solid rgba(125, 201, 255, 0.14);
-}
-
-.verdict-box--risk {
-  background: rgba(255, 123, 114, 0.10);
-  border-color: rgba(255, 123, 114, 0.30);
-}
-
-.verdict-box--normal {
-  background: rgba(83, 229, 200, 0.08);
-  border-color: rgba(83, 229, 200, 0.25);
-}
-
-.verdict-box__label {
-  font-size: 0.78rem;
-  color: rgba(220, 234, 255, 0.55);
-  flex-shrink: 0;
-}
-
-.verdict-box__value {
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.verdict-box--risk .verdict-box__value { color: #ff8c84; }
-.verdict-box--normal .verdict-box__value { color: #53e5c8; }
-
-.verdict-box__conf {
-  margin-left: auto;
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.65);
-}
-
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1328,67 +1302,6 @@ watch(
 .stat-card--high .stat-card__num { color: #ff8c84; }
 .stat-card--medium .stat-card__num { color: #ffd166; }
 .stat-card--low .stat-card__num { color: #53e5c8; }
-
-.report-chart {
-  margin-top: 10px;
-  height: 220px;
-}
-
-.feature-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.feature-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(16, 34, 60, 0.5);
-  font-size: 0.84rem;
-}
-
-.feature-item__rank {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(91, 166, 255, 0.16);
-  color: #9ad6ff;
-  font-size: 0.75rem;
-  flex-shrink: 0;
-}
-
-.feature-item__name {
-  color: #e8f1ff;
-  font-family: 'Consolas', 'Menlo', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.feature-item__class {
-  margin-left: auto;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(255, 177, 107, 0.14);
-  color: #ffc37d;
-  font-size: 0.75rem;
-  flex-shrink: 0;
-}
-
-.feature-item__weight {
-  color: rgba(220, 234, 255, 0.6);
-  font-size: 0.78rem;
-  flex-shrink: 0;
-}
 
 .report-nl {
   margin: 0;

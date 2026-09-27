@@ -24,7 +24,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { AlgorithmParamDef, UserAccount } from '@/types/security';
+import type { AlgorithmParamDef } from '@/types/security';
 import { useUserStore } from '@/stores/userStore';
 import { useTrainingJobStore } from '@/stores/trainingJobStore';
 import { getScenarios, getDatasets, getAlgorithms, trainModelAsync } from '@/api/trainingApi';
@@ -34,8 +34,11 @@ const router = useRouter();
 const userStore = useUserStore();
 
 // ===================== 权限 =====================
-const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+// 直接读 store getter，不再在 onMounted 里拷一份 ref 快照：快照只有在
+// 「main.ts 先 await bootstrap() 再装路由」这条隐式顺序成立时才对，
+// 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成普通用户。
+const currentUser = computed(() => userStore.currentUser);
+const isAdmin = computed(() => userStore.isManagement);
 
 // ===================== 场景（数据库） =====================
 interface DbScenario {
@@ -67,9 +70,7 @@ const loadingDatasets = ref(false);
 // ===================== 算法（数据库 + param_schema 动态表单） =====================
 interface AlgoOption {
   id: number;
-  code: string;
   display_name: string;
-  description: string;
   available: boolean;
   params: AlgorithmParamDef[];
 }
@@ -83,8 +84,13 @@ const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
     const item = (raw ?? {}) as Record<string, unknown>;
     let type: AlgorithmParamDef['type'];
     switch (item.type) {
+      // 后端 validate_params_schema 认的数值型是 int|integer|float|number
+      // （见 backend/app/utils/common.py），此前只列了 int/float，
+      // 注册成 integer/number 的算法会被当成字符串渲染成文本框
       case 'int':
+      case 'integer':
       case 'float':
+      case 'number':
         type = 'number';
         break;
       case 'bool':
@@ -156,22 +162,33 @@ interface ModelVersionRow {
 }
 
 // ===================== 场景切换 → 加载数据集 =====================
+/** 竞态令牌：连着切两个场景时只认最后一次请求的结果。否则先发出的旧场景请求
+ *  后返回，会把旧场景的数据集盖在新场景上，训练就成了「B 场景 + A 场景数据集」 */
+let datasetToken = 0;
+
 watch(selectedScenario, async (scenario) => {
+  const token = ++datasetToken;
   selectedDatasetId.value = '';
   if (!scenario) {
     datasetList.value = [];
+    // 作废在途请求（它的 finally 不会再动这个标志），避免遮罩一直转
+    loadingDatasets.value = false;
     return;
   }
   loadingDatasets.value = true;
   try {
-    datasetList.value = await getDatasets(scenario);
+    const list = await getDatasets(scenario);
+    if (token !== datasetToken) return; // 期间又切了场景，这批数据已过期
+    datasetList.value = list;
+    // 下拉框不留「请选择」占位项：有数据集就直接落到第一条，选中的那个就是真实值。
+    selectedDatasetId.value = list.length ? list[0].id : '';
   } catch {
+    if (token !== datasetToken) return;
     datasetList.value = [];
   } finally {
-    loadingDatasets.value = false;
+    // 只有最新那次请求负责收尾，过期的请求不能把加载态关掉
+    if (token === datasetToken) loadingDatasets.value = false;
   }
-  // 下拉框不留「请选择」占位项：有数据集就直接落到第一条，选中的那个就是真实值。
-  selectedDatasetId.value = datasetList.value.length ? datasetList.value[0].id : '';
 });
 
 // ===================== 算法/数据集切换 → 重建参数表单 =====================
@@ -242,14 +259,11 @@ interface ApiAlgorithmRow {
 }
 
 onMounted(async () => {
-  currentUser.value = userStore.currentUser;
   try {
     scenarios.value = await getScenarios();
     algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
       id: a.id,
-      code: a.code,
       display_name: a.display_name,
-      description: a.description ?? '',
       available: a.status === 'AVAILABLE',
       params: mapBackendParams(a.param_schema ?? []),
     }));

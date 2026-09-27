@@ -23,11 +23,8 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import {
   getScenarioWorkspace,
-  type FactorCoverageRow,
   type GeologicalProfile,
   type GeologicalWorkspace,
-  type ModelingStat,
-  type RoleRow,
 } from '@/api/dashboardApi';
 import { getUserList } from '@/api/userApi';
 import type { UserAccount } from '@/types/security';
@@ -39,7 +36,7 @@ import DashLine from '@/components/dashboard/DashLine.vue';
 import DashRows from '@/components/dashboard/DashRows.vue';
 import DashTable from '@/components/dashboard/DashTable.vue';
 import type { DashColumn } from '@/components/dashboard/DashTable.vue';
-import { fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
+import { fmtDate, fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: GeologicalProfile }>();
 
@@ -80,24 +77,18 @@ onMounted(loadAll);
 const summary = computed(() => runtime.value?.summary ?? null);
 
 /* ------------------------------------------------------------------ */
-/* 新增字段兜底：后端 B 任务未上线时不得白屏                              */
+/* 画像字段契约：roles / factor_coverage / modeling 均为必填且恒下发      */
 /* ------------------------------------------------------------------ */
 
 /**
- * `roles` / `factor_coverage` / `modeling` 是本次画像扩展新增的字段。
- * 旧后端不会下发它们，直接 `.map()` 会整页白屏；一律兜底为空数组，
- * 让页面退化为「暂无数据」而不是崩掉。
+ * `GeologicalProfile` 把 `roles` / `factor_coverage` / `modeling` 声明为**必填数组**，后端
+ * `get_profile` 也在每条代码路径上无条件下发（无数据集时给 `[]`），因此这里不做
+ * `?? []` / `Array.isArray` 兜底 —— 那些分支恒不可达，只会让「未建模数」「数据白躺」
+ * 多出一套永远为假的真假口径。
+ *
+ * 唯一保留的判据是「数据白躺」，S1 的未建模数据集数与 S3 的白躺名单共用它。
  */
-const rowsOrEmpty = <T,>(value: T[] | undefined): T[] => value ?? [];
-
-const roles = computed(() => rowsOrEmpty<RoleRow>(props.data.roles));
-const factorCoverage = computed(() => rowsOrEmpty<FactorCoverageRow>(props.data.factor_coverage));
-const modeling = computed(() => rowsOrEmpty<ModelingStat>(props.data.modeling));
-/**
- * `modeling` 是否真的由后端下发。
- * 未下发时「未建模 N 份」会算成 0，属于**误报**，因此这类结论一律显示「—」。
- */
-const modelingReady = computed(() => Array.isArray(props.data.modeling));
+const isWhiteLying = (item: { total: number }) => item.total === 0;
 
 /* ------------------------------------------------------------------ */
 /* S1 场景资产总览 KPI ×4                                              */
@@ -107,9 +98,7 @@ const modelingReady = computed(() => Array.isArray(props.data.modeling));
  * 第 4 个 KPI 是地质特色：未建模数据集数。
  * 「有数据但没有任何模型版本」＝ 数据白躺，是管理端最该追的资产闲置问题。
  */
-const unmodeledCount = computed(() =>
-  modelingReady.value ? modeling.value.filter((item) => item.total === 0).length : null,
-);
+const unmodeledCount = computed(() => props.data.modeling.filter(isWhiteLying).length);
 
 const overviewKpis = computed(() => [
   {
@@ -131,9 +120,7 @@ const overviewKpis = computed(() => [
     value: unmodeledCount.value,
     unit: '个',
     tone: 'warning' as const,
-    sub: modelingReady.value
-      ? `${props.data.dataset_file_count} 份数据中 ${unmodeledCount.value} 份无模型`
-      : '后端未下发建模统计',
+    sub: `${props.data.dataset_file_count} 份数据中 ${unmodeledCount.value} 份无模型`,
   },
 ]);
 
@@ -148,17 +135,20 @@ const overviewKpis = computed(() => [
  * geo_slope_company_v1 都指向 DIS_Landslides.arff）会得到**完全相同的展示名**，
  * 列表里就会出现两行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
  * D1/D2/S2/S3 全部复用这一份映射，保证同一数据集在四张表里叫同一个名字。
+ * 两遍遍历：先数重名，再据此生成展示名。
  */
 const displayNames = computed(() => {
-  const names = props.data.datasets.map((item) => item.name || item.logical_id);
   const counts = new Map<string, number>();
-  names.forEach((name) => counts.set(name, (counts.get(name) ?? 0) + 1));
-  const map = new Map<string, string>();
-  props.data.datasets.forEach((item, index) => {
-    const name = names[index];
-    map.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
-  });
-  return map;
+  for (const item of props.data.datasets) {
+    const name = item.name || item.logical_id;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const names = new Map<string, string>();
+  for (const item of props.data.datasets) {
+    const name = item.name || item.logical_id;
+    names.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
+  }
+  return names;
 });
 
 /** logical_id → 展示名；优先去重表，其次后端行内的 name，最后回退 logical_id */
@@ -185,7 +175,7 @@ const visibilityText = (value: string | undefined) =>
 
 /** 每数据集的模型版本统计（后端已按 dataset 聚合，这里只做 logical_id 索引） */
 const modelingByDataset = computed(
-  () => new Map(modeling.value.map((item) => [item.logical_id, item])),
+  () => new Map(props.data.modeling.map((item) => [item.logical_id, item])),
 );
 
 /* ------------------------------------------------------------------ */
@@ -216,7 +206,7 @@ const roleColumns: DashColumn[] = [
 ];
 
 const roleRows = computed<Array<Record<string, unknown>>>(() =>
-  roles.value.map((item) => ({
+  props.data.roles.map((item) => ({
     logical_id: item.logical_id,
     name: nameOf(item.logical_id, item.name),
     role: item.role,
@@ -251,17 +241,14 @@ const factorColumns: DashColumn[] = [
 ];
 
 const factorRows = computed<Array<Record<string, unknown>>>(() =>
-  factorCoverage.value.map((item) => {
-    const ids = item.datasets ?? [];
-    return {
-      factor: item.factor,
-      datasets: ids.map((logicalId) => nameOf(logicalId)).join('、'),
-      coverage: ids.length,
-      binning: item.consistent_binning
-        ? { text: '一致', tone: 'ok' }
-        : { text: '不一致', tone: 'up' },
-    };
-  }),
+  props.data.factor_coverage.map((item) => ({
+    factor: item.factor,
+    datasets: item.datasets.map((logicalId) => nameOf(logicalId)).join('、'),
+    coverage: item.datasets.length,
+    binning: item.consistent_binning
+      ? { text: '一致', tone: 'ok' }
+      : { text: '不一致', tone: 'up' },
+  })),
 );
 
 /* ------------------------------------------------------------------ */
@@ -289,6 +276,7 @@ const datasetColumns: DashColumn[] = [
 
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.datasets.map((item) => {
+    // 后端保证每个可见数据集都在 modeling 里；查不到时给「—」而不是伪造 0/0
     const stat = modelingByDataset.value.get(item.logical_id);
     return {
       logical_id: item.logical_id,
@@ -300,7 +288,7 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
       risk_rate: fmtPercent(item.risk_rate),
       attribute_count: item.attribute_count,
       visibility: visibilityText(item.visibility),
-      models: modelingReady.value && stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
+      models: stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
       version: item.version,
     };
   }),
@@ -310,22 +298,30 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
 /* S3 建模覆盖                                                          */
 /* ------------------------------------------------------------------ */
 
+/** S3 的单一基底：每数据集一行，柱状图 / 白躺名单 / 版本合计都从它派生 */
+const modelingRows = computed(() =>
+  props.data.modeling.map((item) => ({
+    name: nameOf(item.logical_id),
+    published: item.published,
+    draft: item.draft,
+    total: item.total,
+  })),
+);
+
 /** 每个数据集一根柱 = 模型版本总数；为 0 即「数据白躺」 */
 const modelingBars = computed(() =>
-  modeling.value.map((item) => ({ value: nameOf(item.logical_id), count: item.total })),
+  modelingRows.value.map((row) => ({ value: row.name, count: row.total })),
 );
 
 /** 白躺数据集（有数据、无任何模型版本）—— 单独点名，柱状图看不出「0 根柱」 */
 const whiteLying = computed(() =>
-  modeling.value
-    .filter((item) => item.total === 0)
-    .map((item) => nameOf(item.logical_id)),
+  modelingRows.value.filter(isWhiteLying).map((row) => row.name),
 );
 
 /** 已发布 / 草稿合计（DashBars 只渲染 count，published/draft 的逐数据集明细在 S2 列里） */
 const modelTotals = computed(() =>
-  modeling.value.reduce(
-    (acc, item) => ({ published: acc.published + item.published, draft: acc.draft + item.draft }),
+  modelingRows.value.reduce(
+    (acc, row) => ({ published: acc.published + row.published, draft: acc.draft + row.draft }),
     { published: 0, draft: 0 },
   ),
 );
@@ -334,12 +330,15 @@ const modelTotals = computed(() =>
 /* S4 场景运行态水位                                                    */
 /* ------------------------------------------------------------------ */
 
+/** 近 10 天活动量 = activity_trend 各天 total 求和；运行态未取到时为 null（KPI 显示「—」） */
+const activityTotal = computed(() => {
+  const points = runtime.value?.activity_trend;
+  return points ? points.reduce((sum, point) => sum + point.total, 0) : null;
+});
+
 /** 运行态 KPI：积压 / 处置率 / 近 10 天活动量 */
 const runtimeKpis = computed(() => {
   const item = summary.value;
-  const activity = runtime.value
-    ? (runtime.value.activity_trend ?? []).reduce((sum, point) => sum + Number(point.total ?? 0), 0)
-    : null;
   return [
     { label: '待处置积压', value: item ? item.pending : null, unit: '条', tone: 'danger' as const },
     {
@@ -348,7 +347,7 @@ const runtimeKpis = computed(() => {
       tone: 'success' as const,
       raw: true,
     },
-    { label: '近 10 天活动', value: activity, unit: '次', tone: 'primary' as const },
+    { label: '近 10 天活动', value: activityTotal.value, unit: '次', tone: 'primary' as const },
   ];
 });
 
@@ -357,10 +356,10 @@ const funnelItems = computed(() =>
   (summary.value?.status_funnel ?? []).map((item) => ({ label: item.label, count: item.count })),
 );
 
-/** 近 10 天活动趋势：推理量 / 其中判定为风险的量 */
+/** 近 10 天活动趋势：推理量 / 其中判定为风险的量（x 轴取 MM-DD，复用 dashFormat.fmtDate） */
 const trendPoints = computed(() =>
   (runtime.value?.activity_trend ?? []).map((item) => ({
-    label: item.date.slice(5),
+    label: fmtDate(item.date),
     value: item.total,
     value2: item.risk,
   })),
@@ -429,7 +428,7 @@ const memberRows = computed(() => {
   <!-- S3 建模覆盖 -->
   <DashCard title="建模覆盖" source="每数据集一根柱 = 模型版本总数；总数为 0 即「数据白躺」">
     <DashBars :items="modelingBars" :label-width="250" suffix=" 个版本" />
-    <p v-if="modelingReady" style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7">
+    <p style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7">
       <span
         v-if="whiteLying.length"
         class="d-tag d-tag--warn"

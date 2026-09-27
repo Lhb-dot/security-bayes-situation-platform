@@ -32,11 +32,11 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     ADMIN_ROLES,
     DATASET_RISK_TYPES,
+    DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     EVALUATION_AUDIENCE_MANAGEMENT,
     EVALUATION_AUDIENCE_USER,
     INFERENCE_ALLOWED_MODEL_STATUSES,
-    ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     MODEL_STATUS_PUBLISHED,
@@ -52,6 +52,10 @@ logger = get_logger("inference_record")
 
 #: fields_schema 里表示数值的 type 取值（与 dataset_file_reader 的约定一致）
 _NUMERIC_TYPES = {"numeric", "real", "float", "double", "integer", "int"}
+
+#: 管理级角色（场景管理员 / 推理记录查看）可用的数据集可见性口径。
+#: 与 constants.DATASET_VISIBILITY_* 同名同值，集中一处避免多处硬编码 "platform"/"company"。
+_INFERABLE_VISIBILITIES = (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
 
 
 def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
@@ -189,7 +193,11 @@ class InferenceRecordService(ServiceBase):
             role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
             or model.status == MODEL_STATUS_PUBLISHED
         ):
-            role_key = "management" if role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) else "user"
+            role_key = (
+                EVALUATION_AUDIENCE_MANAGEMENT
+                if role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
+                else EVALUATION_AUDIENCE_USER
+            )
             artifact = (model.ai_evaluation or {}).get(role_key) or {}
             data["model_evaluation"] = {
                 "available": bool(artifact.get("markdown")),
@@ -237,12 +245,12 @@ class InferenceRecordService(ServiceBase):
         if role == ROLE_SCENARIO_ADMIN:
             return (
                 model.scenario_id == getattr(current_user, "scenario_id", None)
-                and dataset.visibility in ("platform", "company")
+                and dataset.visibility in _INFERABLE_VISIBILITIES
             )
         return (
             model.scenario_id == getattr(current_user, "scenario_id", None)
             and (
-                dataset.visibility in ("platform", "company")
+                dataset.visibility in _INFERABLE_VISIBILITIES
                 or dataset.uploaded_by == getattr(current_user, "id", None)
             )
         )
@@ -492,47 +500,44 @@ class InferenceRecordService(ServiceBase):
                         "error": response.message,
                     }
                 )
-                continue
-
-            data = response.data or {}
-            is_risk = bool(data.get("is_risk_event"))
-            event = data.get("risk_event") or {}
-            succeeded += 1
-            if is_risk:
-                risk_count += 1
-            items.append(
-                {
-                    "index": index,
-                    "prediction_label": data.get("prediction_label"),
-                    # 风险类概率取模型对风险类的输出概率，正常类也有值（更有参考意义）
-                    "risk_probability": (data.get("explain_data") or {}).get(
-                        "risk_probability"
-                    ),
-                    "risk_level": data.get("risk_level"),
-                    "is_risk_event": is_risk,
-                    "inference_record_id": data.get("id"),
-                    "risk_event_id": event.get("id"),
-                    "error": None,
-                }
-            )
+            else:
+                data = response.data or {}
+                is_risk = bool(data.get("is_risk_event"))
+                event = data.get("risk_event") or {}
+                succeeded += 1
+                if is_risk:
+                    risk_count += 1
+                items.append(
+                    {
+                        "index": index,
+                        "prediction_label": data.get("prediction_label"),
+                        # 风险类概率取模型对风险类的输出概率，正常类也有值（更有参考意义）
+                        "risk_probability": (data.get("explain_data") or {}).get(
+                            "risk_probability"
+                        ),
+                        "risk_level": data.get("risk_level"),
+                        "is_risk_event": is_risk,
+                        "inference_record_id": data.get("id"),
+                        "risk_event_id": event.get("id"),
+                        "error": None,
+                    }
+                )
+            # 每处理完一条都要汇报进度（含失败条）：失败分支原本 continue 掉了回调，
+            # 末尾连续失败时进度会一直停在最后一个成功条数，前端进度条不动。
             if on_progress is not None:
                 on_progress(index + 1, succeeded, failed, risk_count)
 
         return succeeded, failed, risk_count, items
 
-    @service_call
-    def create_batch_from_dataset(
-        self,
-        current_user,
-        model_version_id: int,
-        offset: int = 0,
-        limit: int = 50,
-    ):
-        """从模型绑定数据集读取 offset..offset+limit 条样本并批量研判。
+    def _read_dataset_samples(
+        self, current_user, model_version_id: int, offset: int, limit: int
+    ) -> List[Dict[str, Any]]:
+        """校验推理目标并读取数据集 offset..offset+limit 条样本。
 
+        同步（create_batch_from_dataset）与异步（submit_batch_from_dataset）共用，
         样本读取走 ``read_sample_rows``（与数据预览同一口径），ARFF / CSV 都支持。
         """
-        model, dataset = self._resolve_target(current_user, model_version_id)
+        _, dataset = self._resolve_target(current_user, model_version_id)
 
         from app.services.training_executor import resolve_dataset_path
         from app.utils.dataset_file_reader import read_sample_rows
@@ -543,6 +548,18 @@ class InferenceRecordService(ServiceBase):
         samples = read_sample_rows(path, dataset.fields_schema, offset, limit)
         if not samples:
             raise ServiceError(400, "指定区间内没有样本")
+        return samples
+
+    @service_call
+    def create_batch_from_dataset(
+        self,
+        current_user,
+        model_version_id: int,
+        offset: int = 0,
+        limit: int = 50,
+    ):
+        """从模型绑定数据集读取 offset..offset+limit 条样本并批量研判。"""
+        samples = self._read_dataset_samples(current_user, model_version_id, offset, limit)
         return self.create_batch_inference(
             current_user=current_user,
             model_version_id=model_version_id,
@@ -558,12 +575,8 @@ class InferenceRecordService(ServiceBase):
         file_bytes: bytes,
         limit: int = 200,
     ):
-        """解析上传的 CSV 并批量研判。
-
-        列名必须覆盖数据集全部输入特征（顺序任意，多余列忽略，标签列可有可无）。
-        列名对不上时直接给出缺哪几列，不把解析细节抛给用户。
-        """
-        model, dataset = self._resolve_target(current_user, model_version_id)
+        """解析上传的 CSV 并批量研判（解析规则见 ``_parse_csv_samples``）。"""
+        _, dataset = self._resolve_target(current_user, model_version_id)
 
         samples = self._parse_csv_samples(dataset, filename, file_bytes, limit)
 
@@ -708,21 +721,8 @@ class InferenceRecordService(ServiceBase):
         offset: int = 0,
         limit: int = 50,
     ):
-        """从模型绑定数据集读取 offset..offset+limit 条样本并提交后台研判。
-
-        样本读取走 ``read_sample_rows``（与数据预览同一口径），ARFF / CSV 都支持。
-        """
-        model, dataset = self._resolve_target(current_user, model_version_id)
-
-        from app.services.training_executor import resolve_dataset_path
-        from app.utils.dataset_file_reader import read_sample_rows
-
-        path = resolve_dataset_path(dataset.file_path)
-        if not os.path.exists(path):
-            raise ServiceError(404, f"数据集文件不存在: {path}")
-        samples = read_sample_rows(path, dataset.fields_schema, offset, limit)
-        if not samples:
-            raise ServiceError(400, "指定区间内没有样本")
+        """从模型绑定数据集读取 offset..offset+limit 条样本并提交后台研判。"""
+        samples = self._read_dataset_samples(current_user, model_version_id, offset, limit)
         return self.submit_batch_inference(
             current_user=current_user,
             model_version_id=model_version_id,
@@ -739,7 +739,7 @@ class InferenceRecordService(ServiceBase):
         limit: int = 200,
     ):
         """解析上传的 CSV 并提交后台研判（列名必须覆盖数据集全部输入特征）。"""
-        model, dataset = self._resolve_target(current_user, model_version_id)
+        _, dataset = self._resolve_target(current_user, model_version_id)
 
         samples = self._parse_csv_samples(dataset, filename, file_bytes, limit)
         return self.submit_batch_inference(
@@ -774,7 +774,7 @@ class InferenceRecordService(ServiceBase):
             if (
                 model.scenario_id != getattr(current_user, "scenario_id", None)
                 or dataset is None
-                or dataset.visibility not in ("platform", "company")
+                or dataset.visibility not in _INFERABLE_VISIBILITIES
             ):
                 raise ServiceError(403, "无权限操作")
             return
@@ -809,7 +809,7 @@ class InferenceRecordService(ServiceBase):
                 ModelVersion, ModelVersion.id == InferenceRecord.model_version_id
             ).join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
                 ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                Dataset.visibility.in_(("platform", "company")),
+                Dataset.visibility.in_(_INFERABLE_VISIBILITIES),
             )
         else:
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)

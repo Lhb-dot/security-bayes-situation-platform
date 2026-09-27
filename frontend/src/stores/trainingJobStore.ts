@@ -80,6 +80,17 @@ interface TrainingJobRow {
 let pollTimer: number | null = null;
 let polling = false;
 
+/**
+ * 已经出过完成 / 失败通知的任务（modelVersionId）。
+ *
+ * `_tick` 里「状态不再是 TRAINING 就 _settle」的判据比 `isTerminal`（只认 DRAFT / FAILED）
+ * 宽：版本在轮询间隔里被管理员改成 PUBLISHED / OFFLINE / DISABLED，或者接口返回了空状态时，
+ * 任务既不算终态（继续留在在途列表里轮询），又每一拍都满足 _settle 的条件 —— 不拦就会
+ * 每秒重复弹一条通知，一直弹到 POLL_TIMEOUT_MS（65 分钟）超时。这里保证一个任务只通知一次。
+ * reset() 时清空（换账号 / 重新恢复任务时重建）。
+ */
+const settledIds = new Set<number>();
+
 const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
 
 /**
@@ -96,10 +107,10 @@ const parseServerTime = (value?: string): number | null => {
 const messageOf = (err: unknown, fallback: string) =>
   err instanceof Error && err.message ? err.message : fallback;
 
-const isTerminal = (job: BackgroundTrainingJob) => TERMINAL_STATUSES.includes(job.status);
-
-/** 按状态字符串判断（恢复任务时手头只有状态，还没有完整的任务对象） */
 const isTerminalStatus = (status: string) => TERMINAL_STATUSES.includes(status);
+
+/** 判定任务对象是否已到终态（口径同上：只认 DRAFT / FAILED） */
+const isTerminal = (job: BackgroundTrainingJob) => isTerminalStatus(job.status);
 
 /** 训练任务名：场景 · 算法 */
 export const trainingJobTitle = (row: TrainingJobRow) =>
@@ -182,6 +193,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
     reset() {
       this.stopPolling();
       this.jobs = [];
+      settledIds.clear();
       this.syncSeen();
     },
 
@@ -232,7 +244,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
       if (polling) return;   // 上一轮还没回来（请求慢），跳过这一拍
       polling = true;
       try {
-        const running = this.jobs.filter((job) => !isTerminal(job));
+        const running = this.runningJobs;
         if (!running.length) {
           this.stopPolling();
           return;
@@ -254,7 +266,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
             job.error = messageOf(err, job.error ?? '训练状态查询失败');
           }
         }
-        if (!this.jobs.some((job) => !isTerminal(job))) this.stopPolling();
+        if (!this.running) this.stopPolling();
       } finally {
         polling = false;
       }
@@ -262,6 +274,9 @@ export const useTrainingJobStore = defineStore('trainingJob', {
 
     /** 任务到达终态：出通知。**不从列表移除** —— 顶栏面板要展示它。 */
     _settle(job: BackgroundTrainingJob) {
+      // 一个任务只通知一次，理由见 settledIds 的说明
+      if (settledIds.has(job.modelVersionId)) return;
+      settledIds.add(job.modelVersionId);
       this._trimFinished();
       if (job.status === STATUS_DRAFT) {
         ElNotification({

@@ -23,16 +23,16 @@ import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
 
-/** 场景名称映射 */
-const SCENARIO_LABEL: Record<string, string> = {
+/** 场景名称映射（表格标签用；上传弹窗的选项文案历史上写作「航母甲板作业」，见模板，保持不变） */
+const SCENARIO_LABEL: Record<ScenarioId, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
   flightdeck_operation: '航母甲板',
 };
 
-/** 数据格式标签 */
-const FORMAT_LABEL: Record<string, string> = {
+/** 数据格式标签（键为 Dataset.data_format 全集，取值不会落空） */
+const FORMAT_LABEL: Record<Dataset['data_format'], string> = {
   csv: 'CSV',
   arff: 'ARFF',
   json: 'JSON',
@@ -139,48 +139,42 @@ const removeUploadField = (index: number) => {
   uploadFields.value.splice(index, 1);
 };
 
-const submitUpload = async () => {
-  if (!uploadForm.value.scenario_id) {
-    ElMessage.warning('必须指定所属场景');
+/** 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段 */
+const submitNewDataset = async () => {
+  if (!uploadForm.value.dataset_id.trim()) {
+    ElMessage.warning('请填写数据集编码');
     return;
   }
-
-  // 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段
-  if (uploadDialogMode.value === 'upload') {
-    if (!uploadForm.value.dataset_id.trim()) {
-      ElMessage.warning('请填写数据集编码');
-      return;
-    }
-    if (!uploadForm.value.name.trim()) {
-      ElMessage.warning('请填写数据集名称');
-      return;
-    }
-    if (!selectedFile.value) {
-      ElMessage.warning('请选择要上传的 ARFF / CSV 文件');
-      return;
-    }
-    if (!uploadForm.value.label_field.trim()) {
-      ElMessage.warning('请填写标签字段名（通常是最后一列）');
-      return;
-    }
-    try {
-      await uploadDatasetFile({
-        file: selectedFile.value,
-        logical_id: uploadForm.value.dataset_id.trim(),
-        name: uploadForm.value.name.trim(),
-        scenario_id: uploadForm.value.scenario_id,
-        label_field: uploadForm.value.label_field.trim(),
-      });
-      ElMessage.success('数据集上传成功');
-      uploadDialogVisible.value = false;
-      await loadDatasets();
-    } catch (err) {
-      ElMessage.error(err instanceof Error ? err.message : '上传失败');
-    }
+  if (!uploadForm.value.name.trim()) {
+    ElMessage.warning('请填写数据集名称');
     return;
   }
+  if (!selectedFile.value) {
+    ElMessage.warning('请选择要上传的 ARFF / CSV 文件');
+    return;
+  }
+  if (!uploadForm.value.label_field.trim()) {
+    ElMessage.warning('请填写标签字段名（通常是最后一列）');
+    return;
+  }
+  try {
+    await uploadDatasetFile({
+      file: selectedFile.value,
+      logical_id: uploadForm.value.dataset_id.trim(),
+      name: uploadForm.value.name.trim(),
+      scenario_id: uploadForm.value.scenario_id,
+      label_field: uploadForm.value.label_field.trim(),
+    });
+    ElMessage.success('数据集上传成功');
+    uploadDialogVisible.value = false;
+    await loadDatasets();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '上传失败');
+  }
+};
 
-  // 创建新版本：保留原有手动字段编辑流程（需求 2.3.3）
+/** 创建新版本：保留原有手动字段编辑流程（需求 2.3.3） */
+const submitNewVersion = async () => {
   if (!uploadForm.value.dataset_id.trim() || !uploadForm.value.name.trim()) {
     ElMessage.warning('请填写数据集编码和名称');
     return;
@@ -190,7 +184,8 @@ const submitUpload = async () => {
     ElMessage.warning('至少填写一个字段');
     return;
   }
-  if (fields.some((f) => fields.filter((x) => x.field_name === f.field_name).length > 1)) {
+  const fieldNames = fields.map((f) => f.field_name);
+  if (new Set(fieldNames).size !== fieldNames.length) {
     ElMessage.warning('字段名不允许重名');
     return;
   }
@@ -210,20 +205,34 @@ const submitUpload = async () => {
     ElMessage.warning('请填写 data/ 目录下的相对文件路径，例如 data/carrier/xxx.arff');
     return;
   }
+  // newVersion 模式下 target 必然已由 openNewVersion 赋值
+  // （openUploadDialog 清空它的同时会把 mode 切回 upload，两者不会同时成立）
+  const target = newVersionTarget.value;
+  if (!target) return;
   try {
-    if (newVersionTarget.value) {
-      const v = await createDatasetVersion(newVersionTarget.value.dataset_id, {
-        file_path: uploadForm.value.file_path.trim(),
-        fields: fieldDefs,
-        label_field: fieldDefs.find((f) => f.field_role === '分类标签')?.field_name,
-      });
-      ElMessage.success(`已创建新版本 ${v.dataset_version}，旧版本保留`);
-    }
+    const v = await createDatasetVersion(target.dataset_id, {
+      file_path: uploadForm.value.file_path.trim(),
+      fields: fieldDefs,
+      label_field: fieldDefs.find((f) => f.field_role === '分类标签')?.field_name,
+    });
+    ElMessage.success(`已创建新版本 ${v.dataset_version}，旧版本保留`);
     uploadDialogVisible.value = false;
     await loadDatasets();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '操作失败');
   }
+};
+
+const submitUpload = async () => {
+  if (!uploadForm.value.scenario_id) {
+    ElMessage.warning('必须指定所属场景');
+    return;
+  }
+  if (uploadDialogMode.value === 'upload') {
+    await submitNewDataset();
+    return;
+  }
+  await submitNewVersion();
 };
 
 // ===================== 版本管理（需求 2.3.3/2.3.5/2.3.6） =====================
@@ -308,7 +317,7 @@ const openFieldPreview = async (dataset: Dataset) => {
   try {
     const fields = await getDatasetFields(dataset.dataset_id);
     fieldDialogFields.value = fields;
-  } catch (err) {
+  } catch {
     fieldDialogFields.value = [];
   } finally {
     fieldDialogLoading.value = false;
@@ -335,7 +344,7 @@ onMounted(async () => {
     const bound = userStore.boundScenarioId ?? userStore.currentUser?.scenario_ids?.[0];
     if (bound) selectedScenario.value = bound;
   }
-  loadDatasets();
+  void loadDatasets();
 });
 </script>
 
@@ -730,16 +739,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.dataset-center__scenario-tag {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(83, 229, 200, 0.3);
-  background: rgba(83, 229, 200, 0.08);
-  color: #53e5c8;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
 .dataset-center__count strong {
   color: #9ad6ff;
 }
@@ -798,39 +797,6 @@ onMounted(async () => {
 .dialog-loading p {
   margin: 0;
   color: rgba(220, 234, 255, 0.65);
-}
-
-/* 航母甲板暂未接入提示 */
-.flightdeck-placeholder {
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  padding: 48px 24px;
-  text-align: center;
-}
-
-.flightdeck-placeholder__icon {
-  font-size: 3.5rem;
-  margin-bottom: 8px;
-}
-
-.flightdeck-placeholder h3 {
-  margin: 0;
-  font-size: 1.3rem;
-  color: #e8f1ff;
-}
-
-.flightdeck-placeholder p {
-  margin: 0;
-  color: rgba(220, 234, 255, 0.7);
-  font-size: 0.95rem;
-  max-width: 420px;
-}
-
-.flightdeck-placeholder__hint {
-  font-size: 0.85rem !important;
-  color: rgba(220, 234, 255, 0.45) !important;
-  font-style: italic;
 }
 
 /* 字段角色标签 */

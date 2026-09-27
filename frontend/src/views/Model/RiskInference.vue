@@ -15,7 +15,7 @@
  *
  * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
@@ -24,7 +24,7 @@ import { useDatasetStore } from '@/stores/datasetStore';
 import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
 import { useBatchJobStore } from '@/stores/batchJobStore';
-import { getScenarioList } from '@/api/scenarioApi';
+import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
 import { getDatasetPreview } from '@/api/datasetApi';
 import { keepScroll } from '@/utils/scrollAnchor';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
@@ -43,9 +43,40 @@ const datasetStore = useDatasetStore();
 const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
 
-/** 真实场景列表（直接调 /api/v1/scenarios） */
-interface RealScenario { id: number; code: string; name: string; access_status: string; }
-const scenarios = ref<RealScenario[]>([]);
+// ===================== 具名常量（原先散在代码里的魔法值） =====================
+/** 模型下拉一次拉全量：单个数据集下的模型版本数远小于这个上限 */
+const MODEL_LIST_PAGE_SIZE = 200;
+/** 样本表最多展示的输入特征列数（够判断这行是什么样本） */
+const SAMPLE_TABLE_COLUMN_COUNT = 5;
+/** 单条结果里展示的主要影响字段条数 */
+const TOP_FEATURE_COUNT = 3;
+/** 批量研判默认条数与单批上限（上限与后端 predict-batch 的校验一致） */
+const DEFAULT_BATCH_LIMIT = 50;
+const MAX_BATCH_LIMIT = 200;
+/** 概率（0~1）→ 百分比的换算系数，以及「小于该值就不报具体数字」的阈值（%） */
+const PERCENT_SCALE = 100;
+const PERCENT_MIN_VISIBLE = 0.01;
+/** 数值输入框步长：浮点留两位小数，整数按 1 递增 */
+const FLOAT_INPUT_STEP = '0.01';
+const INT_INPUT_STEP = '1';
+/** 占位文案：指标 / 等级 / 事件号缺失时统一显示它 */
+const UNKNOWN_TEXT = '—';
+/** 后端约定的场景可用状态与模型已发布状态 */
+const SCENARIO_ACCESS_ACTUAL = 'ACTUAL';
+const MODEL_STATUS_PUBLISHED = 'PUBLISHED';
+/** 数据集字段角色与类型（与后端字段定义一致） */
+const FIELD_ROLE_INPUT = '输入特征';
+const FIELD_ROLE_LABEL = '分类标签';
+const FIELD_TYPE_FLOAT = 'float';
+const FIELD_TYPE_INT = 'int';
+const FIELD_TYPE_STRING = 'string';
+/** 风险等级（大写枚举）→ 中文，键与 types/security 的 RiskLevelUpper 对齐 */
+const RISK_LEVEL_TEXT: Record<string, string> = { HIGH: '高', MEDIUM: '中', LOW: '低' };
+/** 未选模型时三个执行入口共用的提示 */
+const MODEL_REQUIRED_MESSAGE = '请先选择一个已发布模型';
+
+/** 真实场景列表（直接调 /api/v1/scenarios，行类型复用 scenarioApi 的定义） */
+const scenarios = ref<ApiScenario[]>([]);
 /** 真实模型版本列表（直接调 /api/v1/model-versions） */
 const modelVersions = ref<BackendModelVersion[]>([]);
 
@@ -54,7 +85,7 @@ const isManager = computed(() => ['SUPER_ADMIN', 'SCENARIO_ADMIN'].includes(user
 
 const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
   scenarios.value
-    .filter((s) => s.access_status === 'ACTUAL')
+    .filter((s) => s.access_status === SCENARIO_ACCESS_ACTUAL)
     .map((s) => ({ value: s.code as ScenarioId, label: s.name }))
 );
 
@@ -70,7 +101,7 @@ const datasetOptions = computed<Dataset[]>(() =>
 );
 
 const publishedModels = computed<BackendModelVersion[]>(() =>
-  modelVersions.value.filter((m) => m.status === 'PUBLISHED')
+  modelVersions.value.filter((m) => m.status === MODEL_STATUS_PUBLISHED)
 );
 const loadingModels = ref(false);
 const selectedModelId = ref<string | number>('');
@@ -81,9 +112,15 @@ const selectedModel = computed(() =>
 const modelLabel = (m: BackendModelVersion) =>
   `#${m.model_version_id} ${m.algorithm_name ?? m.algorithm_id}${m.is_default ? '（默认推荐）' : ''}`;
 
-const metricText = (key: 'accuracy' | 'recall' | 'f1' | 'g_mean') => {
-  const value = Number(selectedModel.value?.evaluation_metrics?.[key]);
-  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
+/** 模型下拉旁展示的指标口径 */
+type MetricKey = 'accuracy' | 'recall' | 'f1' | 'g_mean';
+
+/** 指标展示：缺失（undefined / null / 非数值）一律显示占位符，不能折算成 0% */
+const metricText = (key: MetricKey) => {
+  const raw = selectedModel.value?.evaluation_metrics?.[key];
+  if (raw === null || raw === undefined) return UNKNOWN_TEXT;
+  const value = Number(raw);
+  return Number.isFinite(value) ? `${(value * PERCENT_SCALE).toFixed(1)}%` : UNKNOWN_TEXT;
 };
 
 // ===================== 2 数据来源 =====================
@@ -106,16 +143,16 @@ const totalSamplePages = computed(() =>
   Math.max(1, Math.ceil(sampleTotal.value / SAMPLE_PAGE_SIZE))
 );
 
-/** 样本表里展示的列（输入特征前 5 个，够判断这行是什么样本） */
+/** 样本表里展示的列（输入特征前 N 个，够判断这行是什么样本） */
 const sampleColumns = computed(() =>
-  inputFields.value.slice(0, 5).map((f) => f.field_name)
+  inputFields.value.slice(0, SAMPLE_TABLE_COLUMN_COUNT).map((f) => f.field_name)
 );
 const labelField = computed(
-  () => inputFields.value.find((f) => f.field_role === '分类标签')?.field_name ?? ''
+  () => inputFields.value.find((f) => f.field_role === FIELD_ROLE_LABEL)?.field_name ?? ''
 );
 
 /** 批量导入 */
-const batchLimit = ref(50);
+const batchLimit = ref(DEFAULT_BATCH_LIMIT);
 const batchResult = ref<BatchInferenceResult | null>(null);
 /** 提交请求在途（按钮立刻置灰，避免连点提交两批） */
 const batchSubmitting = ref(false);
@@ -133,7 +170,6 @@ const uploadFile = ref<File | null>(null);
 
 // ===================== 3 单条推理结果 =====================
 const inferResult = ref<PredictResult | null>(null);
-const hasInferred = ref(false);
 const inferring = ref(false);
 const resultRef = ref<HTMLElement | null>(null);
 
@@ -207,11 +243,15 @@ const expandedGroups = ref<string[]>([]);
 const expandAll = () => { expandedGroups.value = fieldGroups.value.map((g) => g.name); };
 const collapseAll = () => { expandedGroups.value = []; };
 
+/** 数值型字段（float / int）：输入框与默认值填充都按数值处理 */
+const isNumericField = (field: DatasetField) =>
+  field.field_type === FIELD_TYPE_FLOAT || field.field_type === FIELD_TYPE_INT;
+
 /** 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value */
 const buildInputData = (fields: DatasetField[]): Record<string, string | number> => {
   const init: Record<string, string | number> = {};
   for (const f of fields) {
-    if (f.field_type === 'float' || f.field_type === 'int') {
+    if (isNumericField(f)) {
       const parsed = Number(f.sample_value);
       init[f.field_name] = Number.isFinite(parsed) ? parsed : 0;
     } else if (f.enum_values && f.enum_values.length > 0) {
@@ -224,11 +264,8 @@ const buildInputData = (fields: DatasetField[]): Record<string, string | number>
 };
 
 // ===================== 级联加载 =====================
-const resetResults = () => {
-  inferResult.value = null;
-  hasInferred.value = false;
-  batchResult.value = null;
-  selectedSampleIndex.value = null;
+/** 丢弃上一轮 AI 分析：中止在途的流式请求并清空正文与状态 */
+const resetExplanation = () => {
   explanationMarkdown.value = '';
   explanationError.value = '';
   explanationFallback.value = false;
@@ -237,14 +274,27 @@ const resetResults = () => {
   explanationController = null;
 };
 
-watch(selectedScenario, async (scenario) => {
-  selectedDatasetId.value = '';
-  selectedModelId.value = '';
+/** 丢弃上一轮结果（单条 / 批量 / AI 分析 / 样本选中） */
+const resetResults = () => {
+  inferResult.value = null;
+  batchResult.value = null;
+  selectedSampleIndex.value = null;
+  resetExplanation();
+};
+
+/** 换场景 / 换数据集 / 换模型时统一清空输入区（字段、取值、样本，并丢弃上一轮结果） */
+const resetInputState = () => {
   inputFields.value = [];
   inputData.value = {};
   samples.value = [];
   sampleTotal.value = 0;
   resetResults();
+};
+
+watch(selectedScenario, async (scenario) => {
+  selectedDatasetId.value = '';
+  selectedModelId.value = '';
+  resetInputState();
   if (!scenario) {
     datasetStore.datasets = [];
     return;
@@ -261,11 +311,7 @@ watch(selectedScenario, async (scenario) => {
 
 watch(selectedDatasetId, async (datasetId) => {
   selectedModelId.value = '';
-  inputFields.value = [];
-  inputData.value = {};
-  samples.value = [];
-  sampleTotal.value = 0;
-  resetResults();
+  resetInputState();
   if (!datasetId) return;
   loadingModels.value = true;
   try {
@@ -273,28 +319,27 @@ watch(selectedDatasetId, async (datasetId) => {
     modelVersions.value = await getModelVersionList({
       scenario_id: scenarioNumeric,
       dataset_id: datasetId,
-      page_size: 200,
+      page_size: MODEL_LIST_PAGE_SIZE,
     });
     const def = publishedModels.value.find((m) => m.is_default);
     selectedModelId.value = def ? def.model_version_id : '';
+  } catch {
+    // 拉取失败必须清空：留着上一个数据集的模型列表会按旧列表自动选中模型
+    modelVersions.value = [];
   } finally {
     loadingModels.value = false;
   }
 });
 
 watch(selectedModelId, async (modelId) => {
-  inputFields.value = [];
-  inputData.value = {};
-  samples.value = [];
-  sampleTotal.value = 0;
+  resetInputState();
   samplePage.value = 1;
-  resetResults();
   if (!modelId) return;
-  const model = publishedModels.value.find((m) => String(m.model_version_id) === String(modelId));
+  const model = selectedModel.value;
   if (!model) return;
   try {
     await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''));
-    inputFields.value = datasetStore.fields.filter((f: DatasetField) => f.field_role === '输入特征');
+    inputFields.value = datasetStore.fields.filter((f: DatasetField) => f.field_role === FIELD_ROLE_INPUT);
     inputData.value = buildInputData(inputFields.value);
     // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
     const port = route.query.port;
@@ -338,14 +383,15 @@ const changeSamplePage = (target: number) =>
   keepScroll(() => loadSamples(target), samplePaneRef.value);
 
 /** 点样本行 → 把该行取值填进输入表单 */
-const applySample = (index: number) => {  selectedSampleIndex.value = index;
+const applySample = (index: number) => {
+  selectedSampleIndex.value = index;
   const row = samples.value[index];
   if (!row) return;
   const next: Record<string, string | number> = { ...inputData.value };
   for (const field of inputFields.value) {
     const value = row[field.field_name];
     if (value === undefined || value === null || value === '') continue;
-    if (field.field_type === 'float' || field.field_type === 'int') {
+    if (isNumericField(field)) {
       const n = Number(value);
       next[field.field_name] = Number.isFinite(n) ? n : value;
     } else {
@@ -353,8 +399,9 @@ const applySample = (index: number) => {  selectedSampleIndex.value = index;
     }
   }
   inputData.value = next;
+  // 换了样本，上一轮结果与 AI 分析都作废（在途的流式请求一并中止）
   inferResult.value = null;
-  hasInferred.value = false;
+  resetExplanation();
 };
 
 // ===================== 执行单条推理 =====================
@@ -367,28 +414,32 @@ const actionHint = computed(() => {
   return `已选第 ${ordinal} 条样本`;
 });
 
+/** 未选已发布模型时的统一拦截（单条推理 / 批量研判 / 上传 CSV 三个入口共用） */
+const ensureModelSelected = () => {
+  if (selectedModelId.value) return true;
+  ElMessage.warning(MODEL_REQUIRED_MESSAGE);
+  return false;
+};
+
 const handleInfer = async () => {
-  if (!selectedModelId.value) {
-    ElMessage.warning('请先选择一个已发布模型');
-    return;
-  }
+  if (!ensureModelSelected()) return;
   for (const f of inputFields.value) {
-    if (f.field_type === 'string' && !inputData.value[f.field_name]) {
+    if (f.field_type === FIELD_TYPE_STRING && !inputData.value[f.field_name]) {
       ElMessage.warning(`请输入 ${f.description || f.field_name}`);
       return;
     }
   }
   inferring.value = true;
   inferResult.value = null;
-  hasInferred.value = false;
   batchResult.value = null;
+  // 新一轮推理：上一轮的 AI 分析作废（含在途的流式请求）
+  resetExplanation();
   try {
     const result = await inferenceStore.executeInference({
       model_version_id: selectedModelId.value,
       input_features: { ...inputData.value },
     });
     inferResult.value = result;
-    hasInferred.value = true;
     await scrollToResult();
     if (result.is_risk_event) {
       ElMessage.success(`检测到风险，已生成风险事件 ${result.risk_event?.id ?? ''}`);
@@ -423,7 +474,8 @@ const runBatchJob = async (
 ) => {
   batchResult.value = null;
   inferResult.value = null;
-  hasInferred.value = false;
+  // 批量开始：单条结果与它的 AI 分析一并作废
+  resetExplanation();
   batchSubmitting.value = true;
   try {
     const receipt = await submit();
@@ -449,10 +501,7 @@ const batchJobTitle = () =>
   selectedModel.value ? modelLabel(selectedModel.value) : `模型版本 #${selectedModelId.value}`;
 
 const handleBatch = async () => {
-  if (!selectedModelId.value) {
-    ElMessage.warning('请先选择一个已发布模型');
-    return;
-  }
+  if (!ensureModelSelected()) return;
   try {
     await runBatchJob(() => submitInferenceBatch({
       model_version_id: selectedModelId.value,
@@ -471,10 +520,7 @@ const onFileChange = (event: Event) => {
 };
 
 const handleUpload = async () => {
-  if (!selectedModelId.value) {
-    ElMessage.warning('请先选择一个已发布模型');
-    return;
-  }
+  if (!ensureModelSelected()) return;
   if (!uploadFile.value) {
     ElMessage.warning('请先选择 CSV 文件');
     return;
@@ -491,10 +537,10 @@ const handleUpload = async () => {
 
 // ===================== 结果展示辅助 =====================
 const formatPercent = (raw: number | null | undefined) => {
-  if (raw === null || raw === undefined || !Number.isFinite(Number(raw))) return '—';
-  const percent = Number(raw) * 100;
+  if (raw === null || raw === undefined || !Number.isFinite(Number(raw))) return UNKNOWN_TEXT;
+  const percent = Number(raw) * PERCENT_SCALE;
   if (percent === 0) return '0%';
-  if (percent < 0.01) return '<0.01%';
+  if (percent < PERCENT_MIN_VISIBLE) return `<${PERCENT_MIN_VISIBLE}%`;
   return `${percent.toFixed(2)}%`;
 };
 
@@ -506,8 +552,9 @@ const singleRiskPercent = computed(() =>
   )
 );
 
+/** 风险等级 → 中文；未知/缺失等级显示占位符（等级枚举见 types/security） */
 const levelText = (level?: string | null) =>
-  level === 'HIGH' ? '高' : level === 'MEDIUM' ? '中' : level === 'LOW' ? '低' : '—';
+  (level && RISK_LEVEL_TEXT[level]) || UNKNOWN_TEXT;
 
 const exportBatchCsv = () => {
   const items = batchResult.value?.items ?? [];
@@ -546,11 +593,8 @@ const goEventDetail = (eventId?: string | number | null) => {
 
 // ===================== AI 场景化分析 =====================
 const generateExplanation = async (result: PredictResult) => {
-  explanationController?.abort();
+  resetExplanation();
   explanationController = new AbortController();
-  explanationMarkdown.value = '';
-  explanationError.value = '';
-  explanationFallback.value = false;
   explanationLoading.value = true;
   explanationStatus.value = 'generating';
   const explanation = result.explain_data ?? {};
@@ -607,10 +651,22 @@ const stopExplanation = () => {
 
 onMounted(async () => {
   const list = await getScenarioList();
-  scenarios.value = list as unknown as RealScenario[];
+  scenarios.value = list;
   if (!selectedScenario.value && scenarioOptions.value.length) {
     selectedScenario.value = scenarioOptions.value[0].value;
   }
+});
+
+/**
+ * 离开页面时中止在途的 AI 分析流。
+ *
+ * 流式请求的 AbortController 原先只由「重新生成 / 停止生成 / 级联切换」触发中止，
+ * 组件卸载这条路径没人管：SSE 连接会一直挂到服务端自然结束，回调还在往已卸载组件的
+ * ref 上追加正文。
+ */
+onUnmounted(() => {
+  explanationController?.abort();
+  explanationController = null;
 });
 
 </script>
@@ -766,10 +822,10 @@ onMounted(async () => {
                   <span v-if="field.description" class="form-label__hint">{{ field.description }}</span>
                 </label>
                 <input
-                  v-if="field.field_type === 'float' || field.field_type === 'int'"
+                  v-if="isNumericField(field)"
                   v-model.number="inputData[field.field_name]"
                   type="number"
-                  :step="field.field_type === 'float' ? '0.01' : '1'"
+                  :step="field.field_type === FIELD_TYPE_FLOAT ? FLOAT_INPUT_STEP : INT_INPUT_STEP"
                   class="form-input"
                   :placeholder="field.sample_value"
                 />
@@ -799,7 +855,7 @@ onMounted(async () => {
         <div class="batch-grid">
           <div class="batch-row">
             <label class="form-label">数据集样本条数</label>
-            <input v-model.number="batchLimit" type="number" min="1" max="200" class="form-input batch-row__num" />
+            <input v-model.number="batchLimit" type="number" min="1" :max="MAX_BATCH_LIMIT" class="form-input batch-row__num" />
             <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
               <span v-if="batchRunning" class="btn-spinner"></span>
               {{ batchRunning ? batchProgressText : '批量研判' }}
@@ -828,7 +884,7 @@ onMounted(async () => {
     </div>
 
     <!-- ============ 3 结果 ============ -->
-    <section v-if="batchResult || hasInferred" ref="resultRef" class="card result-card">
+    <section v-if="batchResult || inferResult" ref="resultRef" class="card result-card">
       <!-- 批量结果 -->
       <template v-if="batchResult">
         <div class="section-heading">
@@ -859,7 +915,7 @@ onMounted(async () => {
                 </td>
                 <td>{{ riskPercent(item) }}</td>
                 <td>{{ levelText(item.risk_level) }}</td>
-                <td>{{ item.risk_event_id ? '已生成' : '—' }}</td>
+                <td>{{ item.risk_event_id ? '已生成' : UNKNOWN_TEXT }}</td>
                 <td>
                   <button v-if="item.risk_event_id" class="link-btn" @click="goEventDetail(item.risk_event_id)">
                     查看事件
@@ -906,14 +962,14 @@ onMounted(async () => {
           <div v-if="inferResult.explain_data?.top_features?.length" class="result-item result-item--features">
             <span class="result-item__label">主要影响字段</span>
             <span class="result-item__value result-item__value--features">
-              <span v-for="feature in inferResult.explain_data.top_features.slice(0, 3)" :key="feature.feature_name">
+              <span v-for="feature in inferResult.explain_data.top_features.slice(0, TOP_FEATURE_COUNT)" :key="feature.feature_name">
                 {{ feature.display_name || feature.feature_name }}={{ feature.raw_value }}（{{ feature.direction }}）
               </span>
             </span>
           </div>
           <div v-if="inferResult.is_risk_event" class="result-item">
             <span class="result-item__label">风险类型</span>
-            <span class="result-item__value">{{ inferResult.risk_event?.risk_type || '—' }}</span>
+            <span class="result-item__value">{{ inferResult.risk_event?.risk_type || UNKNOWN_TEXT }}</span>
           </div>
           <div class="result-item">
             <span class="result-item__label">使用模型</span>

@@ -16,12 +16,17 @@
  *   数据资产 /profile  —— 由父组件 AdminProfilePage 传入（props.data），全量数据集统计；
  *   运行态 /workspace、成员 /users —— 本组件另取，用 Promise.allSettled 并行且各自静默降级，
  *   任一失败只让对应那块的数值变成占位符，不阻塞主画像渲染（参照 ProfileGeological.vue）。
+ *
+ * 可空口径：`PowerProfile` 的 `telemetry_by_dataset` / `component_matrix` / `modeling`
+ * 以及行内的 `params` / `counts` / `violations` 都是**必填**字段（dashboardApi.ts 未标可选，
+ * dashboard_service.get_profile 恒返回；modeling 对每个可见数据集都有一行，无模型时计 0），
+ * 因此不做「字段可能没下发」的空数组兜底 —— 那种兜底会把「没取到」误渲染成
+ * 「0 个模型 → 数据白躺」的假告警。真正需要降级的是**另一个请求**的数据：运行态 runtime
+ * 与成员 members，失败时保持 null，由各块显示占位符。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import {
   getScenarioWorkspace,
-  type ComponentMatrixRow,
-  type ModelingStat,
   type PowerProfile,
   type PowerWorkspace,
   type TelemetryByDataset,
@@ -37,9 +42,34 @@ import DashLine from '@/components/dashboard/DashLine.vue';
 import DashRows from '@/components/dashboard/DashRows.vue';
 import DashTable from '@/components/dashboard/DashTable.vue';
 import type { DashColumn } from '@/components/dashboard/DashTable.vue';
-import { fmtNum, fmtPercent } from '@/components/dashboard/dashFormat';
+import { fmtDate, fmtNum, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: PowerProfile }>();
+
+/* ------------------------------------------------------------------ */
+/* 口径常量                                                            */
+/* ------------------------------------------------------------------ */
+
+/** 运行态接口返回的 scenario_key：确认拿到的是本场景的数据，防止串场景渲染 */
+const SCENARIO_KEY = 'power';
+
+/** 可见性枚举 → 管理端中文（后端存英文枚举，管理端要能直接读） */
+const VISIBILITY_TEXT: Record<string, string> = {
+  platform: '平台',
+  company: '公司',
+  personal: '个人',
+};
+
+/** D1 三个电参量列 → 后端 `telemetry_by_dataset[].params[].key`（与后端 POWER_PARAMS 的 key 一致） */
+const PARAM_KEYS = {
+  voltage: 'VoltageLevel_kV',
+  current: 'CurrentAmp',
+  temperature: 'Temperature_C',
+} as const;
+
+/** D1 卡片的基线口径文案：与后端 `POWER_BASELINE`（dashboard_service.py:191）逐项一致 */
+const BASELINE_SOURCE =
+  '电力基线：电压 300–700 kV · 电流 400–1600 A · 温度 30–90 ℃ · 工频 49.8–50.2 Hz · 丢包 ≤1%';
 
 /* ------------------------------------------------------------------ */
 /* 展示名去重                                                          */
@@ -49,41 +79,36 @@ const props = defineProps<{ data: PowerProfile }>();
  * 数据集展示名去重。
  *
  * 后端 `dataset_display_name_of` 取的是上传文件名，同一份物理文件被不同账号重复注册时
- * （如 power_grid_company_v1 与 bob_sensor_personal_v1 同源）会得到**完全相同的展示名**，
+ * （如 power_grid_company_v1 与 powergrid_knowledgebase 同源）会得到**完全相同的展示名**，
  * 矩阵里就会出现两行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
  */
 const displayNames = computed(() => {
-  const names = props.data.datasets.map((item) => item.name || item.logical_id);
   const counts = new Map<string, number>();
-  names.forEach((name) => counts.set(name, (counts.get(name) ?? 0) + 1));
-  const map = new Map<string, string>();
-  props.data.datasets.forEach((item, index) => {
-    const name = names[index];
-    map.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
+  for (const item of props.data.datasets) {
+    const name = item.name || item.logical_id;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const entries: Array<[string, string]> = props.data.datasets.map((item) => {
+    const name = item.name || item.logical_id;
+    return [item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name];
   });
-  return map;
+  return new Map(entries);
 });
 
+/** 取展示名：优先用去重后的展示名，其次用接口自带的 name，最后兜底 logical_id */
 const nameOf = (logicalId: string, fallback?: string | null) =>
   displayNames.value.get(logicalId) ?? fallback ?? logicalId;
 
 /* ------------------------------------------------------------------ */
-/* 后端新增字段兜底                                                     */
+/* 建模覆盖映射                                                        */
 /* ------------------------------------------------------------------ */
 
 /**
- * 后端改造任务 B 可能尚未合并：`telemetry_by_dataset` / `component_matrix` / `modeling`
- * 都是本次新增字段，老接口不会返回。全部兜底成空数组/null，否则 `.map()` 直接抛错、整页白屏。
- * 注意 modeling 用 null 而不是 []：空数组会被误读成「所有数据集都没有模型」（数据白躺），
- * null 表示「这项指标本次没取到」，页面上显示占位符而不是假告警。
+ * logical_id → 建模覆盖统计。后端保证每个可见数据集都有一行（无模型时三项均为 0），
+ * 所以缺项补 0 只是类型兜底，不会把「没取到」渲染成「数据白躺」。
  */
-const telemetry = computed<TelemetryByDataset[]>(() => props.data.telemetry_by_dataset ?? []);
-const componentMatrix = computed<ComponentMatrixRow[]>(() => props.data.component_matrix ?? []);
-const modeling = computed<ModelingStat[] | null>(() =>
-  Array.isArray(props.data.modeling) ? props.data.modeling : null,
-);
 const modelingMap = computed(
-  () => new Map((modeling.value ?? []).map((item) => [item.logical_id, item])),
+  () => new Map(props.data.modeling.map((item) => [item.logical_id, item])),
 );
 
 /* ------------------------------------------------------------------ */
@@ -98,11 +123,11 @@ const modelingMap = computed(
  * 分母（样本总量）为 0 时返回 null —— 显示「—」，不能写成 0%，那是「全部不合格」的假结论。
  */
 const frequencyPassRate = computed<number | null>(() => {
-  const rows = telemetry.value;
-  const totalRecords = rows.reduce((sum, item) => sum + (Number(item.record_count) || 0), 0);
+  const rows = props.data.telemetry_by_dataset;
+  const totalRecords = rows.reduce((sum, item) => sum + item.record_count, 0);
   if (!totalRecords) return null;
   const weighted = rows.reduce(
-    (sum, item) => sum + (Number(item.record_count) || 0) * (Number(item.frequency_pass_rate) || 0),
+    (sum, item) => sum + item.record_count * item.frequency_pass_rate,
     0,
   );
   return weighted / totalRecords;
@@ -114,7 +139,7 @@ const kpis = computed<KpiItem[]>(() => [
     value: props.data.dataset_count,
     unit: '个',
     tone: 'primary',
-    sub: `含 ${props.data.dataset_file_count ?? '—'} 份文件`,
+    sub: `含 ${props.data.dataset_file_count} 份文件`,
   },
   {
     label: '有效样本总量',
@@ -161,32 +186,28 @@ const d1Columns: DashColumn[] = [
  * 写成 0 会被读成「实测均值为 0」，是完全相反的管理结论。null 交给 DashTable 渲染成「—」。
  */
 const meanText = (row: TelemetryByDataset, key: string): string | null => {
-  const param = (row.params ?? []).find((item) => item.key === key);
-  if (!param || param.mean === null || param.mean === undefined) return null;
-  const num = Number(param.mean);
-  if (!Number.isFinite(num)) return null;
-  return param.unit ? `${fmtNum(num)} ${param.unit}` : fmtNum(num);
+  const param = row.params.find((item) => item.key === key);
+  if (!param || param.mean === null) return null;
+  return param.unit ? `${fmtNum(param.mean)} ${param.unit}` : fmtNum(param.mean);
 };
 
 /** 结论：基线全部达标给绿标；否则把越界项逐条列出并标红 —— 管理端要看到具体越界在哪一项 */
 const verdictOf = (row: TelemetryByDataset): { text: string; tone: 'ok' | 'up' } =>
-  row.baseline_ok === true
+  row.baseline_ok
     ? { text: '达标', tone: 'ok' }
-    : { text: (row.violations ?? []).join('、') || '基线越界', tone: 'up' };
+    : { text: row.violations.join('、') || '基线越界', tone: 'up' };
 
 const d1Rows = computed<Array<Record<string, unknown>>>(() =>
-  telemetry.value.map((item) => ({
+  props.data.telemetry_by_dataset.map((item) => ({
     logical_id: item.logical_id,
     name: nameOf(item.logical_id, item.name),
     record_count: item.record_count,
-    voltage: meanText(item, 'VoltageLevel_kV'),
-    current: meanText(item, 'CurrentAmp'),
-    temperature: meanText(item, 'Temperature_C'),
+    voltage: meanText(item, PARAM_KEYS.voltage),
+    current: meanText(item, PARAM_KEYS.current),
+    temperature: meanText(item, PARAM_KEYS.temperature),
     frequency: fmtPercent(item.frequency_pass_rate),
     packet_loss:
-      item.packet_loss_mean === null || item.packet_loss_mean === undefined
-        ? null
-        : `${fmtNum(item.packet_loss_mean)} %`,
+      item.packet_loss_mean === null ? null : `${fmtNum(item.packet_loss_mean)} %`,
     verdict: verdictOf(item),
   })),
 );
@@ -203,24 +224,18 @@ const d2Columns: DashColumn[] = [
 ];
 
 const d2Rows = computed<Array<Record<string, unknown>>>(() =>
-  componentMatrix.value.map((item) => {
-    const counts = item.counts ?? [];
-    return {
-      value: item.value,
-      kind: item.kind === 'system' ? '系统' : '设备',
-      coverage: counts
-        .map(
-          (entry) =>
-            `${nameOf(entry.logical_id)}(${entry.count} 条, ${fmtPercent(entry.risk_rate)})`,
-        )
-        .join('、'),
-      dataset_count: counts.length,
-    };
-  }),
+  props.data.component_matrix.map((item) => ({
+    value: item.value,
+    kind: item.kind === 'system' ? '系统' : '设备',
+    coverage: item.counts
+      .map((entry) => `${nameOf(entry.logical_id)}(${entry.count} 条, ${fmtPercent(entry.risk_rate)})`)
+      .join('、'),
+    dataset_count: item.counts.length,
+  })),
 );
 
 /* ------------------------------------------------------------------ */
-/* S2 数据集资产明细                                                   */
+/* S2 数据集资产明细 / S3 建模覆盖                                      */
 /* ------------------------------------------------------------------ */
 
 const s2Columns: DashColumn[] = [
@@ -234,14 +249,12 @@ const s2Columns: DashColumn[] = [
   { key: 'version', label: '版本', numeric: true, align: 'right' },
 ];
 
-/** 可见性中文映射（后端存英文枚举，管理端要能直接读） */
-const VISIBILITY_TEXT: Record<string, string> = {
-  platform: '平台',
-  company: '公司',
-  personal: '个人',
-};
-
-const s2Rows = computed<Array<Record<string, unknown>>>(() =>
+/**
+ * 数据集基底行：`props.data.datasets` 只在这一处遍历，S2 明细表与 S3 建模覆盖都从它派生
+ * （原先 S2、S3 各自 map 一遍 datasets，并各自去 modelingMap 里查一次模型数）。
+ * 字段 = S2 的表格单元格 + S3 需要的模型版本三元组 `models`。
+ */
+const datasetRows = computed(() =>
   props.data.datasets.map((item) => {
     const stat = modelingMap.value.get(item.logical_id);
     return {
@@ -251,53 +264,36 @@ const s2Rows = computed<Array<Record<string, unknown>>>(() =>
       label_field: item.label_field,
       risk_rate: fmtPercent(item.risk_rate),
       attribute_count: item.attribute_count,
-      visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility ?? '—',
-      // modeling 为 null（接口未返回该指标）时显示「—」，不能写 0/0 冒充「没训过模型」
-      model_count:
-        modeling.value === null ? null : `已发布 ${stat?.published ?? 0} / 共 ${stat?.total ?? 0}`,
-      version: `v${item.version}`,
+      visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility,
       // 未登记风险口径 = 该数据集的标签没有进显式登记表 → 不产生风险事件，必须让管理员看见
       unregistered: item.caliber_registered === false,
+      model_count: `已发布 ${stat?.published ?? 0} / 共 ${stat?.total ?? 0}`,
+      version: `v${item.version}`,
+      // S3 用：该数据集的模型版本三元组（无模型时三项均为 0 = 数据白躺）
+      models: {
+        published: stat?.published ?? 0,
+        draft: stat?.draft ?? 0,
+        total: stat?.total ?? 0,
+      },
     };
   }),
 );
-
-/* ------------------------------------------------------------------ */
-/* S3 建模覆盖                                                         */
-/* ------------------------------------------------------------------ */
-
-/** 某数据集的模型版本统计；缺项补 0（后端保证所有可见数据集都在 modeling 里） */
-const modelingStatOf = (logicalId: string): { published: number; draft: number; total: number } => {
-  const stat = modelingMap.value.get(logicalId);
-  return { published: stat?.published ?? 0, draft: stat?.draft ?? 0, total: stat?.total ?? 0 };
-};
 
 /**
  * 建模覆盖柱状图：每数据集一根柱 = 该数据集的模型版本总数。
  *
  * DashBars 只渲染 `count`（value2 不生效），所以「已发布 / 草稿」只能写进标签文本。
- * modeling 为 null（接口未返回）时给空数组 → 组件渲染「暂无数据」，
- * 而不是把所有数据集画成 0 —— 那会凭空造出「数据白躺」的假告警。
  */
 const modelingBars = computed(() =>
-  modeling.value === null
-    ? []
-    : props.data.datasets.map((item) => {
-        const stat = modelingStatOf(item.logical_id);
-        return {
-          value: `${nameOf(item.logical_id, item.name)}（已发布 ${stat.published} / 草稿 ${stat.draft}）`,
-          count: stat.total,
-        };
-      }),
+  datasetRows.value.map((row) => ({
+    value: `${row.name}（已发布 ${row.models.published} / 草稿 ${row.models.draft}）`,
+    count: row.models.total,
+  })),
 );
 
 /** total === 0 的数据集 = 数据白躺（有数据但一个模型版本都没有） */
 const idleDatasets = computed(() =>
-  modeling.value === null
-    ? []
-    : props.data.datasets
-        .filter((item) => modelingStatOf(item.logical_id).total === 0)
-        .map((item) => nameOf(item.logical_id, item.name)),
+  datasetRows.value.filter((row) => row.models.total === 0).map((row) => row.name),
 );
 
 /* ------------------------------------------------------------------ */
@@ -311,16 +307,17 @@ const members = ref<UserAccount[] | null>(null);
 /**
  * 两个接口并行、各自静默降级：运行态失败不影响成员块，反之亦然，都不阻塞主画像。
  * 场景画像本身由父组件传入（props.data），所以这里只有两个请求。
+ * 成员显式传 `scenario_id`（后端仅对 SCENARIO_ADMIN 自动收窄，SUPER_ADMIN 需自行传参）。
  */
 const loadAll = async () => {
   const scenarioId = props.data.scenario_id;
   const [runtimeResult, memberResult] = await Promise.allSettled([
     getScenarioWorkspace(scenarioId),
-    getUserList({ page_size: 200 }),
+    getUserList({ scenario_id: scenarioId, page_size: 200 }),
   ]);
 
   runtime.value =
-    runtimeResult.status === 'fulfilled' && runtimeResult.value.scenario_key === 'power'
+    runtimeResult.status === 'fulfilled' && runtimeResult.value.scenario_key === SCENARIO_KEY
       ? (runtimeResult.value as PowerWorkspace)
       : null;
   members.value =
@@ -336,7 +333,7 @@ const summary = computed(() => runtime.value?.summary ?? null);
 
 /** 近 10 天活动 = activity_trend 的 total 求和（每天一次推理批次） */
 const activityTotal = computed(() =>
-  (runtime.value?.activity_trend ?? []).reduce((sum, point) => sum + (Number(point.total) || 0), 0),
+  (runtime.value?.activity_trend ?? []).reduce((sum, point) => sum + point.total, 0),
 );
 
 const runtimeKpis = computed<KpiItem[]>(() => {
@@ -375,7 +372,7 @@ const funnelItems = computed(() =>
 /** 近 10 天活动趋势：推理量 / 其中判定为风险的量（不渲染 recent_events，那是执行端派活清单） */
 const trendPoints = computed(() =>
   (runtime.value?.activity_trend ?? []).map((item) => ({
-    label: item.date.slice(5),
+    label: fmtDate(item.date),
     value: item.total,
     value2: item.risk,
   })),
@@ -383,16 +380,17 @@ const trendPoints = computed(() =>
 
 /** 场景成员：按角色分组计数，管理员需要知道这个场景里有哪些人、权限怎么分 */
 const memberRows = computed(() => {
-  if (members.value === null) return [];
-  const admins = members.value.filter((item) => item.role === 'SCENARIO_ADMIN');
-  const users = members.value.filter((item) => item.role === 'SCENARIO_USER');
-  const disabled = members.value.filter((item) => item.status !== 'active');
+  const list = members.value;
+  if (list === null) return [];
+  const adminCount = list.filter((item) => item.role === 'SCENARIO_ADMIN').length;
+  const userCount = list.filter((item) => item.role === 'SCENARIO_USER').length;
+  const disabledCount = list.filter((item) => item.status !== 'active').length;
   const rows = [
-    { label: '场景管理员', value: `${admins.length} 人` },
-    { label: '场景用户', value: `${users.length} 人` },
-    { label: '合计', value: `${members.value.length} 人` },
+    { label: '场景管理员', value: `${adminCount} 人` },
+    { label: '场景用户', value: `${userCount} 人` },
+    { label: '合计', value: `${list.length} 人` },
   ];
-  if (disabled.length) rows.push({ label: '已禁用', value: `${disabled.length} 人` });
+  if (disabledCount) rows.push({ label: '已禁用', value: `${disabledCount} 人` });
   return rows;
 });
 </script>
@@ -402,10 +400,7 @@ const memberRows = computed(() => {
   <DashKpis :items="kpis" />
 
   <!-- D1 ★ 电参量基线一致性（跨数据集） -->
-  <DashCard
-    title="电参量基线一致性（跨数据集）"
-    source="电力基线：电压 300–700 kV · 电流 400–1600 A · 温度 30–90 ℃ · 工频 49.8–50.2 Hz · 丢包 ≤1%"
-  >
+  <DashCard title="电参量基线一致性（跨数据集）" :source="BASELINE_SOURCE">
     <DashTable :columns="d1Columns" :rows="d1Rows" row-key="logical_id" dense />
   </DashCard>
 
@@ -422,7 +417,7 @@ const memberRows = computed(() => {
     title="数据集资产明细"
     source="按数据集逐行列出资产口径；标注「未登记风险口径」的数据集不产生风险事件"
   >
-    <DashTable :columns="s2Columns" :rows="s2Rows" row-key="logical_id">
+    <DashTable :columns="s2Columns" :rows="datasetRows" row-key="logical_id">
       <template #label_field="{ row }">
         <span>{{ row.label_field }}</span>
         <span v-if="row.unregistered" class="d-tag d-tag--warn" style="margin-left: 6px">

@@ -29,7 +29,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from app.utils.common import get_logger, running_under_test_runner
 
@@ -45,12 +44,12 @@ DEFAULT_TTL_SECONDS = 900
 DEFAULT_MAX_JOBS = 50
 POLL_SECONDS = 1.0
 
-_jobs: Dict[str, "GenerateJob"] = {}
+_jobs: dict[str, "GenerateJob"] = {}
 _jobs_lock = threading.Lock()
 _queue: queue.Queue[str] = queue.Queue()
 _stop = threading.Event()
 _lock = threading.Lock()
-_thread: Optional[threading.Thread] = None
+_thread: threading.Thread | None = None
 _started = False
 
 
@@ -63,10 +62,10 @@ class GenerateJob:
     title: str
     params: dict
     status: str = STATUS_PENDING
-    error: Optional[str] = None
-    report_id: Optional[str] = None
+    error: str | None = None
+    report_id: str | None = None
     created_at: float = field(default_factory=time.time)
-    finished_at: Optional[float] = None
+    finished_at: float | None = None
 
     def to_dict(self) -> dict:
         """对外视图：不下发入参，只给前端渲染任务卡与通知所需的字段。
@@ -105,7 +104,7 @@ def create_job(user_id: int, title: str, params: dict) -> str:
     return job.id
 
 
-def get_job(job_id: str, user_id: int) -> Optional[dict]:
+def get_job(job_id: str, user_id: int) -> dict | None:
     """取任务视图；任务不存在或不属于该用户时返回 None。"""
     with _jobs_lock:
         job = _jobs.get(job_id)
@@ -114,7 +113,7 @@ def get_job(job_id: str, user_id: int) -> Optional[dict]:
         return job.to_dict()
 
 
-def list_jobs(user_id: int) -> List[dict]:
+def list_jobs(user_id: int) -> list[dict]:
     """当前用户的任务列表，最近的在前。"""
     with _jobs_lock:
         mine = [job for job in _jobs.values() if job.user_id == int(user_id)]
@@ -167,8 +166,11 @@ def _execute(job_id: str) -> None:
         return
     job.status = STATUS_RUNNING
 
-    db = SessionLocal()
+    # SessionLocal() 必须放在 try 内：建会话失败（数据库不可用）也要把任务置为 FAILED。
+    # 放在 try 外时异常会越过下面的 except，任务永远停在 RUNNING，前端会一直转圈。
+    db = None
     try:
+        db = SessionLocal()
         # 权限在提交时已按发起人校验过；这里重新取一次用户行，generate() 要按它的角色定数据范围。
         owner = db.get(AppUser, job.user_id)
         if owner is None:
@@ -188,7 +190,8 @@ def _execute(job_id: str) -> None:
             raise RuntimeError(result.message or "报告生成失败")
         job.report_id = (result.data or {}).get("report_id")
     except Exception as exc:  # noqa: BLE001 - 后台任务：失败写进任务表
-        db.rollback()
+        if db is not None:
+            db.rollback()
         job.status = STATUS_FAILED
         job.error = str(exc)
         logger.exception("报告生成任务 %s 失败", job_id)
@@ -197,7 +200,8 @@ def _execute(job_id: str) -> None:
         logger.info("报告生成任务 %s 完成：report_id=%s", job_id, job.report_id)
     finally:
         job.finished_at = time.time()
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _loop() -> None:

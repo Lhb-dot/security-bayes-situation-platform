@@ -20,13 +20,13 @@
  *   数据资产 /profile —— 数据集全量统计，不受运行态影响（caliber_matrix / dimension_coverage / modeling）。
  *   运行态 /workspace + 成员 /users —— 场景管理员拿到的是整个场景（self_only=false）；
  *   接口失败静默降级，不影响数据资产部分。
+ *
+ * 扩展字段不做「未下发」空数组兜底：三者在前端类型里必填（dashboardApi.ts:153/208/210），
+ * 后端 get_profile 也无条件下发（dashboard_service.py:1386/1486/1488），不存在只缺它们的中间态。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import {
   getScenarioWorkspace,
-  type CaliberRow,
-  type DimensionCoverage,
-  type ModelingStat,
   type NetworkProfile,
   type WorkspaceBase,
 } from '@/api/dashboardApi';
@@ -45,6 +45,24 @@ import { fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
 const props = defineProps<{ data: NetworkProfile }>();
 
 /* ------------------------------------------------------------------ */
+/* 口径常量：阈值 / 枚举字面量 / 分隔符一律在此具名，computed 与模板共用   */
+/* ------------------------------------------------------------------ */
+
+/** 列表分隔符：正类取值、覆盖数据集、白躺数据集共用 */
+const LIST_SEPARATOR = '、';
+/** 偏离倍数：保留位数 / 持平基准（×1 = 与场景合并口径持平） */
+const DEVIATION_DIGITS = 2;
+const DEVIATION_BASELINE = 1;
+/** 覆盖数阈值：=1 表示该维度只有一份数据能算 */
+const COVERAGE_SINGLE_SOURCE = 1;
+/** 成员列表单页上限（后端分页硬上限，见 backend/app/utils/common.py:65） */
+const MEMBER_PAGE_SIZE = 200;
+/** 角色与账号状态字面量（frontend/src/types/security.ts:376 / 385） */
+const ROLE_SCENARIO_ADMIN = 'SCENARIO_ADMIN';
+const ROLE_SCENARIO_USER = 'SCENARIO_USER';
+const ACCOUNT_STATUS_ACTIVE = 'active';
+
+/* ------------------------------------------------------------------ */
 /* 运行态与成员：并行请求 + 各自静默降级                                 */
 /* ------------------------------------------------------------------ */
 
@@ -61,13 +79,15 @@ const memberTotal = ref<number | null>(null);
 
 /**
  * 两个接口并行、各自静默降级：任一失败只影响它自己那块，不阻塞数据资产部分。
- * 成员按契约用 `page_size: 200` 拉一页后在本地按 scenario_id 过滤（不依赖后端过滤参数）。
+ * 成员显式传 `scenario_id`：后端只对 SCENARIO_ADMIN 自动收窄场景，SUPER_ADMIN
+ * 不传参时拿到的是全平台账号、`total` 也是全平台人数，S5 会渲染出「未纳入统计 N 人」
+ * 的假行。传参后 `total` 即本场景权威人数。本地再过滤一次作为纵深防御。
  */
 const loadAll = async () => {
   const scenarioId = props.data.scenario_id;
   const [runtimeResult, memberResult] = await Promise.allSettled([
     getScenarioWorkspace(scenarioId),
-    getUserList({ page_size: 200 }),
+    getUserList({ scenario_id: scenarioId, page_size: MEMBER_PAGE_SIZE }),
   ]);
 
   runtime.value = runtimeResult.status === 'fulfilled' ? runtimeResult.value : null;
@@ -86,28 +106,6 @@ onMounted(loadAll);
 const summary = computed(() => runtime.value?.summary ?? null);
 
 /* ------------------------------------------------------------------ */
-/* 新增字段兜底：后端 B 任务未上线时不得白屏                              */
-/* ------------------------------------------------------------------ */
-
-/**
- * `caliber_matrix` / `dimension_coverage` / `modeling` 是本次画像扩展新增的字段。
- * 旧后端不会下发它们，直接 `.map()` 会整页白屏；一律兜底为空数组，
- * 让页面退化为「暂无数据」而不是崩掉。
- */
-const rowsOrEmpty = <T,>(value: T[] | undefined): T[] => value ?? [];
-
-const caliber = computed(() => rowsOrEmpty<CaliberRow>(props.data.caliber_matrix));
-const dimensionCoverage = computed(() =>
-  rowsOrEmpty<DimensionCoverage>(props.data.dimension_coverage),
-);
-const modeling = computed(() => rowsOrEmpty<ModelingStat>(props.data.modeling));
-/**
- * `modeling` 是否真的由后端下发。
- * 未下发时「已发布 0 / 共 0」会算成 0，属于**误报**，因此这类结论一律显示「—」。
- */
-const modelingReady = computed(() => Array.isArray(props.data.modeling));
-
-/* ------------------------------------------------------------------ */
 /* S1 场景资产总览 KPI ×4                                              */
 /* ------------------------------------------------------------------ */
 
@@ -117,13 +115,20 @@ const modelingReady = computed(() => Array.isArray(props.data.modeling));
  * 为什么这么算：同一场景内如果两个数据集一个叫 `Label`、一个叫 `class`，
  * 它们的「1 / anomaly」正类取值根本不在同一套风险语言里，合并统计前必须先做显式映射；
  * 分裂度 > 1 就意味着「统一风险占比」这个数是由多套口径拼出来的，不能直接横向比较。
- * 后端未下发矩阵时返回 null（显示「—」）而不是 0 —— 0 会被读成「口径完全统一」，是误报。
+ * 矩阵为空时返回 null（而不是 0）—— 0 会被读成「口径完全统一」，是误报。
  */
 const caliberLanguages = computed(() => {
-  const rows = caliber.value;
+  const rows = props.data.caliber_matrix;
   if (!rows.length) return null;
   return new Set(rows.map((row) => row.label_field)).size;
 });
+
+/** 第 4 个 KPI 的口径副标题（SHOW_DASH_HINTS=false 时不上屏，口径仍按契约备好） */
+const caliberSplitSub = computed(() =>
+  caliberLanguages.value === null
+    ? '后端未下发风险口径矩阵'
+    : `${caliberLanguages.value} 套风险语言 · 不可直接合并`,
+);
 
 const overviewKpis = computed(() => [
   {
@@ -145,10 +150,7 @@ const overviewKpis = computed(() => [
     value: caliberLanguages.value,
     unit: '套',
     tone: 'warning' as const,
-    sub:
-      caliberLanguages.value === null
-        ? '后端未下发风险口径矩阵'
-        : `${caliberLanguages.value} 套风险语言 · 不可直接合并`,
+    sub: caliberSplitSub.value,
   },
 ]);
 
@@ -167,13 +169,13 @@ const overviewKpis = computed(() => [
 const displayNames = computed(() => {
   const names = props.data.datasets.map((item) => item.name || item.logical_id);
   const counts = new Map<string, number>();
-  names.forEach((name) => counts.set(name, (counts.get(name) ?? 0) + 1));
-  const map = new Map<string, string>();
-  props.data.datasets.forEach((item, index) => {
-    const name = names[index];
-    map.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
-  });
-  return map;
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return new Map(
+    props.data.datasets.map((item, index) => [
+      item.logical_id,
+      (counts.get(names[index]) ?? 0) > 1 ? `${names[index]}（${item.logical_id}）` : names[index],
+    ]),
+  );
 });
 
 /** logical_id → 展示名；优先去重表，其次后端行内的 name，最后回退 logical_id */
@@ -191,7 +193,7 @@ const visibilityText = (value: string | undefined) =>
 
 /** 每数据集的模型版本统计（后端已按 dataset 聚合，这里只做 logical_id 索引） */
 const modelingByDataset = computed(
-  () => new Map(modeling.value.map((item) => [item.logical_id, item])),
+  () => new Map(props.data.modeling.map((item) => [item.logical_id, item])),
 );
 
 /* ------------------------------------------------------------------ */
@@ -221,27 +223,26 @@ const caliberColumns: DashColumn[] = [
 
 /**
  * 偏离倍数单元格：>1 高于场景合并口径（红）、<1 低于（蓝）、=1 持平（灰）、无基准（—）。
- * 保留 2 位小数：偏离是「倍数」不是百分比，位数再多在表里也读不出来。
+ * `deviation` 由后端给 number | null（场景风险占比为 0 时 null），故这里只需判 null 与
+ * 非有限值（JSON 里不会有 Infinity/NaN，保留该判断是为了不把异常值渲染成「×NaN」）。
  */
 const deviationCell = (value: number | null | undefined): DashCell => {
-  if (value === null || value === undefined) return '—';
-  const num = Number(value);
-  if (!Number.isFinite(num)) return '—';
-  const text = `×${num.toFixed(2)}`;
-  if (num > 1) return { text, tone: 'up' };
-  if (num < 1) return { text, tone: 'down' };
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  const text = `×${value.toFixed(DEVIATION_DIGITS)}`;
+  if (value > DEVIATION_BASELINE) return { text, tone: 'up' };
+  if (value < DEVIATION_BASELINE) return { text, tone: 'down' };
   return { text, tone: 'muted' };
 };
 
 const caliberRows = computed<Array<Record<string, unknown>>>(() =>
-  caliber.value.map((item) => {
+  props.data.caliber_matrix.map((item) => {
     const positives = item.positive_labels ?? [];
     return {
       logical_id: item.logical_id,
       name: nameOf(item.logical_id, item.name),
       label_field: item.label_field,
       // 未登记正类 → 不猜、不推断，直接写「未登记」（显式登记表缺项）
-      positive_labels: positives.length ? positives.join('、') : '未登记',
+      positive_labels: positives.length ? positives.join(LIST_SEPARATOR) : '未登记',
       record_count: fmtInt(item.record_count),
       risk_count: fmtInt(item.risk_count),
       risk_rate: fmtPercent(item.risk_rate),
@@ -272,17 +273,17 @@ const dimensionColumns: DashColumn[] = [
 
 const coverageCell = (count: number): DashCell => {
   if (count === props.data.dataset_file_count) return { text: '全覆盖', tone: 'ok' };
-  if (count === 1) return { text: '仅一份数据支撑', tone: 'warn' };
+  if (count === COVERAGE_SINGLE_SOURCE) return { text: '仅一份数据支撑', tone: 'warn' };
   return { text: '部分覆盖', tone: 'muted' };
 };
 
 const dimensionRows = computed<Array<Record<string, unknown>>>(() =>
-  dimensionCoverage.value.map((item) => {
+  props.data.dimension_coverage.map((item) => {
     const ids = item.datasets ?? [];
     return {
       key: item.key,
       dimension: item.dimension,
-      datasets: ids.length ? ids.map((logicalId) => nameOf(logicalId)).join('、') : '—',
+      datasets: ids.length ? ids.map((logicalId) => nameOf(logicalId)).join(LIST_SEPARATOR) : '—',
       coverage: ids.length,
       coverage_status: coverageCell(ids.length),
     };
@@ -315,6 +316,7 @@ const datasetColumns: DashColumn[] = [
 
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.datasets.map((item) => {
+    // modeling 与 datasets 同源同序（后端对同一批可见数据集各出一行），命中缺失时留「—」
     const stat = modelingByDataset.value.get(item.logical_id);
     return {
       logical_id: item.logical_id,
@@ -326,7 +328,7 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
       risk_rate: fmtPercent(item.risk_rate),
       attribute_count: item.attribute_count,
       visibility: visibilityText(item.visibility),
-      models: modelingReady.value && stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
+      models: stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
       version: item.version,
     };
   }),
@@ -338,17 +340,17 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
 
 /** 每个数据集一根柱 = 模型版本总数；为 0 即「数据白躺」 */
 const modelingBars = computed(() =>
-  modeling.value.map((item) => ({ value: nameOf(item.logical_id), count: item.total })),
+  props.data.modeling.map((item) => ({ value: nameOf(item.logical_id), count: item.total })),
 );
 
 /** 白躺数据集（有数据、无任何模型版本）—— 单独点名，柱状图看不出「0 根柱」 */
 const whiteLying = computed(() =>
-  modeling.value.filter((item) => item.total === 0).map((item) => nameOf(item.logical_id)),
+  props.data.modeling.filter((item) => item.total === 0).map((item) => nameOf(item.logical_id)),
 );
 
 /** 已发布 / 草稿合计（DashBars 只渲染 count，逐数据集明细在 S2 的「已发布模型数」列） */
 const modelTotals = computed(() =>
-  modeling.value.reduce(
+  props.data.modeling.reduce(
     (acc, item) => ({ published: acc.published + item.published, draft: acc.draft + item.draft }),
     { published: 0, draft: 0 },
   ),
@@ -358,12 +360,14 @@ const modelTotals = computed(() =>
 /* S4 场景运行态水位                                                    */
 /* ------------------------------------------------------------------ */
 
+/** 近 10 天活动量：activity_trend[].total 之和；运行态缺失时为 null（≠ 0，见报告 D-1） */
+const activityTotal = computed(() =>
+  runtime.value ? runtime.value.activity_trend.reduce((sum, point) => sum + point.total, 0) : null,
+);
+
 /** 运行态 KPI：积压 / 处置率 / 近 10 天活动量 */
 const runtimeKpis = computed(() => {
   const item = summary.value;
-  const activity = runtime.value
-    ? (runtime.value.activity_trend ?? []).reduce((sum, point) => sum + Number(point.total ?? 0), 0)
-    : null;
   return [
     { label: '待处置积压', value: item ? item.pending : null, unit: '条', tone: 'danger' as const },
     {
@@ -372,7 +376,7 @@ const runtimeKpis = computed(() => {
       tone: 'success' as const,
       raw: true,
     },
-    { label: '近 10 天活动', value: activity, unit: '次', tone: 'primary' as const },
+    { label: '近 10 天活动', value: activityTotal.value, unit: '次', tone: 'primary' as const },
   ];
 });
 
@@ -396,23 +400,23 @@ const trendPoints = computed(() =>
 
 /** 场景成员：按账号角色分组计数，范围限本场景 */
 const memberRows = computed(() => {
-  if (members.value === null) return [];
   const list = members.value;
-  const admins = list.filter((item) => item.role === 'SCENARIO_ADMIN');
-  const users = list.filter((item) => item.role === 'SCENARIO_USER');
-  const disabled = list.filter((item) => item.status !== 'active');
+  if (list === null) return [];
+  const adminCount = list.filter((item) => item.role === ROLE_SCENARIO_ADMIN).length;
+  const userCount = list.filter((item) => item.role === ROLE_SCENARIO_USER).length;
+  const disabledCount = list.filter((item) => item.status !== ACCOUNT_STATUS_ACTIVE).length;
   const rows = [
-    { label: '场景管理员', value: `${admins.length} 人` },
-    { label: '场景用户', value: `${users.length} 人` },
+    { label: '场景管理员', value: `${adminCount} 人` },
+    { label: '场景用户', value: `${userCount} 人` },
     { label: '合计', value: `${list.length} 人` },
   ];
-  if (disabled.length) {
-    rows.push({ label: '已禁用', value: `${disabled.length} 人` });
+  if (disabledCount) {
+    rows.push({ label: '已禁用', value: `${disabledCount} 人` });
   }
   // 单页 200 条是硬上限：被分页截断时明说，避免把「取到的一页」当成「全场景成员」
   const overflow = (memberTotal.value ?? 0) - list.length;
   if (overflow > 0) {
-    rows.push({ label: '未纳入统计', value: `${overflow} 人（超出单页 200 条）` });
+    rows.push({ label: '未纳入统计', value: `${overflow} 人（超出单页 ${MEMBER_PAGE_SIZE} 条）` });
   }
   return rows;
 });
@@ -454,9 +458,9 @@ const memberRows = computed(() => {
   <!-- S3 建模覆盖 -->
   <DashCard title="建模覆盖" source="每数据集一根柱 = 模型版本总数；总数为 0 即「数据白躺」">
     <DashBars :items="modelingBars" :label-width="260" suffix=" 个版本" />
-    <p v-if="modelingReady" style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7">
+    <p style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7">
       <span v-if="whiteLying.length" class="d-tag d-tag--warn">数据白躺 {{ whiteLying.length }} 份</span>
-      <span v-if="whiteLying.length" style="margin-left: 6px">{{ whiteLying.join('、') }}</span>
+      <span v-if="whiteLying.length" style="margin-left: 6px">{{ whiteLying.join(LIST_SEPARATOR) }}</span>
       <span style="margin-left: 8px; color: rgba(220, 234, 255, 0.5)">
         已发布合计 {{ modelTotals.published }} / 草稿合计 {{ modelTotals.draft }}
       </span>

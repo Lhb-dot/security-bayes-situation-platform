@@ -5,8 +5,6 @@
 created_by_user_id 过滤）；删除 → 禁止（历史事件必须保持可追溯，Service 返回 400）；
 隐藏 → 软删除（POST /{id}/hide、/{id}/unhide），数据一行不动，只切可见性。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -29,11 +27,11 @@ router = APIRouter(prefix="/risk-events", tags=["风险事件"])
 def list_risk_events(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤（仅管理员）"),
-    status: Optional[str] = Query(
+    scenario_id: int | None = Query(None, description="按场景过滤（仅管理员）"),
+    status: str | None = Query(
         None, description="按处置状态过滤：PENDING/PROCESSING/RESOLVED"
     ),
-    risk_level: Optional[str] = Query(
+    risk_level: str | None = Query(
         None, description="按风险等级过滤（按查看者阈值判级）：HIGH/MEDIUM/LOW"
     ),
     include_hidden: bool = Query(

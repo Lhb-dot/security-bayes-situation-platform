@@ -8,9 +8,9 @@
 - 5.4  风险等级生成规则（可配置阈值，此处仅提供兜底值）
 - 6.4.1 分类类别统一约定（风险样本 = 正类，显式映射，禁止自动推断）
 
-⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES /
-DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的业务数据字典，
-作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
+⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES / DATASET_LOGICAL_IDS /
+DATASET_DISPLAY_NAMES / DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的
+业务数据字典，作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
 与数据库种子数据。
 """
 
@@ -62,8 +62,9 @@ USER_STATUSES = (USER_STATUS_ENABLED, USER_STATUS_DISABLED)
 
 # 账号字段长度约束（与 ORM 列定义一致）
 USERNAME_MAX_LEN = 64
-PASSWORD_HASH_MAX_LEN = 128
+PASSWORD_HASH_MAX_LEN = 128  # ORM 列 password_hash 的长度（哈希串固定约 118 字符）
 PASSWORD_MIN_LEN = 6  # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
+PASSWORD_MAX_LEN = 128  # 密码明文长度上限（与 UserService 的校验口径一致）
 
 # 数据可见性分级（三级角色数据所有权：平台/公司/个人）
 DATASET_VISIBILITY_PLATFORM = "platform"   # 平台数据：最外层管理员管理，各场景基线
@@ -86,7 +87,7 @@ SCENARIO_ACCESS_STATUSES = (SCENARIO_ACCESS_ACTUAL, SCENARIO_ACCESS_RESERVED)
 SCENARIO_CODES = (
     "network_security",     # 网络安全
     "power_system",         # 电力系统
-    "geological_risk",      # 地质风险（⚠️ 当前 seed 迁移 d6adba5112b8 未覆盖，需补充）
+    "geological_risk",      # 地质风险（由迁移 20260806_120000_add_geological_risk_scenario 追加）
     "flightdeck_operation", # 航母甲板作业
 )
 
@@ -107,6 +108,12 @@ DATASET_LABEL_FIELD_MAX_LEN = 64
 # 需求文档 §2 第一阶段数据集编码清单（用于风险规则映射与展示，不作为"禁止新增"约束——
 # 需求文档主题即为"接入新的数据集"，管理员可上传新数据集；未登记的数据集默认不生成风险事件，
 # 需在 DATASET_RISK_TYPES 中补充映射）
+#
+# 口径不变式（新增数据集时必须同时满足，见《全项目代码审查/报告/B5.md》）：
+#   1. DATASET_DISPLAY_NAMES 的键 ⊇ DATASET_LOGICAL_IDS（每个登记项都要有展示名）；
+#   2. DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES 的键 ⊆ DATASET_LOGICAL_IDS，
+#      且两者必须成对登记（未登记 = 不产风险事件，见 dashboard_service 的 registered 判断）；
+#   3. 例外：dis_global_catalog 只登记展示名（全球地质目录，不作为训练/风险样本）。
 DATASET_LOGICAL_IDS = (
     "kdd_train_20_percent",
     "nf_unsw_nb15_v2",
@@ -201,10 +208,12 @@ def dataset_display_name_of(dataset: object | None) -> str | None:
 
 # ---------------------------------------------------------------------------
 # 算法（数据库设计文档v2 2.4；需求文档 6.6.1）
+#
+# 状态只登记实际会被写入的取值：算法由开发人员通过代码接入（见 algorithm_service），
+# 全后端没有任何代码路径写入 "DEPRECATED"（grep 证据见 B5 报告），故不再登记该值。
+# 若将来引入算法下线流程，在此补回并同步 dashboard_service 的可用算法计数口径。
 # ---------------------------------------------------------------------------
 ALGORITHM_STATUS_AVAILABLE = "AVAILABLE"
-ALGORITHM_STATUS_DEPRECATED = "DEPRECATED"
-ALGORITHM_STATUSES = (ALGORITHM_STATUS_AVAILABLE, ALGORITHM_STATUS_DEPRECATED)
 
 # 需求文档 §6.6.1 第一阶段算法编码（数据字典，硬编码校验基准）
 # 六个算法：A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB；MAWNB 对应外部 MVCAVWNB。

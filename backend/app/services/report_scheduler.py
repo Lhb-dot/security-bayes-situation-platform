@@ -12,12 +12,11 @@ SELECT ... FOR UPDATE SKIP LOCKED 保证，同一条记录只会被一个进程�
 - REPORT_SCHEDULER_INTERVAL  默认 60，轮询间隔（秒），下限 5
 """
 import os
-import sys
 import threading
 
 from app.db import SessionLocal
 from app.services.report_service import ReportService
-from app.utils.common import get_logger
+from app.utils.common import get_logger, running_under_test_runner
 
 logger = get_logger("report_scheduler")
 
@@ -58,7 +57,10 @@ def start(interval_seconds: int | None = None) -> None:
     if os.getenv("REPORT_SCHEDULER_ENABLED", "1") != "1":
         logger.info("定时报告调度器已按 REPORT_SCHEDULER_ENABLED=0 关闭")
         return
-    if "pytest" in sys.modules:
+    # 与其余四个后台执行器（training / batch_inference / export / report_generate）同一判定：
+    # 只认 __main__ 的 spec。原来只看 sys.modules 里有没有 pytest，`python -m unittest`
+    # 跑测试时判定为 False，调度线程会真的起来连数据库扫到期报告。
+    if running_under_test_runner():
         return
     with _lock:
         if _thread is not None and _thread.is_alive():

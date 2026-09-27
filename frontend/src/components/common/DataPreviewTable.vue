@@ -213,9 +213,8 @@ onBeforeUnmount(() => {
 }
 
 .data-preview .el-table td.el-table__cell {
-  /* 使用不透明底色，避免横向滚动时内容从冻结列下方透出 */
+  /* 使用不透明底色：整表横向滚动，半透明底会让滚过的列互相透出 */
   background: #06101c !important;
-  background-color: #06101c !important;
   color: rgba(175, 198, 230, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
@@ -226,41 +225,6 @@ onBeforeUnmount(() => {
 }
 
 .data-preview .el-table__body tr:hover > td.el-table__cell {
-  background-color: #142c48 !important;
-}
-
-/* 固定列必须盖住滚动内容，避免横向滚动时发生视觉穿透 */
-.data-preview .el-table {
-  position: relative;
-}
-
-.data-preview .el-table__fixed,
-.data-preview .el-table__fixed-right {
-  z-index: 20 !important;
-  background: #06101c !important;
-}
-
-.data-preview .el-table__fixed::before,
-.data-preview .el-table__fixed-right::before {
-  background-color: #06101c !important;
-}
-
-.data-preview .el-table__fixed td.el-table__cell,
-.data-preview .el-table__fixed th.el-table__cell,
-.data-preview .el-table__fixed-right td.el-table__cell,
-.data-preview .el-table__fixed-right th.el-table__cell {
-  background: #06101c !important;
-  background-color: #06101c !important;
-}
-
-/* 固定列内部不依赖 .el-table--striped 祖先，确保 Element Plus 克隆表格也能匹配 */
-.data-preview .el-table__fixed tr.el-table__row--striped td.el-table__cell,
-.data-preview .el-table__fixed-right tr.el-table__row--striped td.el-table__cell {
-  background-color: #0a182c !important;
-}
-
-.data-preview .el-table__fixed .el-table__body tr:hover > td.el-table__cell,
-.data-preview .el-table__fixed-right .el-table__body tr:hover > td.el-table__cell {
   background-color: #142c48 !important;
 }
 
@@ -279,12 +243,6 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 冻结首列加一道阴影，避免和后续列糊在一起 */
-.data-preview .el-table__fixed,
-.data-preview .el-table__fixed-right {
-  box-shadow: 6px 0 12px rgba(0, 0, 0, 0.35);
-}
-
 .data-preview .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
 }
@@ -299,13 +257,6 @@ onBeforeUnmount(() => {
   background-color: rgba(255, 209, 102, 0.14) !important;
   color: #ffd166 !important;
   font-weight: 600;
-}
-
-/* 冻结列是覆盖在滚动内容之上的独立图层，标签单元格也必须使用不透明底色 */
-.data-preview .el-table__fixed .preview-label-cell,
-.data-preview .el-table__fixed-right .preview-label-cell {
-  background-color: #3a321b !important;
-  color: #ffd166 !important;
 }
 
 /* ---------------- 分页器（暗色） ----------------

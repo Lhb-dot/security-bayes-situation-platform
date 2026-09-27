@@ -41,9 +41,6 @@ const pageSize = 20;
 const userStore = useUserStore();
 const router = useRouter();
 
-/** 是否系统管理员（管理员/用户固定自己场景） */
-const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
-
 /** 筛选条件 */
 const selectedScenario = ref<number | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
@@ -142,11 +139,11 @@ const tableWrapRef = ref<HTMLElement | null>(null);
 /** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
 const changePage = (target: number) => keepScroll(() => loadEvents(target), tableWrapRef.value);
 
-/** 风险等级标签映射 */
-const riskLevelMap: Record<string, { label: string; type: string }> = {
-  HIGH: { label: '高危', type: 'danger' },
-  MEDIUM: { label: '中危', type: 'warning' },
-  LOW: { label: '低危', type: 'info' },
+/** 风险等级 → 中文（配色由 .ev-level--* 类承担，这里只管文案） */
+const RISK_LEVEL_LABEL: Record<string, string> = {
+  HIGH: '高危',
+  MEDIUM: '中危',
+  LOW: '低危',
 };
 
 /** 原始标签中文化（模型输出的原始类标；未收录的原样显示） */
@@ -219,9 +216,11 @@ onMounted(() => {
       <span class="section-tag">{{ total }} 条事件</span>
     </div>
 
-    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉） -->
+    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉）。
+         这里用 store 的 isSuperAdmin（role 恰为 SUPER_ADMIN），不是 isManagement
+         —— 场景管理员也该被固定在自己的场景上。 -->
     <div class="risk-events-filters">
-      <label v-if="isSuperAdmin" class="filter-item">
+      <label v-if="userStore.isSuperAdmin" class="filter-item">
         <span class="filter-item__label">场景</span>
         <select v-model="selectedScenario" class="filter-select">
           <option v-for="opt in scenarioOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -290,7 +289,7 @@ onMounted(() => {
           <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__level">
               <span class="ev-level-badge" :class="`ev-level--${row.risk_level}`">
-                {{ riskLevelMap[row.risk_level]?.label ?? row.risk_level }}
+                {{ RISK_LEVEL_LABEL[row.risk_level] ?? row.risk_level }}
               </span>
               <span class="ev-level-score">{{ (row.risk_score * 100).toFixed(1) }}%</span>
             </span>
@@ -313,10 +312,9 @@ onMounted(() => {
 
         <el-table-column label="处置状态" width="94" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
-            <span
-              class="event-table__status"
-              :class="`ev-status--${STATUS_LABEL[row.status] ?? row.status}`"
-            >
+            <!-- 类名直接用后端枚举（PENDING/PROCESSING/RESOLVED）：
+                 此前是拿中文文案拼类名（ev-status--待处置），非 ASCII 类名既难搜也易错 -->
+            <span class="event-table__status" :class="`ev-status--${row.status}`">
               {{ STATUS_LABEL[row.status] ?? row.status }}
             </span>
           </template>
@@ -467,17 +465,17 @@ onMounted(() => {
   border-radius: 999px;
 }
 
-.ev-status--待处置 {
+.ev-status--PENDING {
   background: rgba(255, 177, 107, 0.08);
   color: rgba(230, 180, 110, 0.7);
 }
 
-.ev-status--处理中 {
+.ev-status--PROCESSING {
   background: rgba(91, 166, 255, 0.08);
   color: rgba(155, 195, 240, 0.7);
 }
 
-.ev-status--已处置 {
+.ev-status--RESOLVED {
   background: rgba(83, 229, 200, 0.08);
   color: rgba(83, 229, 200, 0.65);
 }

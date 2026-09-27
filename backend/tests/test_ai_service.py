@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 sys.path.insert(0, str(Path(__file__).parents[2] / "scripts"))
 
 from app.services.explanation_service import (
-    AISettingService,
     _classify_ai_error,
     _fernet,
     _openai_stream,

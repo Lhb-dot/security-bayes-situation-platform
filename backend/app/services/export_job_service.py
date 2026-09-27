@@ -86,14 +86,18 @@ def is_running() -> bool:
 
 
 def create_job(user_id: int, report_id: int, fmt: str, title: str) -> str:
-    """登记任务并入队，返回 job_id。"""
+    """登记任务并入队，返回 job_id。
+
+    鉴权由调用方负责（当前唯一调用点 ReportService.submit_export 已按三级角色
+    校验报告可见性）；本模块不做权限判断，新调用点必须自己先校验。
+    """
     job = _register(user_id, report_id, fmt, title)
     _queue.put(job.id)
     return job.id
 
 
 def create_finished_job(user_id: int, report_id: int, fmt: str, title: str, exported) -> str:
-    """登记一个已经产出好的任务（markdown / html 走这条）。"""
+    """登记一个已经产出好的任务（markdown / html 走这条）。鉴权要求同 create_job。"""
     job = _register(user_id, report_id, fmt, title)
     _fill(job, exported)
     return job.id
@@ -188,26 +192,35 @@ def _execute(job_id: str) -> None:
 
     with _jobs_lock:
         job = _jobs.get(job_id)
-    if job is None:
-        return
-    job.status = STATUS_RUNNING
+        if job is None:
+            return
+        job.status = STATUS_RUNNING
 
-    db = SessionLocal()
+    # SessionLocal() 必须放在 try 内：建会话失败（数据库不可用）也要把任务置为 FAILED。
+    # 放在 try 外时异常会越过下面的 except，任务永远停在 RUNNING，前端会一直转圈，
+    # 而 _purge_locked 只清终态任务 ⇒ 该任务连同 PDF 字节永久驻留内存。
+    db = None
     try:
+        db = SessionLocal()
         # 权限已在提交时校验过；这里才取正文与结构化数据（体积大，放在渲染前才读）。
         title, content, report_data = ReportService(db).load_export_source(job.report_id)
         exported = build_export(title, content, job.report_id, job.fmt, report_data)
     except Exception as exc:  # noqa: BLE001 - 后台任务：失败写进任务表
-        db.rollback()
-        job.status = STATUS_FAILED
-        job.error = str(exc)
+        if db is not None:
+            db.rollback()
+        with _jobs_lock:
+            job.status = STATUS_FAILED
+            job.error = str(exc)
         logger.exception("报告导出任务 %s 失败", job_id)
     else:
-        _fill(job, exported)
+        with _jobs_lock:
+            _fill(job, exported)
         logger.info("报告导出任务 %s 完成：%s", job_id, job.filename)
     finally:
-        job.finished_at = time.time()
-        db.close()
+        with _jobs_lock:
+            job.finished_at = time.time()
+        if db is not None:
+            db.close()
 
 
 def _loop() -> None:
@@ -215,6 +228,10 @@ def _loop() -> None:
         try:
             job_id = _queue.get(timeout=POLL_SECONDS)
         except queue.Empty:
+            # 空闲时也执行一次清理：_purge_locked 原来只在 _register（下一次提交）时触发，
+            # 没有新提交时过期终态任务连同 PDF 字节会一直驻留到进程退出。
+            with _jobs_lock:
+                _purge_locked()
             continue
         try:
             _execute(job_id)

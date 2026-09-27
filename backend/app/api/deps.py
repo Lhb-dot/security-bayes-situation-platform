@@ -1,4 +1,5 @@
 """FastAPI dependencies for authenticated users and role checks."""
+import hmac
 from datetime import datetime, timezone
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -28,6 +29,16 @@ def _unauthorized() -> HTTPException:
     return HTTPException(status_code=401, detail="未登录或账号不可用")
 
 
+def _as_utc(value: datetime) -> datetime:
+    """按 UTC 解释库里读出的时间戳。
+
+    生产库是 PostgreSQL（``DateTime(timezone=True)`` 回来即 aware），但 SQLite /
+    MySQL 一类驱动会返回 naive datetime，直接与 aware 的 ``now`` 比较会抛
+    TypeError（500）。统一在这里补 tzinfo，避免同一个文件里一处归一化、一处不归一化。
+    """
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
 def get_current_session(
     request: Request,
     db: Session = Depends(get_db),
@@ -45,7 +56,7 @@ def get_current_session(
     if (
         session is None
         or session.revoked_at is not None
-        or session.expires_at <= now
+        or _as_utc(session.expires_at) <= now
     ):
         raise _unauthorized()
 
@@ -66,17 +77,18 @@ def get_current_session(
     # 节流写入：距上次记录超过 _LAST_SEEN_REFRESH_SECONDS 才落库，
     # 避免每个请求都产生一次 UPDATE + COMMIT（首页一次加载就有多个请求）。
     last_seen = session.last_seen_at
-    if last_seen is not None and last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
-    if last_seen is None or (now - last_seen).total_seconds() >= _LAST_SEEN_REFRESH_SECONDS:
+    if last_seen is not None:
+        last_seen = _as_utc(last_seen)
+    if (
+        last_seen is None
+        or (now - last_seen).total_seconds() >= _LAST_SEEN_REFRESH_SECONDS
+    ):
         session.last_seen_at = now
         db.commit()
     return session
 
 
 def _constant_time_digest_equal(expected: str, actual: str) -> bool:
-    import hmac
-
     return hmac.compare_digest(expected, actual)
 
 

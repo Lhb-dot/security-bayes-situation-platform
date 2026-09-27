@@ -1,5 +1,6 @@
 """User-bound AI provider settings. Raw keys never leave the backend."""
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.utils import unwrap
@@ -12,7 +13,10 @@ router = APIRouter(prefix="/settings/ai", tags=["AI 设置"])
 
 
 @router.get("", summary="读取当前用户 AI 设置（API key 仅返回掩码）")
-def get_ai_setting(current_user: AppUser = Depends(get_current_user), db=Depends(get_db)):
+def get_ai_setting(
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     return unwrap(AISettingService(db).get(current_user))
 
 
@@ -20,11 +24,14 @@ def get_ai_setting(current_user: AppUser = Depends(get_current_user), db=Depends
 def update_ai_setting(
     payload: AISettingUpdate,
     current_user: AppUser = Depends(get_current_user),
-    db=Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     return unwrap(AISettingService(db).update(current_user, payload.model_dump()))
 
 
 @router.post("/test", summary="测试当前用户 AI 服务连通性")
-def test_ai_setting(current_user: AppUser = Depends(get_current_user), db=Depends(get_db)):
+def test_ai_setting(
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     return unwrap(AISettingService(db).test_connection(current_user))

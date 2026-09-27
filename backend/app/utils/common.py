@@ -15,10 +15,11 @@ import logging
 import os
 import secrets
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -41,6 +42,13 @@ def running_under_test_runner() -> bool:
     spec = getattr(sys.modules.get("__main__"), "__spec__", None)
     if getattr(spec, "name", None) in ("unittest.__main__", "pytest", "pytest.__main__"):
         return True
+    # pytest 以 console script（``pytest.exe``）启动时 ``__main__.__spec__`` 为 None、
+    # ``argv[0]`` 基名是 ``pytest.exe``，上面两条判定都会漏 ⇒ 5 个后台 runner 会真启动
+    # 并连真实数据库（``training_runner.reap_stale()`` 会把真实库超时的 TRAINING 行改成
+    # FAILED）。生产进程不 import pytest，故该兜底不影响线上行为。
+    # 与 ``main.py`` 中「是否测试环境」的口径保持一致。
+    if "pytest" in sys.modules:
+        return True
     # 直接执行 tests/test_xxx.py 时 __spec__ 为 None，按文件名兜底
     argv0 = os.path.basename(sys.argv[0] or "")
     return argv0.startswith("test_") and argv0.endswith(".py")
@@ -55,7 +63,7 @@ def paginate(
     stmt,
     page: int = 1,
     page_size: int = 10,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """对 select() 语句执行分页，返回 {"items", "total", "page", "page_size"}。
 
     - 强制 page >= 1、1 <= page_size <= 200，防止非法参数。
@@ -101,7 +109,7 @@ def beijing_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     return to_beijing(datetime.now(timezone.utc)).strftime(fmt)
 
 
-def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
+def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
     - DateTime → YYYY-MM-DD HH:MM:SS（北京时间 UTC+8）
@@ -109,7 +117,7 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
     - JSONB / dict / list 原样保留
     - exclude 用于隐藏敏感字段（如 password_hash）
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for column in obj.__table__.columns:
         name = column.name
         if name in exclude:
@@ -131,7 +139,7 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
 # 字段校验辅助
 # ---------------------------------------------------------------------------
 
-def validate_required(data: Dict[str, Any], fields: Sequence[str]) -> Optional[str]:
+def validate_required(data: dict[str, Any], fields: Sequence[str]) -> str | None:
     """校验必填字段：缺失 / None / 空字符串视为非法，返回错误文案或 None。"""
     for field in fields:
         value = data.get(field)
@@ -140,7 +148,7 @@ def validate_required(data: Dict[str, Any], fields: Sequence[str]) -> Optional[s
     return None
 
 
-def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> Optional[str]:
+def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> str | None:
     """校验枚举值域，非法时返回错误文案。"""
     if value not in allowed:
         return f"{field_name} 取值非法: {value}，允许值: {sorted(allowed)}"
@@ -149,7 +157,7 @@ def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> Option
 
 def validate_length(
     value: str, field_name: str, max_len: int, min_len: int = 1
-) -> Optional[str]:
+) -> str | None:
     """校验字符串长度（按字符数）。"""
     length = len(value or "")
     if length < min_len or length > max_len:
@@ -163,7 +171,7 @@ def validate_length(
 
 def validate_fields_schema(
     fields_schema: Any, label_field: str
-) -> Optional[str]:
+) -> str | None:
     """校验 fields_schema 结构（需求 3.1.2 / 3.1.5）。
 
     规则：必须是列表；label_field 必须存在且 role == "label"；至少含一个
@@ -173,7 +181,7 @@ def validate_fields_schema(
         return "fields_schema 必须是非空字段列表"
     feature_count = 0
     label_found = False
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for idx, field in enumerate(fields_schema):
         if not isinstance(field, dict) or not field.get("name"):
             return f"fields_schema 第 {idx + 1} 项缺少 name"
@@ -197,7 +205,7 @@ def validate_fields_schema(
     return None
 
 
-def validate_input_features(fields_schema: List[Dict], input_features: Any) -> Optional[str]:
+def validate_input_features(fields_schema: list[dict], input_features: Any) -> str | None:
     """校验单条推理输入（需求 3.1.3 / 3.1.5）。
 
     - 所有 role=feature 的字段必填；
@@ -223,7 +231,7 @@ def validate_input_features(fields_schema: List[Dict], input_features: Any) -> O
 
 def validate_params_schema(
     param_schema: Any, params: Any, dataset_has_numeric: bool = True
-) -> Optional[str]:
+) -> str | None:
     """校验训练参数（需求 6.6.3：参数必须提供默认值，管理员修改须通过类型和范围校验）。
 
     参数项结构（与算法注册的 param_schema 对齐）：

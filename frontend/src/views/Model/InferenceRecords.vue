@@ -7,7 +7,7 @@
  * 本页也没有筛选栏。原先预留的 .records-filters / .filter-item / .filter-select 等 36 行 CSS
  * 从未被模板引用，已于 2026-09-27 删除。要做时前后端一起加。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import DOMPurify from 'dompurify';
@@ -138,6 +138,12 @@ const modelEvaluationVisible = ref(false);
 const modelEvaluationBlock = ref<HTMLElement | null>(null);
 const explanationReasoningRef = ref<HTMLElement | null>(null);
 let explanationController: AbortController | null = null;
+/**
+ * 解释文本请求序号：关弹窗 / 换记录 / 重新生成都 +1。
+ * 先发出的请求后回来时序号已变，必须整段丢弃 —— 否则 A 记录的响应会盖住
+ * 后打开的 B 记录的正文，也会把新流程刚设上的 loading 提前清掉。
+ */
+let explanationRequestSeq = 0;
 
 /**
  * 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。
@@ -199,6 +205,7 @@ const safeModelEvaluationHtml = computed(() =>
 );
 
 const openExplanation = async (record: InferenceRecordItem) => {
+  const seq = ++explanationRequestSeq;
   explanationController?.abort();
   explanationTarget.value = record;
   explanationDialogVisible.value = true;
@@ -213,6 +220,7 @@ const openExplanation = async (record: InferenceRecordItem) => {
   explanationGenerating.value = false;
   try {
     const result = await getInferenceExplain(String(record.id));
+    if (seq !== explanationRequestSeq) return;
     const saved = result.generated_explanation;
     explanationWasAvailable.value = Boolean(saved?.available && saved.markdown);
     if (!saved?.available || !saved.markdown) {
@@ -222,9 +230,10 @@ const openExplanation = async (record: InferenceRecordItem) => {
     explanationMarkdown.value = saved.markdown;
     explanationGeneratedAt.value = saved.generated_at ?? null;
   } catch (err) {
+    if (seq !== explanationRequestSeq) return;
     explanationError.value = err instanceof Error ? err.message : '解释文本读取失败';
   } finally {
-    explanationLoading.value = false;
+    if (seq === explanationRequestSeq) explanationLoading.value = false;
   }
 };
 
@@ -232,6 +241,7 @@ const generateExplanation = async () => {
   const target = explanationTarget.value;
   if (!target || explanationLoading.value) return;
 
+  const seq = ++explanationRequestSeq;
   explanationController?.abort();
   explanationController = new AbortController();
   explanationLoading.value = true;
@@ -268,6 +278,7 @@ const generateExplanation = async () => {
     );
 
     const refreshed = await getInferenceExplain(String(target.id));
+    if (seq !== explanationRequestSeq) return;
     const saved = refreshed.generated_explanation;
     if (!saved?.available || !saved.markdown) {
       throw new Error('AI评价生成后未能保存，请稍后重试');
@@ -276,20 +287,25 @@ const generateExplanation = async () => {
     explanationGeneratedAt.value = saved.generated_at ?? null;
     explanationWasAvailable.value = true;
   } catch (err) {
-    if ((err as Error)?.name !== 'AbortError') {
+    if (seq === explanationRequestSeq && (err as Error)?.name !== 'AbortError') {
       explanationReasoning.value = '';
       explanationError.value = err instanceof Error ? err.message : 'AI评价生成失败';
     }
   } finally {
     // 收尾再钉一次：状态行消失会让正文区高度变化。
     stickExplanationToBottom();
-    explanationLoading.value = false;
-    explanationGenerating.value = false;
-    explanationController = null;
+    // 序号已变 = 弹窗被关或换了记录，新流程自己收尾：这里不能覆盖它的
+    // loading / generating / controller（controller 被置空后新流就 abort 不掉了）。
+    if (seq === explanationRequestSeq) {
+      explanationLoading.value = false;
+      explanationGenerating.value = false;
+      explanationController = null;
+    }
   }
 };
 
 const closeExplanation = () => {
+  explanationRequestSeq += 1;
   explanationController?.abort();
   explanationController = null;
   explanationDialogVisible.value = false;
@@ -346,6 +362,14 @@ const handleDelete = async (r: InferenceRecordItem) => {
 
 onMounted(() => {
   loadRecords();
+});
+
+// 流式解释是一条长连接：离开页面时必须主动断开，否则它会把整段响应读完，
+// 并继续往已卸载组件的 ref 上写。序号一并推进，让在途的读快照请求作废。
+onBeforeUnmount(() => {
+  explanationRequestSeq += 1;
+  explanationController?.abort();
+  explanationController = null;
 });
 </script>
 

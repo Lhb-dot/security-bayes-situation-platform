@@ -5,6 +5,7 @@
  * 阈值按登录账号绑定；系统管理员可配置全部场景，其余账号仅配置绑定场景。
  */
 import request, { unwrapData } from '@/utils/request';
+import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/security';
 
 /**
@@ -15,25 +16,17 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/se
 export const DEFAULT_MEDIUM_THRESHOLD = 0.5;
 export const DEFAULT_HIGH_THRESHOLD = 0.8;
 
-const SCENARIO_ID_TO_CODE: Record<number, ScenarioId> = {
-  1: 'network_security',
-  2: 'power_system',
-  3: 'flightdeck_operation',
-  4: 'geological_risk',
-};
-const SCENARIO_CODE_TO_ID: Record<ScenarioId, number> = {
-  network_security: 1,
-  power_system: 2,
-  flightdeck_operation: 3,
-  geological_risk: 4,
-};
+/** 场景种子映射取逆：编码 → 数字 ID（后端 /scenarios 不可达时的兜底；种子表来自 scenarioApi） */
+const SCENARIO_CODE_TO_ID = Object.fromEntries(
+  Object.entries(SCENARIO_CODE_BY_ID).map(([id, code]) => [code, Number(id)])
+) as Record<ScenarioId, number>;
 interface ApiScenario {
   id: number;
   code: string;
 }
 
 let scenarioIdByCode: Partial<Record<ScenarioId, number>> | null = null;
-let scenarioCodeById: Record<number, ScenarioId> = { ...SCENARIO_ID_TO_CODE };
+let scenarioCodeById: Record<number, ScenarioId> = { ...SCENARIO_CODE_BY_ID };
 
 /** Resolve database scenario IDs instead of assuming sequence values. */
 const ensureScenarioMaps = async (): Promise<void> => {
@@ -56,7 +49,7 @@ type BackendThreshold = Omit<ThresholdConfig, 'scenario_id'> & { scenario_id: nu
 const normalizeThreshold = (item: BackendThreshold): ThresholdConfig => ({
   ...item,
   scenario_id: typeof item.scenario_id === 'number'
-    ? scenarioCodeById[item.scenario_id] ?? SCENARIO_ID_TO_CODE[item.scenario_id]
+    ? scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id]
     : item.scenario_id,
 });
 const backendScenarioId = async (scenarioId: ScenarioId | number): Promise<number> => {
@@ -87,7 +80,7 @@ export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]>
   type BackendAuditLog = Omit<ThresholdChangeLog, 'scenario_id'> & { scenario_id: number };
   return (data.items ?? []).map((item: BackendAuditLog) => ({
     ...item,
-    scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_ID_TO_CODE[item.scenario_id] ?? item.scenario_id,
+    scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id] ?? item.scenario_id,
   }));
 };
 

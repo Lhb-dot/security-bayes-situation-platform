@@ -99,10 +99,6 @@ watch(selectedScenario, () => {
   selectedDataset.value = 'all';
 });
 
-const scenarioOptions = computed(() => {
-  return allScenarios.value;
-});
-
 /** 筛选条件 → 后端查询参数：场景 code 转 id，「未发布」展开成三个状态 */
 const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
   const scenarioId = allScenarios.value.find((s) => s.code === selectedScenario.value)?.id;
@@ -217,6 +213,9 @@ const handleSetDefault = async (m: BackendModelVersion) => {
 };
 
 // ===================== 模型版本对比（需求 6.2 P1；普通用户仅可对比已发布模型） =====================
+/** 对比上限（需求 6.2 P1：2-5 个模型） */
+const MAX_COMPARE_MODELS = 5;
+
 const compareIds = ref<number[]>([]);
 
 /** 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞 */
@@ -228,8 +227,8 @@ const toggleCompare = (m: BackendModelVersion) => {
     compareIds.value.splice(idx, 1);
     compareCache.delete(m.id);
   } else {
-    if (compareIds.value.length >= 5) {
-      ElMessage.warning('最多选择 5 个模型进行对比');
+    if (compareIds.value.length >= MAX_COMPARE_MODELS) {
+      ElMessage.warning(`最多选择 ${MAX_COMPARE_MODELS} 个模型进行对比`);
       return;
     }
     compareIds.value.push(m.id);
@@ -248,22 +247,26 @@ const clearCompare = () => {
   compareCache.clear();
 };
 
-/** 对比指标列定义 */
-const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics }> = [
+/**
+ * 指标列定义（对比表与模型卡片共用同一份，顺序即 README 的
+ * Accuracy/Recall/Precision/Specificity/F1/G-mean）。
+ * adminOnly = 仅管理员可见的内部指标（普通用户只看前 6 项）。
+ */
+const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics; adminOnly?: boolean }> = [
   { label: 'Accuracy', key: 'accuracy' },
   { label: 'Recall', key: 'recall' },
   { label: 'Precision', key: 'precision' },
   { label: 'Specificity', key: 'specificity' },
   { label: 'F1', key: 'f1' },
   { label: 'G-mean', key: 'g_mean' },
-  { label: 'Risk Recall', key: 'risk_recall' },
-  { label: 'Risk F1', key: 'risk_f1' },
-  { label: 'CV Mean', key: 'cv_mean' },
-  { label: 'CV Std', key: 'cv_std' },
+  { label: 'Risk Recall', key: 'risk_recall', adminOnly: true },
+  { label: 'Risk F1', key: 'risk_f1', adminOnly: true },
+  { label: 'CV Mean', key: 'cv_mean', adminOnly: true },
+  { label: 'CV Std', key: 'cv_std', adminOnly: true },
 ];
 
 const visibleMetricRows = computed(() =>
-  isAdmin.value ? allMetricRows : allMetricRows.slice(0, 6)
+  allMetricRows.filter((row) => isAdmin.value || !row.adminOnly)
 );
 
 /** 判断某模型在某指标上是否为最优（高亮） */
@@ -287,6 +290,9 @@ const canPublish = (model: BackendModelVersion) => currentUser.value?.id === mod
 // 模型评价独立于推理记录：先读模型快照，只有需要生成时才调用 AI。
 // 管理员视角与用户视角在后端是两份独立产物，前端按视角分桶缓存，切标签时互不覆盖。
 type EvaluationTab = Extract<ModelEvaluationAudience, 'current' | 'user'>;
+
+/** 评价弹窗里最多列出的场景重点字段数（超出只截断展示，不影响后端数据） */
+const FEATURE_PROFILE_LIMIT = 8;
 
 interface EvaluationBucket {
   loaded: boolean;
@@ -496,20 +502,47 @@ onBeforeUnmount(() => {
   document.body.style.overflow = '';
 });
 
+/**
+ * 下拉框数据源的行类型（描述后端**实际返回**的字段）：
+ * - GET /algorithms 返回算法表原始行，而 algorithmApi 声明的 AlgorithmDefinition 与后端不符，
+ *   所以下面只能双重断言收口（根因在 algorithmApi.ts，属跨分区提案）；
+ * - GET /scenarios、GET /datasets 来自未类型化的 trainingApi.js，只能在此就地声明。
+ */
+interface AlgorithmRow {
+  id: number;
+  code: string;
+  display_name: string;
+}
+
+interface ScenarioRow {
+  id: number;
+  code: string;
+  name: string;
+  access_status: string;
+}
+
+interface DatasetRow {
+  id: number;
+  logical_id: string;
+  name: string;
+  version: number;
+  scenario_id: number;
+}
+
 onMounted(async () => {
   await userStore.bootstrap();
   if (currentUser.value?.role !== 'SUPER_ADMIN' && currentUser.value?.scenario_code) {
     selectedScenario.value = currentUser.value.scenario_code;
   }
-  const rows = await getAlgorithms() as unknown as Array<{ id: number; code: string; display_name: string }>;
+  const rows = await getAlgorithms() as unknown as AlgorithmRow[];
   algorithms.value = rows.map((a) => ({ algorithm_id: String(a.id), display_name: a.display_name || a.code }));
-  const scenarioRows = await getScenarios() as Array<{ id: number; code: string; name: string; access_status: string }>;
+  const scenarioRows = await getScenarios() as ScenarioRow[];
   allScenarios.value = scenarioRows
     .filter((scenario) => scenario.access_status === 'ACTUAL')
     .map((scenario) => ({ id: scenario.id, code: scenario.code, name: scenario.name }));
   const datasetRows = await Promise.all(allScenarios.value.map((scenario) => getDatasets(scenario.id)));
   allDatasets.value = datasetRows.flatMap((rows) =>
-    (rows as Array<{ id: number; logical_id: string; name: string; version: number; scenario_id: number }>).map((dataset) => ({
+    (rows as DatasetRow[]).map((dataset) => ({
       ...dataset,
       scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
     }))
@@ -536,7 +569,7 @@ onMounted(async () => {
       <div class="model-center__filters">
         <select v-if="isSuperAdmin" v-model="selectedScenario" class="model-filter-select">
           <option value="all">所有场景</option>
-          <option v-for="s in scenarioOptions" :key="s.code" :value="s.code">{{ s.name }}</option>
+          <option v-for="s in allScenarios" :key="s.code" :value="s.code">{{ s.name }}</option>
         </select>
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
@@ -657,7 +690,7 @@ onMounted(async () => {
 
             <div v-if="evaluation?.model_attributes?.feature_profile?.length" class="model-evaluation-fields">
               <span class="model-evaluation-fields__label">场景重点字段</span>
-              <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, 8)" :key="field.name" class="model-evaluation-field">
+              <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, FEATURE_PROFILE_LIMIT)" :key="field.name" class="model-evaluation-field">
                 {{ field.display_name || field.name }}
               </span>
             </div>
@@ -690,8 +723,11 @@ onMounted(async () => {
       <p>当前筛选范围内暂无模型版本</p>
     </section>
 
+    <!-- 对比面板与模型列表并存：勾满 2 个模型后还要能继续勾（上限 5 个）。
+         原先用 v-else-if 分支，选到第 2 个模型列表就整块消失，3~5 个模型永远选不到。 -->
+    <template v-else>
     <!-- 模型版本对比（需求 6.2 P1） -->
-    <div v-else-if="compareList.length >= 2" class="compare-panel card">
+    <div v-if="compareList.length >= 2" class="compare-panel card">
       <div class="compare-panel__head">
         <h4>模型版本对比</h4>
         <button class="compare-clear" @click="clearCompare">清空对比</button>
@@ -737,7 +773,7 @@ onMounted(async () => {
     </div>
 
     <!-- 模型卡片列表 -->
-    <div v-else ref="listRef" class="model-center__list">
+    <div ref="listRef" class="model-center__list">
       <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
       <div
         v-for="model in models"
@@ -799,48 +835,15 @@ onMounted(async () => {
         </div>
 
         <div class="model-card__metrics">
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'accuracy') }}</span>
-            <span class="model-card__metric-label">Accuracy</span>
+          <div
+            v-for="row in visibleMetricRows"
+            :key="row.key"
+            class="model-card__metric"
+            :class="{ 'model-card__metric--internal': row.adminOnly }"
+          >
+            <span class="model-card__metric-value">{{ metricValue(model, row.key) }}</span>
+            <span class="model-card__metric-label">{{ row.label }}</span>
           </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'precision') }}</span>
-            <span class="model-card__metric-label">Precision</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'recall') }}</span>
-            <span class="model-card__metric-label">Recall</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'specificity') }}</span>
-            <span class="model-card__metric-label">Specificity</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'f1') }}</span>
-            <span class="model-card__metric-label">F1</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'g_mean') }}</span>
-            <span class="model-card__metric-label">G-mean</span>
-          </div>
-          <template v-if="isAdmin">
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'risk_recall') }}</span>
-              <span class="model-card__metric-label">Risk Recall</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'risk_f1') }}</span>
-              <span class="model-card__metric-label">Risk F1</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'cv_mean') }}</span>
-              <span class="model-card__metric-label">CV Mean</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'cv_std') }}</span>
-              <span class="model-card__metric-label">CV Std</span>
-            </div>
-          </template>
         </div>
 
         <!-- 训练参数 -->
@@ -882,6 +885,7 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+    </template>
 
     <div v-if="total > 0" class="model-center__pager">
       <el-pagination
@@ -936,16 +940,6 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.model-center__scenario-tag {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(83, 229, 200, 0.3);
-  background: rgba(83, 229, 200, 0.08);
-  color: #53e5c8;
-  font-size: 0.85rem;
-  white-space: nowrap;
 }
 
 .model-filter-select {

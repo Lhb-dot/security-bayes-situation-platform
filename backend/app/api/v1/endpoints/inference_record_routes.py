@@ -4,8 +4,6 @@
 权限（需求 6.8/6.7.3）：执行推理 → 登录用户（仅 PUBLISHED 模型）；
 查看记录 → 登录用户（USER 仅本人）；删除 → 仅 ADMIN。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
@@ -190,7 +188,7 @@ def get_predict_batch_job(
 def list_inference_records(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    model_version_id: Optional[int] = Query(None, description="按模型版本过滤"),
+    model_version_id: int | None = Query(None, description="按模型版本过滤"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):

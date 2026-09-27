@@ -4,12 +4,10 @@
 权限（需求 6.7/6.5.2）：训练/发布/下线/默认推荐 → 仅 ADMIN；查看 → 登录用户
 （普通用户仅见 PUBLISHED 模型）。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin, require_scenario_admin
+from app.api.deps import get_current_user, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -33,9 +31,9 @@ router = APIRouter(prefix="/model-versions", tags=["模型管理"])
 def list_model_versions(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤"),
-    dataset_id: Optional[int] = Query(None, description="按数据集过滤"),
-    status: Optional[str] = Query(
+    scenario_id: int | None = Query(None, description="按场景过滤"),
+    dataset_id: int | None = Query(None, description="按数据集过滤"),
+    status: str | None = Query(
         None,
         description=(
             "按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED，"

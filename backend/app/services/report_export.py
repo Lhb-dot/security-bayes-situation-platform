@@ -53,7 +53,6 @@ markdown 格式仍然是纯文本（Markdown 本身没有可靠的图表表达�
 from __future__ import annotations
 
 import html as _html
-import logging
 import math
 import os
 import queue
@@ -65,7 +64,11 @@ from urllib.parse import quote
 
 from markdown_it import MarkdownIt
 
-logger = logging.getLogger(__name__)
+from app.utils.common import get_logger
+
+# get_logger("report_export") 与原来的 logging.getLogger(__name__) 同名（app.services.report_export），
+# 只是统一走项目的 logger 工厂，日志前缀口径与其它 service 一致。
+logger = get_logger("report_export")
 
 #: 单次 PDF 渲染的等待上限（秒）。冷启动 + 多页渲染实测 1 秒出头，留足余量。
 PDF_TIMEOUT_SECONDS = 120
@@ -558,9 +561,11 @@ def _grouped_bar_svg(
     return "".join(parts)
 
 
-#: 图表插到哪一段之后：锚点是「下一节的标题」，插在它之前
-_SECTION_VIEWS = "四、不同视图预测结果与概率"
-_SECTION_FEATURES = "五、特征加权条件概率（Top 10）"
+#: 图表插到哪一段之后：锚点是「下一节的标题」，插在它之前。
+#: 这两个字符串必须与 report_service._render_content 渲染出的 <h2> 标题逐字一致
+#: （那里直接 import 本模块的常量来拼标题，避免两处各写一份而静默失配）。
+SECTION_VIEWS = "四、不同视图预测结果与概率"
+SECTION_FEATURES = "五、特征加权条件概率（Top 10）"
 
 
 def build_chart_blocks(report_data) -> list:
@@ -608,7 +613,7 @@ def build_chart_blocks(report_data) -> list:
             )
         )
     if charts:
-        blocks.append((_SECTION_VIEWS, "".join(charts)))
+        blocks.append((SECTION_VIEWS, "".join(charts)))
 
     charts = []
     for m in report_data.get("model_analysis") or []:
@@ -634,7 +639,7 @@ def build_chart_blocks(report_data) -> list:
             )
         )
     if charts:
-        blocks.append((_SECTION_FEATURES, "".join(charts)))
+        blocks.append((SECTION_FEATURES, "".join(charts)))
 
     return blocks
 
@@ -667,7 +672,9 @@ def markdown_to_html(markdown_text: str) -> str:
 def render_html_document(title: str, markdown_text: str, report_data=None) -> str:
     """Markdown 正文 → 完整的 HTML 文档（带打印友好样式 + 图表）。"""
     body = _inject_charts(markdown_to_html(markdown_text), report_data)
-    safe_title = (title or "态势报告").replace("<", "&lt;").replace(">", "&gt;")
+    # 标题只出现在 <title> 里。原来手写 replace 只挡了 < >，标题里的 & 会原样落进文档
+    # （非法 HTML，且与 _xml/_html.escape 的其它转义点口径不一致），统一走 _html.escape。
+    safe_title = _html.escape(title or "态势报告", quote=True)
     return _HTML_TEMPLATE.format(title=safe_title, body=body)
 
 
@@ -692,7 +699,10 @@ class _PdfRenderer:
             self._jobs.put((html, holder, done))
         if not done.wait(timeout):
             raise TimeoutError(f"PDF 渲染超过 {timeout} 秒未完成")
-        result = holder[0] if holder else RuntimeError("PDF 渲染线程未返回结果")
+        if not holder:
+            # 事件已置位却没有结果：渲染线程在投递结果前异常退出
+            raise RuntimeError("PDF 渲染线程未返回结果")
+        result = holder[0]
         if isinstance(result, BaseException):
             raise result
         return result

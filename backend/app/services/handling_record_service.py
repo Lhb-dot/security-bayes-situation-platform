@@ -9,7 +9,6 @@
 处置操作 action 值域：ASSIGN / UPDATE_STATUS / ADD_COMMENT（数据库设计文档 v2 2.8）。
 """
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 
@@ -26,9 +25,7 @@ from app.services.constants import (
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
-from app.utils.common import get_logger, paginate, row_to_dict, validate_enum
-
-logger = get_logger("handling_record")
+from app.utils.common import paginate, row_to_dict, validate_enum
 
 
 class HandlingRecordService(ServiceBase):
@@ -71,13 +68,17 @@ class HandlingRecordService(ServiceBase):
         current_user,
         risk_event_id: int,
         action: str,
-        comment: Optional[str] = None,
-        status_before: Optional[str] = None,
-        status_after: Optional[str] = None,
+        comment: str | None = None,
+        status_before: str | None = None,
+        status_after: str | None = None,
     ):
         """登记处置操作（USER 仅本人事件；ADMIN 全部）。
 
         action=UPDATE_STATUS 时必须提供 status_after（与 risk_event 状态流转配合）。
+
+        ⚠️ 审计完整性：``status_before`` / ``status_after`` 两个入参**一律以事件真实状态为准**，
+        不接受调用方自填 —— 处置记录是审计凭据，若允许调用方写入任意状态，一条 ASSIGN
+        记录就能被伪造成「已处置 → 待处置」，把状态历史洗白。参数保留只为兼容签名。
         """
         self.require_login(current_user)
         event = self.db.get(RiskEvent, risk_event_id)
@@ -89,6 +90,8 @@ class HandlingRecordService(ServiceBase):
         err = validate_enum(action, HANDLING_ACTIONS, "action")
         if err:
             raise ServiceError(400, err)
+        # 真实前态：无论调用方传什么，都以库中事件为准
+        status_before = event.status
         if action == "UPDATE_STATUS":
             # 与 RiskEventService.update_status 保持同一状态机口径（需求 5.2）：
             # 校验转换合法后同步更新事件状态，杜绝"只记日志不改状态"的旁路。
@@ -100,8 +103,10 @@ class HandlingRecordService(ServiceBase):
                     400,
                     f"风险事件状态不允许从 {event.status} 转换到 {status_after}",
                 )
-            status_before = status_before or event.status
             event.status = status_after
+        else:
+            # 其余动作不改状态：审计行的前/后态都记事件当前状态，不接受调用方自填
+            status_after = event.status
 
         record = HandlingRecord(
             risk_event_id=risk_event_id,
@@ -123,11 +128,11 @@ class HandlingRecordService(ServiceBase):
     def get_list(
         self,
         current_user,
-        risk_event_id: Optional[int] = None,
+        risk_event_id: int | None = None,
         page: int = 1,
         page_size: int = 10,
     ):
-        """处置记录列表。普通用户仅可见本人处置的或本人风险事件的记录。"""
+        """处置记录列表。普通用户仅可见**本人风险事件**上的处置记录。"""
         self.require_login(current_user)
         stmt = select(HandlingRecord)
         role = getattr(current_user, "role", None)
@@ -168,9 +173,16 @@ class HandlingRecordService(ServiceBase):
     # ------------------------------------------------------------------
     @service_call
     def delete(self, current_user, record_id: int):
-        """删除处置记录（仅 ADMIN）。"""
+        """删除处置记录（仅 SUPER_ADMIN，且受与查询一致的数据边界约束）。
+
+        处置记录是审计凭据，这里刻意与 ``get`` / ``get_list`` 用同一套边界
+        （:meth:`_can_access_record`）：否则「读不到的记录却能删」会成为绕过审计的旁路。
+        注意：删除本身不写审计（本表无删除留痕字段），调用方需自行评估可追溯性。
+        """
         self.require_admin(current_user)
         record = self._get(record_id)
+        if not self._can_access_record(current_user, record):
+            raise ServiceError(403, "无权限操作")
         self.db.delete(record)
         self.commit()
         return ok(message="处置记录已删除")

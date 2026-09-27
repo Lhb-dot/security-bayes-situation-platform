@@ -30,12 +30,21 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } fro
 const userStore = useUserStore();
 const settingsStore = useSettingsStore();
 const router = useRouter();
-const currentUser = ref<UserAccount | null>(null);
+/** 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据） */
+const currentUser = computed<UserAccount | null>(() => userStore.currentUser);
 const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 const isAdmin = computed(() => isSuperAdmin.value || isScenarioAdmin.value);
 /** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
 const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
+
+/** 全部场景编码（与后端 seed 一致）：管理员可逐个配置，其余账号只有绑定场景 */
+const ALL_SCENARIO_IDS: ScenarioId[] = [
+  'network_security',
+  'power_system',
+  'flightdeck_operation',
+  'geological_risk',
+];
 
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
@@ -81,12 +90,15 @@ const accountScenarioLabel = computed(() => {
 const accountEnabled = computed(() => currentUser.value?.status !== 'disabled');
 
 // ===================== 修改密码（弹窗） =====================
+/** 改密表单初值：打开弹窗与提交成功后都要清空，抽成工厂避免两处字面量漂移 */
+const emptyPwdForm = () => ({ oldPassword: '', newPassword: '', confirm: '' });
+
 const pwdDialogVisible = ref(false);
-const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
+const pwdForm = ref(emptyPwdForm());
 const changingPwd = ref(false);
 
 const openPwdDialog = () => {
-  pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+  pwdForm.value = emptyPwdForm();
   pwdDialogVisible.value = true;
 };
 
@@ -104,7 +116,7 @@ const changePwd = async () => {
     await userStore.changePassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
     ElMessage.success('密码修改成功，请重新登录');
     pwdDialogVisible.value = false;
-    pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+    pwdForm.value = emptyPwdForm();
     await userStore.logout();
     router.push('/login');
   } catch (err) {
@@ -235,8 +247,8 @@ const testAI = async () => {
 
 // ===================== 风险阈值 =====================
 const activeScenarios = computed<ScenarioId[]>(() =>
-  currentUser.value?.role === 'SUPER_ADMIN'
-    ? ['network_security', 'power_system', 'flightdeck_operation', 'geological_risk']
+  isSuperAdmin.value
+    ? [...ALL_SCENARIO_IDS]
     : currentUser.value?.scenario_code
       ? [currentUser.value.scenario_code]
       : []
@@ -248,12 +260,10 @@ const logsLoading = ref(false);
 const saving = ref(false);
 /** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
 const thresholdScenario = ref<ScenarioId>('network_security');
-const editing = ref<Record<string, { medium: number | null; high: number | null }>>({
-  network_security: { medium: null, high: null },
-  power_system: { medium: null, high: null },
-  flightdeck_operation: { medium: null, high: null },
-  geological_risk: { medium: null, high: null },
-});
+/** 输入框初值：全部场景留空，loadThresholds 会按账号可见场景回填后端值或兜底值 */
+const editing = ref<Record<string, { medium: number | null; high: number | null }>>(
+  Object.fromEntries(ALL_SCENARIO_IDS.map(id => [id, { medium: null, high: null }])),
+);
 /** 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。 */
 const thresholdUnconfigured = ref<Record<string, boolean>>({});
 
@@ -309,9 +319,12 @@ const toFixed2 = (v: number | string | null | undefined): string => {
   return Number.isFinite(n) ? n.toFixed(2) : '—';
 };
 
-/** 记录唯一标识：后端用自增 id，历史 mock 用 log_id，再兜底用「场景 + 时间」。 */
+/** 阈值精度：后端列为 Numeric(4,2)，故校验与提交统一按「两位小数」取整 */
+const roundTo2 = (v: number): number => Math.round(v * 100) / 100;
+
+/** 记录唯一标识：后端审计表自增主键（ThresholdAuditLog.id，非空）；类型上可选，缺失时退回「场景@时间」 */
 const logKey = (log: ThresholdChangeLog): string =>
-  String(log.id ?? log.log_id ?? `${log.scenario_id}@${log.operated_at ?? log.changed_at ?? ''}`);
+  log.id != null ? String(log.id) : `${log.scenario_id}@${log.operated_at ?? ''}`;
 
 /**
  * 首次配置的行：该场景在列表里最早的一条记录，且旧值等于新值。
@@ -323,16 +336,14 @@ const initialLogKeys = computed(() => {
   for (const log of changeLogs.value) {
     const key = String(log.scenario_id);
     const prev = earliest.get(key);
-    const at = log.operated_at ?? log.changed_at ?? '';
-    const prevAt = prev ? prev.operated_at ?? prev.changed_at ?? '' : '';
+    const at = log.operated_at ?? '';
+    const prevAt = prev?.operated_at ?? '';
     if (!prev || at < prevAt) earliest.set(key, log);
   }
   const keys = new Set<string>();
   for (const log of earliest.values()) {
-    const sameMedium =
-      Number(log.old_medium ?? log.old_medium_threshold) === Number(log.new_medium ?? log.new_medium_threshold);
-    const sameHigh =
-      Number(log.old_high ?? log.old_high_threshold) === Number(log.new_high ?? log.new_high_threshold);
+    const sameMedium = Number(log.old_medium) === Number(log.new_medium);
+    const sameHigh = Number(log.old_high) === Number(log.new_high);
     if (sameMedium && sameHigh) keys.add(logKey(log));
   }
   return keys;
@@ -342,23 +353,28 @@ const initialLogKeys = computed(() => {
  * 修改记录表的高度。
  * 直接用 vh 做 max-height 会把最后一行切掉一半（露出半截胶囊），
  * 所以按「表头 + 整数行」算一个像素值，配合下面 style 块里固定的行高。
+ * 三个常量与第二个 <style> 块里 .el-table th/td 的 40px / 42px 必须一起改。
  */
 const LOG_TABLE_HEADER_HEIGHT = 40;
 const LOG_TABLE_ROW_HEIGHT = 42;
-const logTableMaxHeight = ref('64vh');
+/** 弹窗表体占视口高度的比例（同步用于首帧默认值与 resize 计算，避免两处各写一个魔数） */
+const LOG_TABLE_VIEWPORT_RATIO = 0.64;
+/** 至少显示的行数：视口过矮时也不再压缩，靠弹窗自身滚动兜底 */
+const LOG_TABLE_MIN_ROWS = 4;
+const logTableMaxHeight = ref(`${Math.round(LOG_TABLE_VIEWPORT_RATIO * 100)}vh`);
 const syncLogTableMaxHeight = () => {
-  const available = Math.round(window.innerHeight * 0.64);
-  const rows = Math.max(4, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
+  const available = Math.round(window.innerHeight * LOG_TABLE_VIEWPORT_RATIO);
+  const rows = Math.max(LOG_TABLE_MIN_ROWS, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
   logTableMaxHeight.value = `${LOG_TABLE_HEADER_HEIGHT + rows * LOG_TABLE_ROW_HEIGHT}px`;
 };
 
 const oldValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
   initialLogKeys.value.has(logKey(log))
     ? '—'
-    : toFixed2(kind === 'medium' ? log.old_medium ?? log.old_medium_threshold : log.old_high ?? log.old_high_threshold);
+    : toFixed2(kind === 'medium' ? log.old_medium : log.old_high);
 
 const newValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
-  toFixed2(kind === 'medium' ? log.new_medium ?? log.new_medium_threshold : log.new_high ?? log.new_high_threshold);
+  toFixed2(kind === 'medium' ? log.new_medium : log.new_high);
 
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
@@ -370,7 +386,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('高风险阈值必须大于中风险阈值');
     return;
   }
-  if (Math.round(e.medium * 100) / 100 !== e.medium || Math.round(e.high * 100) / 100 !== e.high) {
+  if (roundTo2(e.medium) !== e.medium || roundTo2(e.high) !== e.high) {
     ElMessage.warning('阈值最多只能有两位小数');
     return;
   }
@@ -384,8 +400,8 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   }
   saving.value = true;
   try {
-    const medium = Math.round(e.medium * 100) / 100;
-    const high = Math.round(e.high * 100) / 100;
+    const medium = roundTo2(e.medium);
+    const high = roundTo2(e.high);
     const saved = await updateRiskThreshold(scenarioId, { medium_threshold: medium, high_threshold: high });
     editing.value[scenarioId] = {
       medium: Number(Number(saved.medium_threshold).toFixed(2)),
@@ -401,8 +417,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
 };
 
 onMounted(async () => {
-  currentUser.value = userStore.currentUser;
-  settingsStore.loadForUser(currentUser.value?.user_id);
+  settingsStore.loadForUser(userStore.currentUser?.user_id);
   syncLogTableMaxHeight();
   window.addEventListener('resize', syncLogTableMaxHeight);
   await loadAISetting();
@@ -660,7 +675,7 @@ onBeforeUnmount(() => {
       >
         <el-table-column label="变更时间" min-width="170" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.operated_at ?? row.changed_at ?? '—' }}
+            {{ row.operated_at ?? '—' }}
           </template>
         </el-table-column>
         <el-table-column label="场景" width="130" align="center">

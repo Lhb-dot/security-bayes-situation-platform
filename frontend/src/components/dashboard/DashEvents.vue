@@ -22,7 +22,9 @@ withDefaults(
         <strong :title="event.description">{{ event.description || '风险事件' }}</strong>
         <span class="d-evm">{{ fmtDateTime(event.occurred_at) }}</span>
       </div>
-      <span class="d-ev-score">{{ fmtNum(event.risk_score, 2) }}</span>
+      <!-- risk_score 的类型是 number | null：null 走 fmtNum 会被 Number(null)=0 吞成「0.00」，
+           必须显式判空渲染「—」（undefined 不必判，fmtNum 的 !Number.isFinite 分支已兜住） -->
+      <span class="d-ev-score">{{ event.risk_score === null ? '—' : fmtNum(event.risk_score, 2) }}</span>
       <span class="d-tag" :class="tagClass(event.status)">{{ tagText(event.status) }}</span>
     </div>
   </div>

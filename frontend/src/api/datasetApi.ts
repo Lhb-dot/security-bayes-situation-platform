@@ -5,6 +5,7 @@
  * 供数据集中心、详情页、字段预览与数据预览使用。
  */
 import request, { unwrapData } from '@/utils/request';
+import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
 import type {
   DataPreview,
   Dataset,
@@ -65,11 +66,13 @@ interface ApiScenario {
   access_status?: string;
 }
 
-const SCENARIO_CODE_BY_ID: Record<number, ScenarioId> = {
-  1: 'network_security',
-  2: 'power_system',
-  3: 'flightdeck_operation',
-  4: 'geological_risk',
+/** 把「数字 ID → 编码」表取逆，避免同一份映射在两处各写一遍导致口径分叉 */
+const invertScenarioCodeMap = (
+  byId: Record<number, ScenarioId>
+): Partial<Record<ScenarioId, number>> => {
+  const byCode: Partial<Record<ScenarioId, number>> = {};
+  for (const [id, code] of Object.entries(byId)) byCode[code] = Number(id);
+  return byCode;
 };
 
 let scenarioCodeByIdCache: Record<number, ScenarioId> | null = null;
@@ -90,12 +93,7 @@ const ensureScenarioMaps = async (): Promise<void> => {
     scenarioIdByCodeCache = byCode;
   } catch {
     scenarioCodeByIdCache = { ...SCENARIO_CODE_BY_ID };
-    scenarioIdByCodeCache = {
-      network_security: 1,
-      power_system: 2,
-      flightdeck_operation: 3,
-      geological_risk: 4,
-    };
+    scenarioIdByCodeCache = invertScenarioCodeMap(SCENARIO_CODE_BY_ID);
   }
 };
 
@@ -243,13 +241,12 @@ const latestByLogicalId = (items: ApiDataset[]): ApiDataset[] => {
   return Array.from(map.values()).sort((a, b) => a.id - b.id);
 };
 
-/** 数据集列表（默认返回每个 logical_id 的最新版本） */
-export const getDatasetList = async (params?: {
+/** 拉取数据集原始行（getDatasetList / getDatasetRawList 共用的取数与参数组装） */
+const fetchDatasetItems = async (params?: {
   scenario_id?: ScenarioId;
   page?: number;
   page_size?: number;
-  all_versions?: boolean;
-}): Promise<Dataset[]> => {
+}): Promise<ApiDataset[]> => {
   await ensureScenarioMaps();
   const scenarioNumeric =
     params?.scenario_id != null ? scenarioIdByCodeCache?.[params.scenario_id] : undefined;
@@ -262,7 +259,17 @@ export const getDatasetList = async (params?: {
       },
     })
   );
-  const items = (data.items ?? []) as ApiDataset[];
+  return (data.items ?? []) as ApiDataset[];
+};
+
+/** 数据集列表（默认返回每个 logical_id 的最新版本） */
+export const getDatasetList = async (params?: {
+  scenario_id?: ScenarioId;
+  page?: number;
+  page_size?: number;
+  all_versions?: boolean;
+}): Promise<Dataset[]> => {
+  const items = await fetchDatasetItems(params);
   const selected = params?.all_versions ? items : latestByLogicalId(items);
   return selected.map(mapApiDataset);
 };
@@ -271,21 +278,8 @@ export const getDatasetList = async (params?: {
 export const getDatasetRawList = async (params?: {
   scenario_id?: ScenarioId;
   page_size?: number;
-}): Promise<ApiDataset[]> => {
-  await ensureScenarioMaps();
-  const scenarioNumeric =
-    params?.scenario_id != null ? scenarioIdByCodeCache?.[params.scenario_id] : undefined;
-  const data = await unwrapData(
-    await request.get('/api/v1/datasets', {
-      params: {
-        scenario_id: scenarioNumeric,
-        page: 1,
-        page_size: params?.page_size ?? 200,
-      },
-    })
-  );
-  return (data.items ?? []) as ApiDataset[];
-};
+}): Promise<ApiDataset[]> =>
+  fetchDatasetItems({ scenario_id: params?.scenario_id, page: 1, page_size: params?.page_size ?? 200 });
 
 /** 数据集详情（GET /datasets/{dataset_id}，含字段结构） */
 export const getDatasetDetail = async (datasetId: string | number): Promise<Dataset> => {

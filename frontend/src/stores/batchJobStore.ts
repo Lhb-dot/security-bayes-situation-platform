@@ -225,7 +225,7 @@ export const useBatchJobStore = defineStore('batchJob', {
       if (polling) return;   // 上一轮还没回来（请求慢），跳过这一拍
       polling = true;
       try {
-        const running = this.jobs.filter((job) => !isTerminal(job));
+        const running = this.runningJobs;
         if (!running.length) {
           this.stopPolling();
           return;
@@ -258,7 +258,7 @@ export const useBatchJobStore = defineStore('batchJob', {
             job.error = messageOf(err, job.error ?? '任务状态查询失败');
           }
         }
-        if (!this.jobs.some((job) => !isTerminal(job))) this.stopPolling();
+        if (!this.running) this.stopPolling();
       } finally {
         polling = false;
       }

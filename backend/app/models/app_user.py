@@ -18,6 +18,11 @@ class AppUser(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False)
+    # ⚠️ 本列绝不可直接序列化下发。对外一律走 row_to_dict(user, exclude=("password_hash",))，
+    # 现有且仅有两处：api/v1/endpoints/auth_routes.py::_payload、
+    # services/user_service.py::UserService._safe。项目没有 Pydantic 响应模型兜底
+    # （接口统一是 response_model=ResponseModel，data 为 Any），新增返回用户的路径
+    # 必须自己记得 exclude，否则哈希会直接进 JSON。
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)

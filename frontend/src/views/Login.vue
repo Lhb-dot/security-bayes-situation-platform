@@ -8,6 +8,7 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '@/stores/userStore';
+import { roleLanding } from '@/router/guards';
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -37,14 +38,8 @@ const handleLogin = async () => {
           ? '场景管理员'
           : '场景用户';
     ElMessage.success(`欢迎回来，${user.display_name}（${roleText}）`);
-    // 按角色落地：SUPER_ADMIN → 全局总览；场景管理员/用户 → 自己场景详情
-    if (user.role === 'SUPER_ADMIN') {
-      router.push('/overview');
-    } else if (user.scenario_code) {
-      router.push(`/scenarios/${user.scenario_code}/dashboard`);
-    } else {
-      router.push('/scenarios');
-    }
+    // 按角色落地（规则唯一实现见 router/guards.ts 的 roleLanding，与路由守卫同源）
+    router.push(roleLanding(user));
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '登录失败';
   } finally {

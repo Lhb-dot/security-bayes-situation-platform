@@ -6,6 +6,7 @@
  * 管理员可选全平台/本场景聚合数据或本人个人数据（不支持指定单个用户）。
  */
 import request, { unwrapData } from '@/utils/request';
+import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
 
 interface ApiReport {
@@ -34,17 +35,10 @@ interface ReportPage {
   page_size: number;
 }
 
-const SCENARIO_BY_ID: Record<number, ScenarioId> = {
-  1: 'network_security',
-  2: 'power_system',
-  3: 'flightdeck_operation',
-  4: 'geological_risk',
-};
-
 const toReport = (raw: ApiReport): Report => ({
   report_id: raw.report_id ?? String(raw.id),
   title: raw.title,
-  scenario_id: raw.scenario_code ?? (raw.scenario_id == null ? 'network_security' : (SCENARIO_BY_ID[raw.scenario_id] ?? 'network_security')),
+  scenario_id: raw.scenario_code ?? (raw.scenario_id == null ? 'network_security' : (SCENARIO_CODE_BY_ID[raw.scenario_id] ?? 'network_security')),
   scenario_name: raw.scenario_name ?? '',
   summary: raw.content,
   content: raw.content,
@@ -57,15 +51,6 @@ const toReport = (raw: ApiReport): Report => ({
   next_run_at: raw.next_run_at ?? undefined,
   generated_by: String(raw.generated_by),
 });
-
-/** 报告列表（GET /reports，场景用户：本人生成的报告） */
-export const getReportList = async (params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<Report[]> => {
-  const data = await unwrapData(await request.get('/api/v1/reports', { params }));
-  return (data.items ?? []).map(toReport);
-};
 
 /** 报告分页（GET /reports，带 total，供报告中心的页码条使用） */
 export const getReportPage = async (params?: {
@@ -80,6 +65,12 @@ export const getReportPage = async (params?: {
     page_size: data.page_size ?? 10,
   };
 };
+
+/** 报告列表（GET /reports，场景用户：本人生成的报告；取分页结果的 items，请求参数完全一致） */
+export const getReportList = async (params?: {
+  page?: number;
+  page_size?: number;
+}): Promise<Report[]> => (await getReportPage(params)).items;
 
 /** 本账号配置的定时报告（GET /reports/scheduled，跟随账号，仅本人生成的） */
 export const getScheduledReports = async (): Promise<Report[]> => {
