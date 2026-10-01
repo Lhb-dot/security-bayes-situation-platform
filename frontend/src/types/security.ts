@@ -118,7 +118,7 @@ export interface DatasetVersion {
 }
 
 /** 模型生命周期状态（需求 6.7.2） */
-export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
+export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'DISABLED';
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {
@@ -359,7 +359,6 @@ export interface Report {
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
   status: 'generating' | 'completed' | 'failed';
-  file_url?: string;
   /** 是否定时生成 */
   scheduled?: boolean;
   /** 定时生成周期（天） */

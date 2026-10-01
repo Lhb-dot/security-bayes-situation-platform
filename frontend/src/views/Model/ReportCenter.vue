@@ -95,7 +95,7 @@ const measureTitleColWidth = () => {
   if (!probe) return;
   let widest = 0;
   for (const report of reports.value) {
-    probe.textContent = report.title ?? '';
+    probe.textContent = report.title;
     let width = probe.getBoundingClientRect().width;
     if (report.scheduled) {
       // 闹钟标志；后面跟周期数字时再加它自己的宽度
@@ -890,7 +890,7 @@ watch(
       </div>
 
       <!-- 无结构化数据时回退纯文本 -->
-      <pre v-else class="report-content">{{ viewTarget?.content ?? viewTarget?.summary }}</pre>
+      <pre v-else class="report-content">{{ viewTarget?.content }}</pre>
     </el-dialog>
   </div>
 </template>

@@ -73,7 +73,6 @@ const statusLabel: Record<string, string> = {
   FAILED: '训练失败',
   DRAFT: '待发布',
   PUBLISHED: '已发布',
-  OFFLINE: '禁用中',
   DISABLED: '禁用中',
 };
 
@@ -1090,11 +1089,6 @@ onMounted(async () => {
 .model-status--PUBLISHED {
   background: rgba(83, 229, 200, 0.15);
   color: #53e5c8;
-}
-
-.model-status--OFFLINE {
-  background: rgba(220, 234, 255, 0.08);
-  color: rgba(220, 234, 255, 0.55);
 }
 
 .model-status--DISABLED {

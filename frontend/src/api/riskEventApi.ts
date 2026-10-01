@@ -14,7 +14,7 @@ export const getRiskEventList = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<RiskEvent[]> => {
-  // TODO 联调对齐：后端处置状态为 PENDING/PROCESSING/RESOLVED，前端为 待处置/处理中/已处置
+  // 声明返回已映射的 RiskEvent[]，实际是后端原始行（status 为 PENDING/PROCESSING/RESOLVED 枚举，非中文）
   const data = await unwrapData(await request.get('/api/v1/risk-events', { params }));
   return data.items ?? [];
 };
@@ -58,10 +58,6 @@ export const updateRiskEventStatus = async (
   eventId: string,
   params: { new_status: RiskEvent['status']; comment?: string }
 ): Promise<RiskEvent> => unwrapData(await request.put(`/api/v1/risk-events/${eventId}/handle`, params));
-
-/** 追加处置说明（POST /risk-events/{event_id}/comment，不改变状态） */
-export const commentRiskEvent = async (eventId: string, comment: string): Promise<void> =>
-  unwrapData(await request.post(`/api/v1/risk-events/${eventId}/comment`, { comment }));
 
 /**
  * 隐藏风险事件（POST /risk-events/{event_id}/hide）。

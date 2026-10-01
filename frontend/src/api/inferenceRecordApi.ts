@@ -75,35 +75,6 @@ export interface BatchInferenceResult {
   truncated?: boolean;
 }
 
-/**
- * 批量研判（POST /inference-records/predict-batch）
- *
- * source='dataset'：由服务端从模型绑定数据集读 offset..offset+limit 条样本；
- * source='samples'：直接提交样本列表。
- * 判为风险类的样本与单条一致，会自动生成 RiskEvent（告警中心可见）。
- */
-export const predictInferenceBatch = async (params: {
-  model_version_id: string | number;
-  source: 'dataset' | 'samples';
-  offset?: number;
-  limit?: number;
-  samples?: Record<string, unknown>[];
-}): Promise<BatchInferenceResult> =>
-  unwrapData(await request.post('/api/v1/inference-records/predict-batch', params));
-
-/** 上传 CSV 批量研判（表头需覆盖数据集全部输入特征） */
-export const predictInferenceBatchUpload = async (params: {
-  model_version_id: string | number;
-  file: File;
-}): Promise<BatchInferenceResult> => {
-  const form = new FormData();
-  form.append('file', params.file);
-  form.append('model_version_id', String(params.model_version_id));
-  return unwrapData(
-    await request.post('/api/v1/inference-records/predict-batch/upload', form),
-  );
-};
-
 /** 异步批量研判的提交回执 */
 export interface BatchJobReceipt {
   job_id: string;
@@ -202,10 +173,6 @@ export const getInferenceRecordList = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<InferenceRecord[]> => (await getInferenceRecordPage(params)).items;
-
-/** 推理记录详情（GET /inference-records/{record_id}，普通用户仅本人） */
-export const getInferenceRecordDetail = async (recordId: string): Promise<InferenceRecord> =>
-  unwrapData(await request.get(`/api/v1/inference-records/${recordId}`));
 
 /** 推理记录可解释性信息（GET /inference-records/{record_id}/explain） */
 export const getInferenceExplain = async (recordId: string): Promise<{

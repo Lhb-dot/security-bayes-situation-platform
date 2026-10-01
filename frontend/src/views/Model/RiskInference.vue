@@ -21,7 +21,6 @@ import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
 import { marked } from 'marked';
 import { useDatasetStore } from '@/stores/datasetStore';
-import { useInferenceStore } from '@/stores/inferenceStore';
 import { useUserStore } from '@/stores/userStore';
 import { useBatchJobStore } from '@/stores/batchJobStore';
 import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
@@ -30,6 +29,7 @@ import { keepScroll } from '@/utils/scrollAnchor';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
 import {
+  predictInference,
   submitInferenceBatch,
   submitInferenceBatchUpload,
   streamInferenceExplanation,
@@ -40,7 +40,6 @@ import {
 const router = useRouter();
 const route = useRoute();
 const datasetStore = useDatasetStore();
-const inferenceStore = useInferenceStore();
 const userStore = useUserStore();
 
 // ===================== 具名常量（原先散在代码里的魔法值） =====================
@@ -435,7 +434,7 @@ const handleInfer = async () => {
   // 新一轮推理：上一轮的 AI 分析作废（含在途的流式请求）
   resetExplanation();
   try {
-    const result = await inferenceStore.executeInference({
+    const result = await predictInference({
       model_version_id: selectedModelId.value,
       input_features: { ...inputData.value },
     });

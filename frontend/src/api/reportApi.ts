@@ -66,12 +66,6 @@ export const getReportPage = async (params?: {
   };
 };
 
-/** 报告列表（GET /reports，场景用户：本人生成的报告；取分页结果的 items，请求参数完全一致） */
-export const getReportList = async (params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<Report[]> => (await getReportPage(params)).items;
-
 /** 本账号配置的定时报告（GET /reports/scheduled，跟随账号，仅本人生成的） */
 export const getScheduledReports = async (): Promise<Report[]> => {
   const data = await unwrapData(await request.get('/api/v1/reports/scheduled'));
@@ -103,21 +97,6 @@ const buildGeneratePayload = async (params: ReportGenerateParams) => {
     scheduled: params.scheduled ?? false,
     interval_days: params.scheduled ? params.interval_days : undefined,
   };
-};
-
-/** 生成态势报告（POST /reports/generate，同步；服务端基于真实数据 + 算法解释自动组装内容）
- *
- * scheduled=true 时同一条报告会登记为定时报告：立刻产出内容并记录下次生成时间，
- * 到期由服务端调度器原地重新生成。
- *
- * 页面已改走下面的任务接口（生成要十几秒起步，同步会把界面钉住）；
- * 这个同步封装保留作回退用。
- */
-export const generateReport = async (params: ReportGenerateParams): Promise<Report> => {
-  const raw = await unwrapData(
-    await request.post('/api/v1/reports/generate', await buildGeneratePayload(params)),
-  );
-  return toReport(raw as ApiReport);
 };
 
 /** 生成任务提交回执（POST /reports/generate/jobs） */
@@ -168,25 +147,6 @@ export const EXPORT_EXT: Record<Report['format'], string> = {
   html: 'html',
   pdf: 'pdf',
 };
-
-/**
- * 下载报告文件（GET /reports/{report_id}/export，同步）。
- *
- * 服务端把 Markdown 正文转成目标格式：markdown 原样、html 套打印模板、
- * pdf 再由 Chromium 渲染；三种格式共用同一份正文，不会出现内容不一致。
- * 传 responseType: 'blob' 是因为该接口成功时直接回文件流，不走统一 JSON 结构。
- *
- * PDF 渲染会让请求线程等到渲染结束（上限 120 秒），页面已改走下面的任务接口；
- * 这个同步封装保留作回退用。
- */
-export const downloadReportFile = async (
-  reportId: string,
-  format: Report['format'],
-): Promise<Blob> =>
-  (await request.get(`/api/v1/reports/${reportId}/export`, {
-    params: { format },
-    responseType: 'blob',
-  })) as Blob;
 
 /** 导出任务提交回执（POST /reports/{report_id}/export/jobs） */
 export interface ReportExportReceipt {

@@ -49,11 +49,11 @@ const selectedStatus = ref<string>('all');
 const showHidden = ref(false);
 
 /** 场景数字 ID → 名称（与后端 scenario 表 id 对齐） */
-const SCENARIO_META: Record<number, { code: string; name: string }> = {
-  1: { code: 'network_security', name: '网络安全' },
-  2: { code: 'power_system', name: '电力系统' },
-  3: { code: 'flightdeck_operation', name: '航母甲板' },
-  4: { code: 'geological_risk', name: '地质风险' },
+const SCENARIO_META: Record<number, { name: string }> = {
+  1: { name: '网络安全' },
+  2: { name: '电力系统' },
+  3: { name: '航母甲板' },
+  4: { name: '地质风险' },
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
 
@@ -274,7 +274,6 @@ onMounted(() => {
         :data="events"
         stripe
         style="width: 100%"
-        row-class-name="event-table-row"
         empty-text="暂无匹配的风险事件"
       >
         <el-table-column prop="id" label="事件编号" width="88" align="center" show-overflow-tooltip />
@@ -398,10 +397,6 @@ onMounted(() => {
   border-radius: 18px;
   overflow: hidden;
   background: rgba(8, 18, 34, 0.7);
-}
-
-.event-table-row {
-  background: transparent !important;
 }
 
 .event-table__scenario-tag {

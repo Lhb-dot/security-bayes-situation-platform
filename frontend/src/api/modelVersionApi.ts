@@ -74,17 +74,6 @@ export const getModelVersionList = async (params?: {
   page_size?: number;
 }): Promise<BackendModelVersion[]> => (await getModelVersionPage(params)).items;
 
-/** 获取场景+数据集的默认推荐模型（GET /model-versions/default；无默认时 data 为 null） */
-export const getDefaultModel = async (params: {
-  scenario_id: ScenarioId | number;
-  dataset_id: string | number;
-}): Promise<BackendModelVersion | null> =>
-  unwrapData(await request.get('/api/v1/model-versions/default', { params }));
-
-/** 模型版本对比（POST /model-versions/compare，data 为数组） */
-export const compareModelVersions = async (modelIds: Array<string | number>): Promise<BackendModelVersion[]> =>
-  unwrapData(await request.post('/api/v1/model-versions/compare', { model_ids: modelIds }));
-
 /** 训练并保存模型版本（POST /model-versions/train，仅管理员；PMWNB 真实调用，其余 mock 占位） */
 export const trainModel = async (params: {
   scenario_id: ScenarioId | number;
@@ -96,10 +85,6 @@ export const trainModel = async (params: {
 /** 发布模型（POST /model-versions/{model_id}/publish，仅管理员） */
 export const publishModel = async (modelId: string | number): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/publish`));
-
-/** 下线模型（POST /model-versions/{model_id}/offline，仅管理员；自动清除默认推荐状态） */
-export const offlineModel = async (modelId: string | number): Promise<BackendModelVersion> =>
-  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/offline`));
 
 /** 禁用模型（POST /model-versions/{model_id}/disable，仅管理员） */
 export const disableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
@@ -117,7 +102,3 @@ export const deleteModelVersion = async (modelId: number | string): Promise<void
 /** 设为默认推荐模型（POST /model-versions/{model_id}/set-default，仅管理员） */
 export const setDefaultModel = async (modelId: string | number): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/set-default`));
-
-/** 取消默认推荐状态（POST /model-versions/{model_id}/clear-default，仅管理员） */
-export const clearDefaultModel = async (modelId: string | number): Promise<BackendModelVersion> =>
-  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/clear-default`));

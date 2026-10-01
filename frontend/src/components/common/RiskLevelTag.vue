@@ -60,7 +60,7 @@ const levelLabel: Record<string, string> = {
   font-size: 0.85rem;
 }
 
-/* 风险等级颜色（与全局 style.css 中的 .risk-badge 保持一致） */
+/* 风险等级配色（本组件自有；全局 style.css 的 .risk-badge 只定义尺寸、不含配色） */
 .risk-level-critical {
   background: rgba(255, 123, 114, 0.18);
   color: #ff8c84;

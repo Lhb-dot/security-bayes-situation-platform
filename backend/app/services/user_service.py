@@ -269,6 +269,13 @@ class UserService(ServiceBase):
         # 场景管理员只能重置自己场景用户的密码
         if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "无权限操作")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and role != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         err = validate_length(
             new_password, "new_password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN
         )
@@ -307,6 +314,13 @@ class UserService(ServiceBase):
         user = self._get(user_id)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "场景管理员只能管理自己场景的用户")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id and status != USER_STATUS_ENABLED:
             raise ServiceError(400, "不能禁用当前登录账号")
         user.status = status
@@ -327,6 +341,13 @@ class UserService(ServiceBase):
         user = self._get(user_id)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "场景管理员只能管理自己场景的用户")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id:
             raise ServiceError(400, "不能删除当前登录账号")
 

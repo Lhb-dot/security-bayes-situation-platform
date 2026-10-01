@@ -84,7 +84,7 @@ let polling = false;
  * 已经出过完成 / 失败通知的任务（modelVersionId）。
  *
  * `_tick` 里「状态不再是 TRAINING 就 _settle」的判据比 `isTerminal`（只认 DRAFT / FAILED）
- * 宽：版本在轮询间隔里被管理员改成 PUBLISHED / OFFLINE / DISABLED，或者接口返回了空状态时，
+ * 宽：版本在轮询间隔里被管理员改成 PUBLISHED / DISABLED，或者接口返回了空状态时，
  * 任务既不算终态（继续留在在途列表里轮询），又每一拍都满足 _settle 的条件 —— 不拦就会
  * 每秒重复弹一条通知，一直弹到 POLL_TIMEOUT_MS（65 分钟）超时。这里保证一个任务只通知一次。
  * reset() 时清空（换账号 / 重新恢复任务时重建）。
