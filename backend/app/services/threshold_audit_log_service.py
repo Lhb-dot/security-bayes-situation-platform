@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.models.threshold_audit_log import ThresholdAuditLog
 from app.schemas.common import ok
-from app.services.base import ServiceBase, ServiceError, service_call
+from app.services.base import ServiceBase, service_call
 from app.services.constants import ROLE_SUPER_ADMIN
 from app.utils.common import paginate, row_to_dict
 
@@ -34,17 +34,3 @@ class ThresholdAuditLogService(ServiceBase):
         result = paginate(self.db, stmt, page, page_size)
         result["items"] = [row_to_dict(log) for log in result["items"]]
         return ok(data=result)
-
-    @service_call
-    def get(self, current_user, log_id: int):
-        """审计日志详情（当前账号）。"""
-        self.require_login(current_user)
-        log = self.db.scalar(
-            select(ThresholdAuditLog).where(
-                ThresholdAuditLog.id == log_id,
-                ThresholdAuditLog.user_id == current_user.id,
-            )
-        )
-        if log is None:
-            raise ServiceError(404, "审计日志不存在")
-        return ok(data=row_to_dict(log))

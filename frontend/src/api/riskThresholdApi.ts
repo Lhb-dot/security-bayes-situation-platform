@@ -64,13 +64,6 @@ export const getRiskThresholds = async (): Promise<ThresholdConfig[]> => {
   return (Array.isArray(data) ? data : []).map(normalizeThreshold);
 };
 
-/** 按场景查询当前账号风险阈值（未配置时 data 为 null） */
-export const getRiskThreshold = async (scenarioId: ScenarioId): Promise<ThresholdConfig | null> =>
-  (async () => {
-    const data = await unwrapData(await request.get(`/api/v1/risk-thresholds/${await backendScenarioId(scenarioId)}`));
-    return data ? normalizeThreshold(data) : null;
-  })();
-
 /** 查询当前账号全部阈值修改记录 */
 export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]> => {
   await ensureScenarioMaps();

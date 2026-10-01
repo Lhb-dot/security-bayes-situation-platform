@@ -467,13 +467,6 @@ export interface ThresholdChangeLog {
   old_high?: number;
   new_medium?: number;
   new_high?: number;
-  // 兼容旧 mock 数据结构
-  log_id?: string;
-  changed_at?: string;
-  old_medium_threshold?: number;
-  old_high_threshold?: number;
-  new_medium_threshold?: number;
-  new_high_threshold?: number;
 }
 
 // ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================
