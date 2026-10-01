@@ -56,7 +56,7 @@ const handleLogin = async () => {
       <div class="login-card__head">
         <p class="eyebrow">AI Security Operations Center</p>
         <h1>多场景贝叶斯分类态势感知系统</h1>
-        <p class="login-card__sub">网络 · 电力 · 地质 · 航母甲板保障作业</p>
+        <p class="login-card__sub">网络 · 电力 · 地质 · 舰面调度态势</p>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">

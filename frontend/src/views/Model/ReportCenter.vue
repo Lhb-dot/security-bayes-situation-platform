@@ -305,7 +305,7 @@ const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 报告生成场景选项：从 scenarioStore.activeScenarios 注入（Task 016） */

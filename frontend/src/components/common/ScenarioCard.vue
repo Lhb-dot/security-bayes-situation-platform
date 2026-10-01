@@ -24,7 +24,7 @@ defineEmits<{
 const scenarioNameMap: Record<string, string> = {
   network_security: '网络安全态势感知',
   power_system: '电力系统风险态势感知',
-  flightdeck_operation: '航母甲板保障作业态势感知',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 已发布模型数（新数据源带该字段；缺省回退到 model_count） */

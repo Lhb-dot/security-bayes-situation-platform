@@ -48,7 +48,7 @@ const ALL_SCENARIO_IDS: ScenarioId[] = [
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
-  flightdeck_operation: '航母甲板作业',
+  flightdeck_operation: '舰面调度态势',
   geological_risk: '地质风险',
 };
 const ROLE_LABEL: Record<string, string> = {

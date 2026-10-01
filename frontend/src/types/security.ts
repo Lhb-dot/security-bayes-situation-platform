@@ -165,9 +165,9 @@ export interface RiskEvent {
   risk_type: string;
   risk_level: RiskLevelUpper;
   risk_score: number;
-  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
   fault_position_x?: number | null;
-  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
   fault_position_y?: number | null;
   occurred_at: string;
   status: '待处置' | '处理中' | '已处置';

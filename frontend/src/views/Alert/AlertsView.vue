@@ -52,7 +52,7 @@ const showHidden = ref(false);
 const SCENARIO_META: Record<number, { name: string }> = {
   1: { name: '网络安全' },
   2: { name: '电力系统' },
-  3: { name: '航母甲板' },
+  3: { name: '舰面调度态势' },
   4: { name: '地质风险' },
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);

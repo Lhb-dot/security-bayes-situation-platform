@@ -78,7 +78,7 @@ const canDelete = computed(() => userStore.isSuperAdmin);
 const SCENARIO_META: Record<number, { code: string; name: string }> = {
   1: { code: 'network_security', name: '网络安全' },
   2: { code: 'power_system', name: '电力系统' },
-  3: { code: 'flightdeck_operation', name: '航母甲板作业' },
+  3: { code: 'flightdeck_operation', name: '舰面调度态势' },
   4: { code: 'geological_risk', name: '地质风险' },
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);

@@ -23,12 +23,12 @@ import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
 
-/** 场景名称映射（表格标签用；上传弹窗的选项文案历史上写作「航母甲板作业」，见模板，保持不变） */
+/** 场景名称映射（表格标签与上传弹窗选项共用） */
 const SCENARIO_LABEL: Record<ScenarioId, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 数据格式标签（键为 Dataset.data_format 全集，取值不会落空） */
@@ -551,7 +551,7 @@ onMounted(async () => {
             <option value="" disabled>-- 请选择场景 --</option>
             <option value="network_security">网络安全</option>
             <option value="power_system">电力系统</option>
-            <option value="flightdeck_operation">航母甲板作业</option>
+            <option value="flightdeck_operation">舰面调度态势</option>
             <option value="geological_risk">地质风险</option>
           </select>
         </div>

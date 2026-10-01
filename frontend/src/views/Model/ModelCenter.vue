@@ -80,7 +80,7 @@ const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 数据集选项只按场景归属联动，不根据当前是否存在模型来生成选项。 */

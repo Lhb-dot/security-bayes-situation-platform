@@ -254,7 +254,7 @@ const SCENARIO_NAME: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
