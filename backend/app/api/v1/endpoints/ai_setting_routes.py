@@ -9,7 +9,7 @@ from app.models.app_user import AppUser
 from app.schemas.ai_setting import AISettingUpdate
 from app.services.explanation_service import AISettingService
 
-router = APIRouter(prefix="/settings/ai", tags=["AI 设置"])
+router = APIRouter(prefix="/settings/ai", tags=["AI 解释服务"])
 
 
 @router.get("", summary="读取当前用户 AI 设置（API key 仅返回掩码）")

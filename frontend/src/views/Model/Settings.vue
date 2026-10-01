@@ -6,7 +6,7 @@
  * - 每个页签内容为左右两栏卡片；需要横向空间的卡片用 .settings-section--span 占满整行
  *
  * 功能口径保持不变：
- * - 场景用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + 模型解释服务）
+ * - 场景用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + AI 解释服务）
  * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）
  *
  * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
@@ -134,7 +134,7 @@ const savePersonalSettings = () => {
   ElMessage.success('个人设置已保存');
 };
 
-// ===================== 模型解释服务 =====================
+// ===================== AI 解释服务 =====================
 const aiSetting = ref<AISetting | null>(null);
 const savingAI = ref(false);
 const testingAI = ref(false);
@@ -514,7 +514,7 @@ onBeforeUnmount(() => {
         <div class="section-heading">
           <div>
             <p class="eyebrow">AI Provider</p>
-            <h3>模型解释服务</h3>
+            <h3>AI 解释服务</h3>
           </div>
           <span
             class="ai-badge"
@@ -669,7 +669,7 @@ onBeforeUnmount(() => {
         stripe
         :max-height="logTableMaxHeight"
         style="width: 100%"
-        :empty-text="logsLoading ? '加载中…' : '暂无阈值修改记录'"
+        :empty-text="logsLoading ? '加载中…' : ''"
       >
         <el-table-column label="变更时间" min-width="170" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
@@ -702,10 +702,10 @@ onBeforeUnmount(() => {
       </el-table>
     </el-dialog>
 
-    <!-- ==================== 编辑 AI 设置弹窗 ==================== -->
+    <!-- ==================== 编辑 AI 解释服务弹窗 ==================== -->
     <el-dialog
       v-model="aiDialogVisible"
-      title="编辑 AI 设置"
+      title="编辑 AI 解释服务"
       class="ai-setting-dialog"
       width="520px"
       top="10vh"
