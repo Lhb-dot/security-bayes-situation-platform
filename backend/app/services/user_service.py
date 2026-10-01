@@ -5,9 +5,9 @@
 
 模型：app.models.app_user.AppUser（role 字段即角色，无独立 Role 表）。
 权限要点（需求 6.5.2）：
-- 创建/启用/禁用/重置普通用户账号：仅 ADMIN
+- 创建/启用/禁用/重置场景用户账号：仅 ADMIN
 - 修改本人密码：本人或 ADMIN
-- 用户列表：仅 ADMIN；普通用户仅可查本人信息（get_profile / get）
+- 用户列表：仅 ADMIN；场景用户仅可查本人信息（get_profile / get）
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -64,19 +64,6 @@ class UserService(ServiceBase):
     # ------------------------------------------------------------------
     # 查询
     # ------------------------------------------------------------------
-    @service_call
-    def get(self, current_user: Optional[AppUser], user_id: int):
-        """查看用户详情：SUPER_ADMIN 可查任意；SCENARIO_ADMIN 仅自己场景；其余仅本人。"""
-        self.require_login(current_user)
-        user = self._get(user_id)
-        role = getattr(current_user, "role", None)
-        is_mgmt = role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
-        if not is_mgmt and getattr(current_user, "id", None) != user_id:
-            raise ServiceError(403, "无权限操作")
-        if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        return ok(data=self._safe(user))
-
     @service_call
     def get_profile(self, current_user: Optional[AppUser]):
         """查看本人信息。"""

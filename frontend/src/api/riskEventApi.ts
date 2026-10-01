@@ -2,12 +2,12 @@
  * riskEventApi.ts — 风险事件接口（与后端 /api/v1/risk-events 对齐）
  *
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 5.2）：普通用户仅本人事件。
+ * 权限边界由后端强制（需求 5.2）：场景用户仅本人事件。
  */
 import request, { unwrapData } from '@/utils/request';
 import type { RiskEvent, ScenarioId } from '@/types/security';
 
-/** 风险事件列表（GET /risk-events，普通用户仅本人事件；管理员可按场景/状态过滤） */
+/** 风险事件列表（GET /risk-events，场景用户仅本人事件；管理员可按场景/状态过滤） */
 export const getRiskEventList = async (params?: {
   scenario_id?: ScenarioId;
   status?: RiskEvent['status'];
@@ -49,7 +49,7 @@ export const getRiskEventPage = async (params?: {
   };
 };
 
-/** 风险事件详情（GET /risk-events/{event_id}，普通用户仅本人事件） */
+/** 风险事件详情（GET /risk-events/{event_id}，场景用户仅本人事件） */
 export const getRiskEventDetail = async (eventId: string): Promise<RiskEvent> =>
   unwrapData(await request.get(`/api/v1/risk-events/${eventId}`));
 

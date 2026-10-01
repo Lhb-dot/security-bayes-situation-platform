@@ -266,12 +266,12 @@ onMounted(() => {
       </label>
     </div>
 
-    <!-- 加载状态：只有首屏（列表还是空的）才用整块状态卡。
-         翻页时保留列表、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
-    <section v-if="loading && !events.length" class="state-card">
-      <div class="loader"></div>
-      <p>正在加载风险事件...</p>
-    </section>
+    <!-- 首屏加载：骨架占住真实表格高度，加载完成时页面不跳。
+         翻页时列表已在，只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <div v-if="loading && !events.length" class="risk-events-skeleton" aria-hidden="true">
+      <div class="risk-events-skeleton__head"></div>
+      <div v-for="n in 10" :key="n" class="risk-events-skeleton__row"></div>
+    </div>
 
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">

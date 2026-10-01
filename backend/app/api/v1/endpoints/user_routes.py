@@ -1,7 +1,7 @@
 """用户管理路由（/api/v1/users）。
 
 对应 Service：UserService（backend/app/services/user_service.py）。
-权限（需求 6.5.2）：账号管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
+权限（需求 6.5.2）：用户管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -65,19 +65,6 @@ def get_my_profile(
     current_user: AppUser = Depends(get_current_user),
 ):
     return unwrap(UserService(db).get_profile(current_user=current_user))
-
-
-@router.get(
-    "/{user_id}",
-    response_model=ResponseModel,
-    summary="查看用户详情（ADMIN 任意用户；USER 仅本人）",
-)
-def get_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: AppUser = Depends(get_current_user),
-):
-    return unwrap(UserService(db).get(current_user=current_user, user_id=user_id))
 
 
 @router.post(

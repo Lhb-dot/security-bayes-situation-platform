@@ -91,23 +91,31 @@ class ReportService(ServiceBase):
             raise ServiceError(404, "报告不存在")
         return report
 
-    def _serialize(self, report: Report, include_report_data: bool = False) -> dict:
+    def _serialize(
+        self,
+        report: Report,
+        include_report_data: bool = False,
+        include_summary: bool = True,
+    ) -> dict:
         """Expose stable display fields while retaining the database field names.
 
         include_report_data=True 时才附带结构化 report_data（较大，仅详情/生成时返回，
         列表默认排除以避免载荷膨胀）。
+
+        include_summary=False 时不下发 summary —— 它与 content 同值（都是正文全文），
+        前端列表零消费，每页 10 条等于白传 10 份正文。仅列表接口传 False。
         """
         data = row_to_dict(
             report, exclude=() if include_report_data else ("report_data",)
         )
-        data.update(
-            {
-                "report_id": str(report.id),
-                "created_at": data.get("generated_at"),
-                "status": "completed",
-                "summary": report.content,
-            }
-        )
+        extra = {
+            "report_id": str(report.id),
+            "created_at": data.get("generated_at"),
+            "status": "completed",
+        }
+        if include_summary:
+            extra["summary"] = report.content
+        data.update(extra)
         if report.scenario_id is not None:
             scenario = self.db.get(Scenario, report.scenario_id)
             if scenario is not None:
@@ -927,7 +935,7 @@ class ReportService(ServiceBase):
             )
         stmt = stmt.order_by(Report.generated_at.desc())
         result = paginate(self.db, stmt, page, page_size)
-        result["items"] = [self._serialize(r) for r in result["items"]]
+        result["items"] = [self._serialize(r, include_summary=False) for r in result["items"]]
         return ok(data=result)
 
     def _load_visible(self, current_user, report_id: int):

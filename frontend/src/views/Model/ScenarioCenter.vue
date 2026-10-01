@@ -68,7 +68,7 @@ onMounted(() => {
       <button class="ghost-button" @click="loadScenarios">重试</button>
     </section>
 
-    <!-- 空态引导：未分配任何场景（需求 6.5：普通用户仅见被分配场景） -->
+    <!-- 空态引导：未分配任何场景（需求 6.5：场景用户仅见被分配场景） -->
     <section v-else-if="!scenarios.length" class="state-card">
       <p>暂无分配场景，请联系管理员</p>
     </section>

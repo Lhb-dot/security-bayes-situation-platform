@@ -2,7 +2,7 @@
  * inferenceRecordApi.ts — 推理记录接口（与后端 /api/v1/inference-records 对齐）
  *
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.8）：执行推理需登录；普通用户仅本人记录。
+ * 权限边界由后端强制（需求 6.8）：执行推理需登录；场景用户仅本人记录。
  */
 import request, { getCsrfToken, unwrapData } from '@/utils/request';
 import type { InferenceExplain, InferenceRecord } from '@/types/security';

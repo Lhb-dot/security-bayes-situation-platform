@@ -129,7 +129,7 @@ export const useReportJobStore = defineStore('reportJob', {
       return state.jobs.filter((job) => isTerminal(job) && !seen.has(job.jobId));
     },
 
-    /** 有导出任务在跑的 report_id（列表里把「下载」置灰成「导出中」） */
+    /** 有下载任务在跑的 report_id（列表里把「下载」置灰成「下载中」） */
     runningExportIds: (state): Set<string> =>
       new Set(
         state.jobs
@@ -327,7 +327,7 @@ export const useReportJobStore = defineStore('reportJob', {
     /** 任务到达终态：出通知、必要时取产物。**不从列表移除** —— 顶栏面板要展示它。 */
     _settle(job: BackgroundReportJob) {
       this._trimFinished();
-      const label = job.kind === 'generate' ? '报告生成' : '报告导出';
+      const label = job.kind === 'generate' ? '报告生成' : '报告下载';
       if (job.status === 'FAILED') {
         // 失败要人看见，所以不自动消失
         ElNotification({
@@ -378,20 +378,20 @@ export const useReportJobStore = defineStore('reportJob', {
       return true;
     },
 
-    /** 导出产物就绪：取文件流并触发下载 */
+    /** 下载产物就绪：取文件流并触发下载 */
     async _downloadExport(job: BackgroundReportJob) {
       try {
         const blob = await downloadReportExportFile(job.jobId);
         const ext = EXPORT_EXT[job.format ?? 'markdown'] ?? 'txt';
         saveBlob(blob, `${safeFileName(job.title, job.sourceReportId ?? job.jobId)}.${ext}`);
         ElNotification({
-          title: '报告已导出',
+          title: '报告已下载',
           message: `《${job.title}》已下载`,
           type: 'success',
         });
       } catch (err) {
         ElNotification({
-          title: '报告导出失败',
+          title: '报告下载失败',
           message: `《${job.title}》：${messageOf(err, '文件下载失败')}`,
           type: 'error',
           duration: 0,
@@ -406,7 +406,7 @@ export const useReportJobStore = defineStore('reportJob', {
     _timeout(job: BackgroundReportJob) {
       this.jobs = this.jobs.filter((item) => item.jobId !== job.jobId);
       ElNotification({
-        title: job.kind === 'generate' ? '报告生成仍在进行' : '报告导出仍在进行',
+        title: job.kind === 'generate' ? '报告生成仍在进行' : '报告下载仍在进行',
         message: `《${job.title}》等待超时，任务可能仍在后台继续，可稍后在报告中心查看`,
         type: 'warning',
         duration: 0,

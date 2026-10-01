@@ -4,7 +4,7 @@
  *
  * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED）
  *  - 管理员：发布、禁用、删除、设置默认推荐模型
- *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
+ *  - 场景用户：仅能看到已发布模型（需求 6.7.5）
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -211,7 +211,7 @@ const handleSetDefault = async (m: BackendModelVersion) => {
   }
 };
 
-// ===================== 模型版本对比（需求 6.2 P1；普通用户仅可对比已发布模型） =====================
+// ===================== 模型版本对比（需求 6.2 P1；场景用户仅可对比已发布模型） =====================
 /** 对比上限（需求 6.2 P1：2-5 个模型） */
 const MAX_COMPARE_MODELS = 5;
 
@@ -249,7 +249,7 @@ const clearCompare = () => {
 /**
  * 指标列定义（对比表与模型卡片共用同一份，顺序即 README 的
  * Accuracy/Recall/Precision/Specificity/F1/G-mean）。
- * adminOnly = 仅管理员可见的内部指标（普通用户只看前 6 项）。
+ * adminOnly = 仅管理员可见的内部指标（场景用户只看前 6 项）。
  */
 const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics; adminOnly?: boolean }> = [
   { label: 'Accuracy', key: 'accuracy' },
@@ -332,7 +332,7 @@ const evaluationStatus = computed(() => activeEvaluation.value.status);
 const evaluationError = computed(() => activeEvaluation.value.error);
 
 /**
- * 普通用户对「用户视角」已保存的评价不给「重新生成」入口：该产物面向所有场景用户，
+ * 「用户视角」已保存的评价不给非管理级「重新生成」入口：该产物面向所有场景用户，
  * 管理员可能已经代写过，一键覆盖会把它抹掉。管理员不受限，仍可随时重新生成。
  */
 const canGenerateEvaluation = computed(() => isManagement.value || !evaluationMarkdown.value);
@@ -424,7 +424,7 @@ const generateModelEvaluation = async (
   bucket.reasoning = '';
   if (regenerate) bucket.markdown = '';
   bucket.status = audience === 'user'
-    ? '正在生成普通用户评价...'
+    ? '正在生成用户视角评价...'
     : regenerate ? '正在重新生成模型评价...' : '正在生成模型评价...';
   try {
     await streamModelEvaluation(target.id, regenerate, {
@@ -563,7 +563,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 筛选栏：管理员可按模型状态查看；普通用户只显示已发布模型 -->
+    <!-- 筛选栏：管理员可按模型状态查看；场景用户只显示已发布模型 -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
         <select v-if="isSuperAdmin" v-model="selectedScenario" class="model-filter-select">

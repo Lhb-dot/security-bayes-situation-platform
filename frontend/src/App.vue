@@ -388,7 +388,7 @@ const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
 const atPath = (path: string): boolean => route.path === path;
 
 const navItems: NavItem[] = [
-  // 普通用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
+  // 场景用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
   { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview, isActive: () => atPath('/overview') },
   {
     path: '/scenarios',

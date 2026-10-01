@@ -172,9 +172,9 @@ const handleDownload = async (report: Report) => {
   try {
     const receipt = await submitReportExport(report.report_id, report.format);
     jobStore.trackExport(receipt.job_id, report);
-    ElMessage.success('导出任务已提交');
+    ElMessage.success('下载任务已提交');
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '导出失败');
+    ElMessage.error(err instanceof Error ? err.message : '下载失败');
   } finally {
     exportSubmittingId.value = null;
   }
@@ -182,6 +182,12 @@ const handleDownload = async (report: Report) => {
 
 /** 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告） */
 const handleRegenerate = async (report: Report) => {
+  // 历史报告可能没有场景（report.scenario_id 允许 NULL）：拿不到场景就没法重新生成，
+  // 这里直接拦住，别把空场景丢给 resolveScenarioId 报「场景不存在: 」。
+  if (!report.scenario_id) {
+    ElMessage.error('该报告未绑定场景，无法重新生成');
+    return;
+  }
   regeneratingId.value = report.report_id;
   try {
     // 不带 scheduled：重新生成只产出一份快照，不复制定时任务（否则每次点一下多一条定时）
@@ -293,12 +299,6 @@ const submitGenerate = async () => {
 /** 输入框聚焦时全选，避免在原数字后追加导致拼接（如 7 变 78） */
 const selectAll = (e: Event) => {
   (e.target as HTMLInputElement)?.select();
-};
-
-const statusLabel: Record<string, string> = {
-  completed: '已完成',
-  generating: '生成中',
-  failed: '生成失败',
 };
 
 const scenarioLabel: Record<string, string> = {
@@ -453,7 +453,7 @@ watch(
       <div>
         <p class="eyebrow">Report Center</p>
         <h2>报告中心</h2>
-        <p class="report-center__desc">报告生成、导出与定时任务管理</p>
+        <p class="report-center__desc">报告生成、下载与定时任务管理</p>
       </div>
       <div class="report-center__actions">
         <button class="gen-btn" @click="openGenerate()">+ 生成报告</button>
@@ -461,12 +461,12 @@ watch(
       </div>
     </div>
 
-    <!-- 加载状态：只有首屏（列表还是空的）才用整块状态卡。
-         翻页时保留列表、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
-    <section v-if="loading && !reports.length" class="state-card">
-      <div class="loader"></div>
-      <p>正在加载报告数据...</p>
-    </section>
+    <!-- 首屏加载：骨架占住真实表格高度，加载完成时页面不跳。
+         翻页时列表已在，只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <div v-if="loading && !reports.length" class="report-skeleton" aria-hidden="true">
+      <div class="report-skeleton__head"></div>
+      <div v-for="n in 10" :key="n" class="report-skeleton__row"></div>
+    </div>
 
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">
@@ -474,8 +474,8 @@ watch(
       <button class="ghost-button" @click="loadReports()">重试</button>
     </section>
 
-    <!-- 报告列表 -->
-    <div v-else ref="tableWrapRef" class="report-center__table-wrap">
+    <!-- 报告列表（无数据时整块不渲染，不写占位语） -->
+    <div v-else-if="reports.length" ref="tableWrapRef" class="report-center__table-wrap">
       <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
       <!-- 列宽探针：只为量最长标题的宽度存在，绝对定位、不可见 -->
       <span ref="titleProbeRef" class="report-table__title report-table__probe" aria-hidden="true"></span>
@@ -484,7 +484,6 @@ watch(
         :data="reports"
         stripe
         style="width: 100%"
-        empty-text="暂无报告"
         row-class-name="report-table-row"
       >
         <el-table-column prop="title" label="报告名称" :width="titleColWidth">
@@ -518,7 +517,7 @@ watch(
 
         <el-table-column label="所属场景" min-width="120" align="center">
           <template #default="{ row }: { row: Report }">
-            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
+            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? (row.scenario_id || '—') }}</span>
           </template>
         </el-table-column>
 
@@ -535,17 +534,6 @@ watch(
 
         <el-table-column prop="created_at" label="创建时间" min-width="160" align="center" />
 
-        <el-table-column label="状态" min-width="100" align="center">
-          <template #default="{ row }: { row: Report }">
-            <span
-              class="report-table__status"
-              :class="`report-status--${row.status}`"
-            >
-              {{ statusLabel[row.status] ?? row.status }}
-            </span>
-          </template>
-        </el-table-column>
-
         <el-table-column label="操作" width="340" align="center" fixed="right">
           <template #default="{ row }: { row: Report }">
             <div class="report-table__actions">
@@ -555,7 +543,7 @@ watch(
                 :loading="exportSubmittingId === row.report_id"
                 :disabled="exportBusy(row)"
                 @click="handleDownload(row)"
-              >{{ exportBusy(row) ? '导出中' : '下载' }}</el-button>
+              >{{ exportBusy(row) ? '下载中' : '下载' }}</el-button>
               <el-button
                 size="small"
                 type="warning"
@@ -652,11 +640,10 @@ watch(
           <label class="gen-field__label">定时生成</label>
           <div class="gen-schedule">
             <el-switch v-model="genForm.scheduled" />
-            <span class="gen-schedule__hint">{{ genForm.scheduled ? '已开启定时生成' : '关闭' }}</span>
           </div>
         </div>
         <div v-if="genForm.scheduled" class="gen-field">
-          <label class="gen-field__label">生成周期（天）</label>
+          <label class="gen-field__label">生成周期</label>
           <input v-model.number="genForm.interval_days" type="number" min="1" class="gen-field__input" placeholder="如：7 表示每 7 天生成一份" @focus="selectAll" />
         </div>
       </div>
@@ -693,7 +680,7 @@ watch(
         </el-table-column>
         <el-table-column label="所属场景" width="100" align="center">
           <template #default="{ row }: { row: Report }">
-            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? row.scenario_id }}</span>
+            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? (row.scenario_id || '—') }}</span>
           </template>
         </el-table-column>
         <el-table-column label="格式" width="120" align="center">
@@ -1060,25 +1047,39 @@ watch(
   color: #9ad6ff;
 }
 
-.report-table__status {
-  font-size: 0.82rem;
-  padding: 2px 10px;
-  border-radius: 999px;
+/* 首屏骨架：表头 + 10 行，尺寸对齐真实表格 */
+.report-skeleton {
+  border: 1px solid rgba(125, 201, 255, 0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(8, 18, 34, 0.7);
 }
 
-.report-status--completed {
-  background: rgba(83, 229, 200, 0.12);
-  color: #53e5c8;
+.report-skeleton__head {
+  height: 46px;
+  background: rgba(16, 34, 60, 0.9);
 }
 
-.report-status--generating {
-  background: rgba(255, 177, 107, 0.12);
-  color: #ffc37d;
+.report-skeleton__row {
+  height: 48px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04);
+  background: linear-gradient(
+    90deg,
+    rgba(20, 44, 72, 0.18) 0%,
+    rgba(20, 44, 72, 0.42) 50%,
+    rgba(20, 44, 72, 0.18) 100%
+  );
+  background-size: 200% 100%;
+  animation: report-skeleton-shimmer 1.3s ease-in-out infinite;
 }
 
-.report-status--failed {
-  background: rgba(255, 123, 114, 0.12);
-  color: #ff8c84;
+@keyframes report-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 /* 格式徽章 */
@@ -1209,11 +1210,6 @@ watch(
   align-items: center;
   gap: 10px;
   min-height: 32px;
-}
-
-.gen-schedule__hint {
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.55);
 }
 
 .gen-field__static {

@@ -200,6 +200,16 @@ const submitCreate = async () => {
   }
 };
 
+// ========== 查看 ==========
+// 数据本页行数据已有，不再调后端（原 GET /users/{id} 无人调用，已随本页一起删掉）
+const viewTarget = ref<UserAccount | null>(null);
+const viewOpen = ref(false);
+
+const openView = (user: UserAccount) => {
+  viewTarget.value = user;
+  viewOpen.value = true;
+};
+
 // ========== 重置密码 ==========
 const resetTarget = ref<UserAccount | null>(null);
 const resetPwd = ref('');
@@ -397,6 +407,7 @@ onMounted(async () => {
               </td>
               <td>{{ user.created_at }}</td>
               <td class="users-table__ops">
+                <button class="op-btn" @click="openView(user)">查看</button>
                 <button class="op-btn" @click="openReset(user)">重置密码</button>
                 <button
                   v-if="isSuperAdmin && user.role !== 'SUPER_ADMIN'"
@@ -522,6 +533,59 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="createOpen = false">取消</el-button>
         <el-button type="primary" :loading="createSubmitting" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="viewOpen"
+      title="用户详情"
+      class="users-view-dialog"
+      width="420px"
+      align-center
+      append-to-body
+      lock-scroll
+    >
+      <dl v-if="viewTarget" class="view-list">
+        <div>
+          <dt>用户ID</dt>
+          <dd>{{ viewTarget.id }}</dd>
+        </div>
+        <div>
+          <dt>用户名</dt>
+          <dd>{{ viewTarget.username }}</dd>
+        </div>
+        <div>
+          <dt>角色</dt>
+          <dd>
+            <span class="role-badge" :class="roleBadge(viewTarget.role)">
+              {{ roleLabel(viewTarget.role) }}
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt>状态</dt>
+          <dd>
+            <span
+              class="status-badge"
+              :class="viewTarget.status === 'active' ? 'status-badge--on' : 'status-badge--off'"
+            >
+              {{ viewTarget.status === 'active' ? '启用' : '禁用' }}
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt>绑定场景</dt>
+          <dd>
+            {{ viewTarget.scenario_id != null || viewTarget.scenario_code ? scenarioLabel(viewTarget) : '—' }}
+          </dd>
+        </div>
+        <div>
+          <dt>创建时间</dt>
+          <dd>{{ viewTarget.created_at }}</dd>
+        </div>
+      </dl>
+      <template #footer>
+        <el-button @click="viewOpen = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -663,8 +727,10 @@ onMounted(async () => {
 .col-role { width: 13%; }
 .col-status { width: 8%; }
 .col-scenario { width: 13%; }
-.col-created { width: 18%; }
-.col-ops { width: 28%; }
+.col-created { width: 16%; }
+/* 操作列按「按钮最宽的那一行」定：查看 + 重置密码 + 绑定场景 + 禁用 = 12 中文字
+   （0.8rem ≈ 12.8px/字）+ 4×(12px 内边距×2 + 1px 边框×2) + 3×8px 间距 ≈ 282px */
+.col-ops { width: 30%; }
 
 .users-table th {
   text-align: left;
@@ -975,5 +1041,43 @@ select.pwd-form__input option {
 
 .users-create-dialog .el-button--primary {
   font-weight: 600 !important;
+}
+
+/* 用户详情弹窗同样 append-to-body，样式一并放这里 */
+.users-view-dialog .view-list {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.users-view-dialog .view-list > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.users-view-dialog .view-list dt {
+  width: 72px;
+  flex: none;
+  color: rgba(180, 200, 235, 0.55);
+  font-size: 0.85rem;
+}
+
+.users-view-dialog .view-list dd {
+  margin: 0;
+  color: #c8deff;
+  font-size: 0.9rem;
+}
+
+.users-view-dialog .el-button {
+  background: rgba(91, 166, 255, 0.1) !important;
+  border-color: rgba(125, 201, 255, 0.35) !important;
+  color: #9ad6ff !important;
+}
+
+.users-view-dialog .el-button:hover {
+  background: rgba(91, 166, 255, 0.18) !important;
+  border-color: rgba(91, 166, 255, 0.5) !important;
+  color: #fff !important;
 }
 </style>

@@ -350,22 +350,23 @@ export interface ReportData {
 export interface Report {
   report_id: string;
   title: string;
-  scenario_id: ScenarioId;
+  /** 场景编码；后端 scenario_id 为 NULL、或不在映射表内时是空串，渲染侧显示 — */
+  scenario_id: ScenarioId | '';
   scenario_name: string;
-  summary: string;
   content?: string;
   /** 结构化报告数据（自动生成报告时由后端返回，供详情页渲染图表与 NL 文本） */
   report_data?: ReportData;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
-  status: 'generating' | 'completed' | 'failed';
+  /** 后端 report 表没有 status 列，`_serialize` 恒下发 "completed"；前端不渲染该字段 */
+  status: 'completed';
   /** 是否定时生成 */
   scheduled?: boolean;
   /** 定时生成周期（天） */
   interval_days?: number;
   /** 定时报告的下次生成时间（后端按北京时间下发，仅 scheduled=true 时有值） */
   next_run_at?: string;
-  /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
+  /** 报告生成者（用户 ID），用于"场景用户只看自己生成的报告" */
   generated_by?: string;
 }
 

@@ -45,7 +45,7 @@ export interface ModelVersionPage {
 }
 
 /**
- * 模型版本分页列表（含 total，列表页服务端分页用；普通用户仅见 PUBLISHED）。
+ * 模型版本分页列表（含 total，列表页服务端分页用；场景用户仅见 PUBLISHED）。
  *
  * status 支持逗号分隔多值（如 `TRAINING,FAILED,DRAFT`），供「未发布」这类跨状态筛选下推。
  */
@@ -65,7 +65,7 @@ export const getModelVersionPage = async (params?: {
   };
 };
 
-/** 模型版本列表（GET /model-versions，普通用户仅见 PUBLISHED） */
+/** 模型版本列表（GET /model-versions，场景用户仅见 PUBLISHED） */
 export const getModelVersionList = async (params?: {
   scenario_id?: ScenarioId | number;
   dataset_id?: string | number;

@@ -6,7 +6,7 @@
  * 管理员可选全平台/本场景聚合数据或本人个人数据（不支持指定单个用户）。
  */
 import request, { unwrapData } from '@/utils/request';
-import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
+import { SCENARIO_CODE_BY_ID, resolveScenarioId } from '@/api/scenarioApi';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
 
 interface ApiReport {
@@ -38,9 +38,10 @@ interface ReportPage {
 const toReport = (raw: ApiReport): Report => ({
   report_id: raw.report_id ?? String(raw.id),
   title: raw.title,
-  scenario_id: raw.scenario_code ?? (raw.scenario_id == null ? 'network_security' : (SCENARIO_CODE_BY_ID[raw.scenario_id] ?? 'network_security')),
+  scenario_id:
+    raw.scenario_code ??
+    (raw.scenario_id == null ? '' : (SCENARIO_CODE_BY_ID[raw.scenario_id] ?? '')),
   scenario_name: raw.scenario_name ?? '',
-  summary: raw.content,
   content: raw.content,
   report_data: raw.report_data,
   created_at: raw.created_at ?? raw.generated_at,
@@ -87,17 +88,14 @@ export interface ReportGenerateParams {
 }
 
 /** 场景 code → 后端整型 scenario_id，并补齐默认值。两个生成入口共用这一条组装。 */
-const buildGeneratePayload = async (params: ReportGenerateParams) => {
-  const { resolveScenarioId } = await import('@/api/scenarioApi');
-  return {
-    title: params.title,
-    scenario_id: await resolveScenarioId(params.scenario_id),
-    scope: params.scope,
-    format: params.format ?? 'markdown',
-    scheduled: params.scheduled ?? false,
-    interval_days: params.scheduled ? params.interval_days : undefined,
-  };
-};
+const buildGeneratePayload = async (params: ReportGenerateParams) => ({
+  title: params.title,
+  scenario_id: await resolveScenarioId(params.scenario_id),
+  scope: params.scope,
+  format: params.format ?? 'markdown',
+  scheduled: params.scheduled ?? false,
+  interval_days: params.scheduled ? params.interval_days : undefined,
+});
 
 /** 生成任务提交回执（POST /reports/generate/jobs） */
 export interface ReportGenerateReceipt {

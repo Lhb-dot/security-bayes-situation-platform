@@ -7,7 +7,7 @@
  *   - 场景 / 数据集 / 算法 全部从 /api/v1 数据库渲染，不再使用 mock
  *   - 训练参数表单由算法注册的 param_schema 动态生成（需求 6.6.3）
  * 需求 6.7.2：训练成功生成 DRAFT 模型版本（待管理员在模型中心审核发布）
- * 需求 6.5.2：仅管理员可训练；普通用户只能使用已发布模型执行推理
+ * 需求 6.5.2：仅管理员可训练；场景用户只能使用已发布模型执行推理
  *
  * 训练执行策略（后端 /api/v1/model-versions/train-async）：提交后立刻返回 TRAINING 版本，
  * 真实训练由服务端 training_runner 在后台线程调 Java/Weka 执行。轮询与完成通知都放在
@@ -36,7 +36,7 @@ const userStore = useUserStore();
 // ===================== 权限 =====================
 // 直接读 store getter，不再在 onMounted 里拷一份 ref 快照：快照只有在
 // 「main.ts 先 await bootstrap() 再装路由」这条隐式顺序成立时才对，
-// 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成普通用户。
+// 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成场景用户。
 const currentUser = computed(() => userStore.currentUser);
 const isManagement = computed(() => userStore.isManagement);
 
@@ -298,7 +298,7 @@ onMounted(async () => {
       <section v-if="!isManagement" class="card permission-tip">
         <div class="permission-tip__icon">🔒</div>
         <h3>仅管理员可进行模型训练</h3>
-        <p>普通用户可在「风险研判」页面选择管理员已发布模型执行单条样本推理。</p>
+        <p>场景用户可在「风险研判」页面选择管理员已发布模型执行单条样本推理。</p>
         <button class="train-btn train-btn--ghost" @click="router.push('/inference')">前往风险研判</button>
       </section>
 
