@@ -61,7 +61,7 @@ const isManagement = computed(() => userStore.isManagement);
 const roleLabel = (role: UserRole) => {
   if (role === 'SUPER_ADMIN') return '系统管理员';
   if (role === 'SCENARIO_ADMIN') return '场景管理员';
-  return '普通用户';
+  return '场景用户';
 };
 
 /** 徽标配色：与「设置 → 账号与安全」保持一致（系统管理员=琥珀黄） */
@@ -101,7 +101,7 @@ const currentListParams = (): UserListParams => ({
 
 const loadUsers = async () => {
   await userStore.fetchUsers(currentListParams());
-  // 增删改（尤其是停用/删除后带筛选条件重拉）会让总数变小：当前页超出末页时回落到末页重拉，
+  // 增删改（尤其是禁用/删除后带筛选条件重拉）会让总数变小：当前页超出末页时回落到末页重拉，
   // 否则会出现「第 2 / 1 页 + 空表」的假空列表。
   if (currentPage.value > totalPages.value) {
     currentPage.value = totalPages.value;
@@ -191,7 +191,7 @@ const submitCreate = async () => {
       },
       currentListParams(),
     );
-    ElMessage.success('账号创建成功');
+    ElMessage.success('用户创建成功');
     createOpen.value = false;
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '创建失败');
@@ -231,13 +231,13 @@ const submitReset = async () => {
 // ========== 启用 / 禁用 ==========
 const toggleStatus = async (user: UserAccount) => {
   if (user.id === currentUser.value?.id) {
-    ElMessage.warning('不能禁用当前登录账号');
+    ElMessage.warning('不能禁用当前登录用户');
     return;
   }
   const next = user.status === 'active' ? 'disabled' : 'active';
   try {
     await userStore.setUserStatus(user.user_id, next, currentListParams());
-    ElMessage.success(next === 'active' ? '账号已启用' : '账号已禁用');
+    ElMessage.success(next === 'active' ? '用户已启用' : '用户已禁用');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '操作失败');
   }
@@ -300,10 +300,10 @@ onMounted(async () => {
       <div>
         <p class="eyebrow">Account Management</p>
         <h2>用户管理</h2>
-        <p class="users-page__desc">平台账号、角色与场景绑定管理</p>
+        <p class="users-page__desc">用户、角色与场景绑定管理</p>
       </div>
       <button v-if="isManagement" class="users-btn users-btn--primary" @click="openCreate">
-        {{ isSuperAdmin ? '创建账号' : '创建用户' }}
+        创建用户
       </button>
     </div>
 
@@ -314,7 +314,7 @@ onMounted(async () => {
             <option value="">全部角色</option>
             <option v-if="isSuperAdmin" value="SUPER_ADMIN">系统管理员</option>
             <option value="SCENARIO_ADMIN">场景管理员</option>
-            <option value="SCENARIO_USER">普通用户</option>
+            <option value="SCENARIO_USER">场景用户</option>
           </select>
           <select
             v-if="isSuperAdmin"
@@ -345,7 +345,7 @@ onMounted(async () => {
 
       <div ref="tableWrapRef" class="users-table-wrap">
         <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
-        <table class="users-table">
+        <table v-if="users.length" class="users-table">
           <!-- 列宽合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
                空表和满表共用同一套列宽 —— 否则加载时按表头分、数据到了按内容重排，
                整张表会「从宽变窄」跳一下。 -->
@@ -417,7 +417,6 @@ onMounted(async () => {
             </tr>
           </tbody>
         </table>
-        <p v-if="!loading && !users.length" class="users-table__empty">暂无用户数据</p>
       </div>
 
       <div v-if="usersTotal > 0" class="users-pager">
@@ -466,7 +465,7 @@ onMounted(async () => {
 
     <el-dialog
       v-model="createOpen"
-      :title="isSuperAdmin ? '创建账号并绑定场景' : '创建本场景用户'"
+      :title="isSuperAdmin ? '创建用户并绑定场景' : '创建本场景用户'"
       class="users-create-dialog"
       width="480px"
       align-center
@@ -476,7 +475,7 @@ onMounted(async () => {
     >
       <div class="pwd-form">
         <div class="pwd-form__field">
-          <label class="pwd-form__label">用户名（登录账号）</label>
+          <label class="pwd-form__label">用户名</label>
           <input
             v-model.trim="createForm.username"
             class="pwd-form__input"
@@ -484,7 +483,7 @@ onMounted(async () => {
           />
         </div>
         <div class="pwd-form__field">
-          <label class="pwd-form__label">初始密码（至少 6 位）</label>
+          <label class="pwd-form__label">初始密码</label>
           <input
             v-model="createForm.password"
             type="password"
@@ -500,10 +499,8 @@ onMounted(async () => {
             :disabled="!isSuperAdmin"
           >
             <option v-if="isSuperAdmin" value="SCENARIO_ADMIN">场景管理员</option>
-            <option value="SCENARIO_USER">普通用户</option>
+            <option value="SCENARIO_USER">场景用户</option>
           </select>
-          <p v-if="isSuperAdmin" class="bind-tip">系统管理员可创建场景管理员或普通用户</p>
-          <p v-else class="bind-tip">场景管理员只能创建本场景普通用户</p>
         </div>
         <div class="pwd-form__field">
           <label class="pwd-form__label">绑定场景</label>
@@ -520,7 +517,6 @@ onMounted(async () => {
               {{ sc.name }}
             </option>
           </select>
-          <p v-if="!isSuperAdmin" class="bind-tip">固定绑定当前场景，不可更改</p>
         </div>
       </div>
       <template #footer>
@@ -537,7 +533,7 @@ onMounted(async () => {
         </div>
         <div class="modal-card__body">
           <div class="pwd-form__field">
-            <label class="pwd-form__label">新密码（至少 6 位）</label>
+            <label class="pwd-form__label">新密码</label>
             <input
               v-model="resetPwd"
               type="password"
@@ -695,12 +691,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.users-table__empty {
-  padding: 20px;
-  text-align: center;
-  color: rgba(220, 234, 255, 0.5);
-}
-
 .users-table__muted {
   color: rgba(220, 234, 255, 0.4);
 }
@@ -775,12 +765,6 @@ onMounted(async () => {
   color: #9ad6ff;
   font-size: 0.76rem;
   white-space: nowrap;
-}
-
-.bind-tip {
-  margin: 0;
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.55);
 }
 
 .op-btn {
@@ -974,7 +958,7 @@ select.pwd-form__input option {
 </style>
 
 <style>
-/* 创建账号弹窗 append-to-body 后挂到 body，scoped 样式不生效；
+/* 创建用户弹窗 append-to-body 后挂到 body，scoped 样式不生效；
    且 style.css 的 .el-button 暗色覆盖与 Element Plus 同权重、EP 在后，实际不生效
    （实测渲染成白底 / EP 默认蓝），故此处用 !important 兜住。 */
 .users-create-dialog .el-button {

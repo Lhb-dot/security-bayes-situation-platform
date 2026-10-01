@@ -322,12 +322,12 @@ class UserService(ServiceBase):
         ):
             raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id and status != USER_STATUS_ENABLED:
-            raise ServiceError(400, "不能禁用当前登录账号")
+            raise ServiceError(400, "不能禁用当前登录用户")
         user.status = status
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
         updated = self._get(user.id)
-        return ok(data=self._safe(updated), message="账号状态已更新")
+        return ok(data=self._safe(updated), message="用户状态已更新")
 
     @service_call
     def delete(self, current_user: Optional[AppUser], user_id: int):
@@ -349,7 +349,7 @@ class UserService(ServiceBase):
         ):
             raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id:
-            raise ServiceError(400, "不能删除当前登录账号")
+            raise ServiceError(400, "不能删除当前登录用户")
 
         # 引用保护：任一关联数据存在即拒绝删除
         from app.models.dataset import Dataset

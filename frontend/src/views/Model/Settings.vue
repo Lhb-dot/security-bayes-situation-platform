@@ -480,7 +480,7 @@ onBeforeUnmount(() => {
             <span>账号状态</span>
             <strong>
               <span class="status-badge" :class="accountEnabled ? 'status-badge--on' : 'status-badge--off'">
-                {{ accountEnabled ? '启用' : '停用' }}
+                {{ accountEnabled ? '启用' : '禁用' }}
               </span>
             </strong>
           </div>
