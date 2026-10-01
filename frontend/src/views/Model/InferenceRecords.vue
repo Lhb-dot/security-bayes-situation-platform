@@ -61,17 +61,10 @@ const page = ref(1);
 const pageSize = 20;
 const total = ref(0);
 
-/** 是否管理员（决定描述文案） */
-const isAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN' || userStore.currentUser?.role === 'SCENARIO_ADMIN');
+/** 是否管理级（超管 ‖ 场景管理员），只用于描述文案 */
+const isManagement = computed(() => userStore.isManagement);
 
-/**
- * 是否平台超管 —— 只有超管能删推理记录。
- *
- * 用 store 的 `isSuperAdmin`（= role 恰为 SUPER_ADMIN），**不要**复用本文件上面的 `isAdmin`
- * —— 那个是 `SUPER_ADMIN || SCENARIO_ADMIN`（等于 store 的 `isManagement`，名字有歧义，
- * 只用于描述文案）。后端删除接口走 `require_admin`，场景管理员会拿到 403，
- * 所以入口必须窄一级，否则他看到一个必然失败的按钮。
- */
+/** 是否平台超管 —— 只有超管能删推理记录（后端走 require_admin，场景管理员会拿到 403） */
 const canDelete = computed(() => userStore.isSuperAdmin);
 
 /** 场景数字 ID → 名称 */
@@ -380,7 +373,7 @@ onBeforeUnmount(() => {
         <p class="eyebrow">Inference Records</p>
         <h2>推理记录</h2>
         <p class="records-page__desc">
-          {{ isAdmin ? '全部用户的模型推理记录' : '本人发起的模型推理记录' }}
+          {{ isManagement ? '全部用户的模型推理记录' : '本人发起的模型推理记录' }}
         </p>
       </div>
     </div>

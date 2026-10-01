@@ -18,7 +18,6 @@ export const useUserStore = defineStore('user', {
     initialized: false,
   }),
   getters: {
-    isAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
     isSuperAdmin: (state): boolean => state.currentUser?.role === 'SUPER_ADMIN',
     isScenarioAdmin: (state): boolean => state.currentUser?.role === 'SCENARIO_ADMIN',
     isManagement: (state): boolean =>

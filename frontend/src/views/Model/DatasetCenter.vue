@@ -58,7 +58,7 @@ const fieldDialogLoading = ref(false);
 
 /** current user (new uploads are available to all roles; version mutations remain admin-only) */
 const userStore = useUserStore();
-const isAdmin = computed(() => userStore.isManagement);
+const isManagement = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 const canUpload = computed(() => Boolean(userStore.currentUser));
 
@@ -448,7 +448,7 @@ onMounted(async () => {
               <el-button size="small" plain @click="goDatasetDetail(row)">
                 数据预览
               </el-button>
-              <el-button v-if="isAdmin" size="small" plain @click="openVersionDialog(row)">
+              <el-button v-if="isManagement" size="small" plain @click="openVersionDialog(row)">
                 版本管理
               </el-button>
             </div>

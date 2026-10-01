@@ -31,9 +31,7 @@ const settingsStore = useSettingsStore();
 const router = useRouter();
 /** 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据） */
 const currentUser = computed<UserAccount | null>(() => userStore.currentUser);
-const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
-const isAdmin = computed(() => isSuperAdmin.value || isScenarioAdmin.value);
 /** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
 const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
 
@@ -432,9 +430,9 @@ onBeforeUnmount(() => {
   <div class="settings-page">
     <div class="settings-page__header">
       <div>
-        <p class="eyebrow">{{ isAdmin ? 'System Settings' : 'My Settings' }}</p>
-        <h2>{{ isAdmin ? '系统设置' : '设置' }}</h2>
-        <p v-if="isAdmin" class="settings-page__desc">全局基础参数与风险阈值配置</p>
+        <p class="eyebrow">{{ isSuperAdmin ? 'System Settings' : 'My Settings' }}</p>
+        <h2>{{ isSuperAdmin ? '系统设置' : '设置' }}</h2>
+        <p v-if="isSuperAdmin" class="settings-page__desc">账号安全与风险阈值配置</p>
         <p v-else class="settings-page__desc">关注场景与账号安全设置</p>
       </div>
     </div>
@@ -561,7 +559,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="settings-form__item">
-            <label class="settings-form__label">刷新间隔（秒）</label>
+            <label class="settings-form__label">刷新间隔</label>
             <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
               <option :value="10">10 秒</option>
               <option :value="30">30 秒</option>
@@ -604,11 +602,11 @@ onBeforeUnmount(() => {
           </div>
           <div class="threshold-bar__form">
             <div class="threshold-field">
-              <label>中风险阈值（0~1）</label>
+              <label>中风险阈值</label>
               <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
             </div>
             <div class="threshold-field">
-              <label>高风险阈值（0~1）</label>
+              <label>高风险阈值</label>
               <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
             </div>
             <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">

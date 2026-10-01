@@ -38,7 +38,7 @@ const userStore = useUserStore();
 // 「main.ts 先 await bootstrap() 再装路由」这条隐式顺序成立时才对，
 // 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成普通用户。
 const currentUser = computed(() => userStore.currentUser);
-const isAdmin = computed(() => userStore.isManagement);
+const isManagement = computed(() => userStore.isManagement);
 
 // ===================== 场景（数据库） =====================
 interface DbScenario {
@@ -291,11 +291,11 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 兜底：/risk 的路由 meta.roles 与本文件的 isAdmin 判的是同一对角色
+      <!-- 兜底：/risk 的路由 meta.roles 与本文件的 isManagement 判的是同一对角色
            （SUPER_ADMIN / SCENARIO_ADMIN），守卫会先把非管理角色挡在门外，
            所以这块实际不会渲染。保留是因为守卫一旦放宽，直接露出训练表单会误导用户
            —— 提交必然被后端 403 拒掉。 -->
-      <section v-if="!isAdmin" class="card permission-tip">
+      <section v-if="!isManagement" class="card permission-tip">
         <div class="permission-tip__icon">🔒</div>
         <h3>仅管理员可进行模型训练</h3>
         <p>普通用户可在「风险研判」页面选择管理员已发布模型执行单条样本推理。</p>

@@ -63,7 +63,7 @@ interface DatasetOption {
 const allScenarios = ref<ScenarioOption[]>([]);
 const allDatasets = ref<DatasetOption[]>([]);
 
-const isAdmin = computed(() => userStore.isManagement);
+const isManagement = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
@@ -102,7 +102,7 @@ watch(selectedScenario, () => {
 const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
   const scenarioId = allScenarios.value.find((s) => s.code === selectedScenario.value)?.id;
   const status =
-    !isAdmin.value || selectedStatus.value === 'all'
+    !isManagement.value || selectedStatus.value === 'all'
       ? undefined
       : selectedStatus.value === 'unpublished'
         ? 'TRAINING,FAILED,DRAFT'
@@ -265,7 +265,7 @@ const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics; adminO
 ];
 
 const visibleMetricRows = computed(() =>
-  allMetricRows.filter((row) => isAdmin.value || !row.adminOnly)
+  allMetricRows.filter((row) => isManagement.value || !row.adminOnly)
 );
 
 /** 判断某模型在某指标上是否为最优（高亮） */
@@ -335,7 +335,7 @@ const evaluationError = computed(() => activeEvaluation.value.error);
  * 普通用户对「用户视角」已保存的评价不给「重新生成」入口：该产物面向所有场景用户，
  * 管理员可能已经代写过，一键覆盖会把它抹掉。管理员不受限，仍可随时重新生成。
  */
-const canGenerateEvaluation = computed(() => isAdmin.value || !evaluationMarkdown.value);
+const canGenerateEvaluation = computed(() => isManagement.value || !evaluationMarkdown.value);
 
 const evaluationBodyRef = ref<HTMLElement | null>(null);
 const evaluationReasoningRef = ref<HTMLElement | null>(null);
@@ -394,7 +394,7 @@ const openModelEvaluation = (model: BackendModelVersion) => {
   evaluationTarget.value = model;
   evaluationBuckets.current = emptyEvaluationBucket();
   evaluationBuckets.user = emptyEvaluationBucket();
-  evaluationAudience.value = isAdmin.value ? 'current' : 'user';
+  evaluationAudience.value = isManagement.value ? 'current' : 'user';
   evaluationLoading.value = false;
   ensureEvaluationLoaded(evaluationAudience.value);
 };
@@ -558,7 +558,7 @@ onMounted(async () => {
         <p class="eyebrow">Model Center</p>
         <h2>模型中心</h2>
         <p class="model-center__desc">
-          {{ isAdmin ? '模型版本的发布、禁用与删除' : '已发布模型及其评估指标' }}
+          {{ isManagement ? '模型版本的发布、禁用与删除' : '已发布模型及其评估指标' }}
         </p>
       </div>
     </div>
@@ -574,7 +574,7 @@ onMounted(async () => {
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
-        <select v-if="isAdmin" v-model="selectedStatus" class="model-filter-select">
+        <select v-if="isManagement" v-model="selectedStatus" class="model-filter-select">
           <option value="all">全部状态</option>
           <option value="unpublished">未发布</option>
           <option value="published">已发布</option>
@@ -601,7 +601,7 @@ onMounted(async () => {
               <div class="model-evaluation-modal__scope">
                 <div class="model-evaluation-audience-tabs" role="tablist" aria-label="评价视角">
                   <button
-                    v-if="isAdmin"
+                    v-if="isManagement"
                     type="button"
                     role="tab"
                     class="model-evaluation-audience-tab"
@@ -616,10 +616,10 @@ onMounted(async () => {
                     type="button"
                     role="tab"
                     class="model-evaluation-audience-tab"
-                    :class="{ 'is-active': evaluationAudience === 'user' || !isAdmin }"
-                    :aria-selected="evaluationAudience === 'user' || !isAdmin"
+                    :class="{ 'is-active': evaluationAudience === 'user' || !isManagement }"
+                    :aria-selected="evaluationAudience === 'user' || !isManagement"
                     :disabled="evaluationLoading"
-                    @click="isAdmin && (evaluationAudience = 'user')"
+                    @click="isManagement && (evaluationAudience = 'user')"
                   >
                     用户视角
                   </button>
@@ -846,7 +846,7 @@ onMounted(async () => {
         </div>
 
         <!-- 训练参数 -->
-        <div v-if="isAdmin && Object.keys(model.training_parameters || {}).length" class="model-card__params">
+        <div v-if="isManagement && Object.keys(model.training_parameters || {}).length" class="model-card__params">
           <span
             v-for="(v, k) in model.training_parameters"
             :key="k"
@@ -857,7 +857,7 @@ onMounted(async () => {
         </div>
 
         <!-- 管理员操作区 -->
-        <div v-if="isAdmin" class="model-card__footer">
+        <div v-if="isManagement" class="model-card__footer">
           <template v-if="model.status === 'DRAFT' && canPublish(model)">
             <button class="op-btn op-btn--publish" @click="handlePublish(model)">发布模型</button>
           </template>

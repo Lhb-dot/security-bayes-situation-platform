@@ -37,7 +37,7 @@ const userStore = useUserStore();
 const jobStore = useReportJobStore();
 
 const currentUser = computed(() => userStore.currentUser);
-const isAdmin = computed(() => userStore.isManagement);
+const canUseAggregateScope = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
 // ===================== 列表分页 =====================
@@ -188,7 +188,7 @@ const handleRegenerate = async (report: Report) => {
     const receipt = await submitReportGenerateJob({
       scenario_id: report.scenario_id,
       title: report.title,
-      scope: isAdmin.value ? 'all' : 'self',
+      scope: canUseAggregateScope.value ? 'all' : 'self',
       format: report.format,
     });
     jobStore.trackGenerate(receipt.job_id, report.title);
@@ -249,7 +249,7 @@ const viewTarget = ref<Report | null>(null);
 
 /** 打开生成弹窗；勾上「定时生成」即为创建定时报告 */
 const openGenerate = () => {
-  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: isAdmin.value ? 'all' : 'self', format: 'markdown', scheduled: false, interval_days: 7 };
+  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: canUseAggregateScope.value ? 'all' : 'self', format: 'markdown', scheduled: false, interval_days: 7 };
   genVisible.value = true;
 };
 
@@ -635,9 +635,9 @@ watch(
         </div>
         <div class="gen-field">
           <label class="gen-field__label">数据范围</label>
-          <select v-model="genForm.scope" class="gen-field__input" :disabled="!isAdmin">
+          <select v-model="genForm.scope" class="gen-field__input" :disabled="!canUseAggregateScope">
             <option value="self">本人个人数据</option>
-            <option v-if="isAdmin" value="all">聚合数据</option>
+            <option v-if="canUseAggregateScope" value="all">聚合数据</option>
           </select>
         </div>
         <div class="gen-field">
