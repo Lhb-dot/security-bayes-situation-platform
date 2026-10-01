@@ -154,6 +154,7 @@ class InferenceRecordService(ServiceBase):
                 data["dataset_name"] = dataset_display_name_of(dataset)
                 data["dataset_version"] = dataset.version
                 data["risk_type"] = DATASET_RISK_TYPES.get(dataset.logical_id)
+        # original_label 只是 prediction_label 的别名（值就是模型预测标签，不是数据集原始真值）
         data["original_label"] = record.prediction_label
         event = self.db.scalar(
             select(RiskEvent).where(RiskEvent.inference_record_id == record.id)
@@ -930,15 +931,18 @@ class InferenceRecordService(ServiceBase):
         })
 
     # ------------------------------------------------------------------
-    # 删除（仅 ADMIN；已生成风险事件的记录禁止删除，保持可追溯）
+    # 删除（仅平台超管 SUPER_ADMIN；已生成风险事件的记录禁止删除，保持可追溯）
     # ------------------------------------------------------------------
     @service_call
     def delete(self, current_user, record_id: int):
-        """删除推理记录（仅 ADMIN）。
+        """删除推理记录（仅平台超管 SUPER_ADMIN）。
 
         已生成风险事件的推理记录禁止删除（风险事件依赖推理记录外键且需保持可追溯，
         需求 5.2 访问控制第 4 条）。
         """
+        # require_admin 只认 SUPER_ADMIN，所以 _require_record_access 里的 SCENARIO_ADMIN /
+        # 普通用户分支在删除路径上不可达 —— 它在 get / get_explain 等 5 个方法上共用，
+        # 那两个分支在别处是活的，不要因为这里读不到就把它们删掉。
         self.require_admin(current_user)
         record = self._get(record_id)
         self._require_record_access(current_user, record)

@@ -159,9 +159,9 @@ watch([explanationReasoning, explanationMarkdown], stickExplanationToBottom);
 const hasModelEvaluation = computed(() => Boolean(modelEvaluationMarkdown.value));
 
 /**
- * 后端下发的是 UTC ISO 串（如 2026-09-14T09:09:08.949249+00:00），
- * 直接渲染会把带微秒的 ISO 原文怼到界面上。这里固定按北京时间（UTC+8）格式化，
- * 不依赖浏览器所在时区，避免换机器后显示口径漂移。
+ * 只用于弹窗里的 `generated_explanation.generated_at` —— 它是后端手写进 JSONB 的 UTC ISO 串
+ * （如 2026-09-14T09:09:08.949249+00:00），直接渲染会把带微秒的原文怼到界面上。
+ * 表格里的 `executed_at` 是 ORM DateTime 列，row_to_dict 已转成北京时间字符串，不用再过这里。
  */
 const formatBeijingTime = (value: string | null | undefined): string => {
   if (!value) return '';
@@ -405,7 +405,7 @@ onBeforeUnmount(() => {
               <th>发起人</th>
               <th>场景</th>
               <th>模型版本</th>
-              <th>原始标签</th>
+              <th>预测标签</th>
               <th class="cell-verdict">研判结果</th>
               <th>时间</th>
               <th>操作</th>

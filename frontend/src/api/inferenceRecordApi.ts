@@ -163,12 +163,12 @@ export const getInferenceRecordPage = async (params?: {
     items: data.items ?? [],
     total: data.total ?? 0,
     page: data.page ?? 1,
-    page_size: data.page_size ?? 20,
+    page_size: data.page_size ?? 10,
   };
 };
 
 /** 推理记录可解释性信息（GET /inference-records/{record_id}/explain） */
-export const getInferenceExplain = async (recordId: string): Promise<{
+export const getInferenceExplain = async (recordId: string | number): Promise<{
   inference_record_id: number;
   prediction_label: string;
   explain_data: InferenceExplain;
@@ -183,7 +183,7 @@ export const getInferenceExplain = async (recordId: string): Promise<{
   unwrapData(await request.get(`/api/v1/inference-records/${recordId}/explain`));
 
 /** 删除推理记录（DELETE /inference-records/{record_id}，仅管理员；已生成风险事件的记录后端禁止删除） */
-export const removeInferenceRecord = async (recordId: string): Promise<void> =>
+export const removeInferenceRecord = async (recordId: string | number): Promise<void> =>
   unwrapData(await request.delete(`/api/v1/inference-records/${recordId}`));
 
 export interface ExplanationStreamParams {

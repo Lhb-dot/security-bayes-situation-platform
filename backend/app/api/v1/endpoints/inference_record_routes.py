@@ -63,16 +63,20 @@ def predict_batch(
     """
     service = InferenceRecordService(db)
     if payload.source == "dataset":
-        return service.create_batch_from_dataset(
+        return unwrap(
+            service.create_batch_from_dataset(
+                current_user=current_user,
+                model_version_id=payload.model_version_id,
+                offset=payload.offset,
+                limit=payload.limit,
+            )
+        )
+    return unwrap(
+        service.create_batch_inference(
             current_user=current_user,
             model_version_id=payload.model_version_id,
-            offset=payload.offset,
-            limit=payload.limit,
+            samples=payload.samples or [],
         )
-    return service.create_batch_inference(
-        current_user=current_user,
-        model_version_id=payload.model_version_id,
-        samples=payload.samples or [],
     )
 
 
@@ -119,16 +123,20 @@ def predict_batch_submit(
     """
     service = InferenceRecordService(db)
     if payload.source == "dataset":
-        return service.submit_batch_from_dataset(
+        return unwrap(
+            service.submit_batch_from_dataset(
+                current_user=current_user,
+                model_version_id=payload.model_version_id,
+                offset=payload.offset,
+                limit=payload.limit,
+            )
+        )
+    return unwrap(
+        service.submit_batch_inference(
             current_user=current_user,
             model_version_id=payload.model_version_id,
-            offset=payload.offset,
-            limit=payload.limit,
+            samples=payload.samples or [],
         )
-    return service.submit_batch_inference(
-        current_user=current_user,
-        model_version_id=payload.model_version_id,
-        samples=payload.samples or [],
     )
 
 
@@ -239,7 +247,7 @@ def get_inference_explain(
 @router.delete(
     "/{record_id}",
     response_model=ResponseModel,
-    summary="删除推理记录（仅管理员；已生成风险事件的记录禁止删除）",
+    summary="删除推理记录（仅平台超管 SUPER_ADMIN；已生成风险事件的记录禁止删除）",
 )
 def delete_inference_record(
     record_id: int,
