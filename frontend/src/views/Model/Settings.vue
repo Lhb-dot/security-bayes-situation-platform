@@ -21,7 +21,7 @@ import {
   getRiskThresholds,
   updateRiskThreshold,
 } from '@/api/riskThresholdApi';
-import { useSettingsStore } from '@/stores/settingsStore';
+import { useSettingsStore, ALLOWED_INTERVALS } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
 import { getAISetting, testAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
@@ -77,7 +77,8 @@ const accountRoleBadge = computed(() => {
   const role = currentUser.value?.role;
   if (role === 'SUPER_ADMIN') return 'role-badge--super';
   if (role === 'SCENARIO_USER') return 'role-badge--user';
-  return 'role-badge--admin';
+  if (role === 'SCENARIO_ADMIN') return 'role-badge--admin';
+  return 'role-badge--unknown';
 });
 const accountScenarioLabel = computed(() => {
   if (isSuperAdmin.value) return '全部场景';
@@ -106,6 +107,10 @@ const changePwd = async () => {
   }
   if (pwdForm.value.newPassword !== pwdForm.value.confirm) {
     ElMessage.warning('两次输入的新密码不一致');
+    return;
+  }
+  if (pwdForm.value.newPassword.length < 6) {
+    ElMessage.warning('新密码至少 6 位');
     return;
   }
   changingPwd.value = true;
@@ -561,11 +566,7 @@ onBeforeUnmount(() => {
           <div class="settings-form__item">
             <label class="settings-form__label">刷新间隔</label>
             <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
-              <option :value="10">10 秒</option>
-              <option :value="30">30 秒</option>
-              <option :value="60">60 秒</option>
-              <option :value="120">120 秒</option>
-              <option :value="300">300 秒</option>
+              <option v-for="sec in ALLOWED_INTERVALS" :key="sec" :value="sec">{{ sec }} 秒</option>
             </select>
           </div>
         </div>
@@ -892,6 +893,13 @@ onBeforeUnmount(() => {
   background: rgba(91, 166, 255, 0.16);
   color: #9ad6ff;
   border: 1px solid rgba(91, 166, 255, 0.28);
+}
+
+/* 角色未知（会话恢复中或后端下发未登记取值）时的中性色 */
+.role-badge--unknown {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.28);
 }
 
 .status-badge--on {

@@ -6,7 +6,13 @@
  */
 import request, { unwrapData } from '@/utils/request';
 import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
-import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/security';
+import type {
+  ApiThresholdChangeLog,
+  ApiThresholdConfig,
+  ScenarioId,
+  ThresholdChangeLog,
+  ThresholdConfig,
+} from '@/types/security';
 
 /**
  * 账号未配置该场景阈值时的兜底值（0~1）。
@@ -45,12 +51,10 @@ const ensureScenarioMaps = async (): Promise<void> => {
   scenarioIdByCode = byCode;
 };
 
-type BackendThreshold = Omit<ThresholdConfig, 'scenario_id'> & { scenario_id: number | ScenarioId };
-const normalizeThreshold = (item: BackendThreshold): ThresholdConfig => ({
+/** 数字主键 → 场景编码；后端下发的 `scenario_id` 恒为数字，转换点只在此处。 */
+const normalizeThreshold = (item: ApiThresholdConfig): ThresholdConfig => ({
   ...item,
-  scenario_id: typeof item.scenario_id === 'number'
-    ? scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id]
-    : item.scenario_id,
+  scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id],
 });
 const backendScenarioId = async (scenarioId: ScenarioId | number): Promise<number> => {
   await ensureScenarioMaps();
@@ -70,8 +74,7 @@ export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]>
   const data = await unwrapData(
     await request.get('/api/v1/risk-thresholds/audit-logs', { params: { page: 1, page_size: 200 } }),
   );
-  type BackendAuditLog = Omit<ThresholdChangeLog, 'scenario_id'> & { scenario_id: number };
-  return (data.items ?? []).map((item: BackendAuditLog) => ({
+  return (data.items ?? []).map((item: ApiThresholdChangeLog) => ({
     ...item,
     scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id] ?? item.scenario_id,
   }));

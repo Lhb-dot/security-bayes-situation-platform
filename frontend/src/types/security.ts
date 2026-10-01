@@ -457,6 +457,14 @@ export interface ThresholdConfig {
   updated_at: string;
 }
 
+/**
+ * 后端原始形状：`scenario_id` 是场景数字主键（`risk_threshold.scenario_id` 为 BigInteger FK）。
+ * 只在 `api/riskThresholdApi.ts` 的转换函数入参处出现，页面层一律用 `ThresholdConfig`。
+ */
+export interface ApiThresholdConfig extends Omit<ThresholdConfig, 'scenario_id'> {
+  scenario_id: number;
+}
+
 /** 阈值变更记录（需求 5.4.1.5） */
 export interface ThresholdChangeLog {
   id?: number;
@@ -468,6 +476,11 @@ export interface ThresholdChangeLog {
   old_high?: number;
   new_medium?: number;
   new_high?: number;
+}
+
+/** 后端原始形状：`scenario_id` 是场景数字主键。 */
+export interface ApiThresholdChangeLog extends Omit<ThresholdChangeLog, 'scenario_id'> {
+  scenario_id: number;
 }
 
 // ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================
