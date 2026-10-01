@@ -52,7 +52,6 @@ const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
 
 const scenarioOptions = ref<ApiScenario[]>([]);
 const scenarioNameByCode = ref<Record<string, string>>({});
-const scenarioNameById = ref<Record<number, string>>({});
 
 /** 管理级角色判断统一取自 userStore，不在页面内重复角色字符串 */
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
@@ -71,22 +70,20 @@ const roleBadge = (role: UserRole) => {
   return 'role-badge--admin';
 };
 
+/**
+ * 绑定场景显示名。只认后端下发的 `scenario_code`（`UserService._safe` 保证「有场景必有 code」），
+ * 不再用 `scenario_id` 反查名字 —— 一个字段两名是本页的老问题（见方案 §1.7 G1）。
+ * code 不在已加载的场景表里就原样显示，取不到 code 才是 —。
+ */
 const scenarioLabel = (user: UserAccount) => {
-  if (user.scenario_code && scenarioNameByCode.value[user.scenario_code]) {
-    return scenarioNameByCode.value[user.scenario_code];
-  }
-  if (user.scenario_id != null && scenarioNameById.value[user.scenario_id]) {
-    return scenarioNameById.value[user.scenario_id];
-  }
-  if (user.scenario_code) return user.scenario_code;
-  return '—';
+  if (!user.scenario_code) return '—';
+  return scenarioNameByCode.value[user.scenario_code] ?? user.scenario_code;
 };
 
 const loadScenarios = async () => {
   const options = await getScenarioList();
   scenarioOptions.value = options;
   scenarioNameByCode.value = Object.fromEntries(options.map((item) => [item.code, item.name]));
-  scenarioNameById.value = Object.fromEntries(options.map((item) => [item.id, item.name]));
 };
 
 /** 当前筛选条件 —— 增删改后重拉列表也要带上，否则下拉还显示着筛选值、列表却跳回全量 */
@@ -502,24 +499,18 @@ onMounted(async () => {
             placeholder="初始密码"
           />
         </div>
-        <div class="pwd-form__field">
+        <!-- 场景管理员只能建本场景的场景用户：角色与绑定场景都是固定的，
+             整块隐藏而不是渲染成禁用态（方案 E-U7） -->
+        <div v-if="isSuperAdmin" class="pwd-form__field">
           <label class="pwd-form__label">角色</label>
-          <select
-            v-model="createForm.role"
-            class="pwd-form__input"
-            :disabled="!isSuperAdmin"
-          >
-            <option v-if="isSuperAdmin" value="SCENARIO_ADMIN">场景管理员</option>
+          <select v-model="createForm.role" class="pwd-form__input">
+            <option value="SCENARIO_ADMIN">场景管理员</option>
             <option value="SCENARIO_USER">场景用户</option>
           </select>
         </div>
-        <div class="pwd-form__field">
+        <div v-if="isSuperAdmin" class="pwd-form__field">
           <label class="pwd-form__label">绑定场景</label>
-          <select
-            v-model="createForm.scenario_id"
-            class="pwd-form__input"
-            :disabled="!isSuperAdmin"
-          >
+          <select v-model="createForm.scenario_id" class="pwd-form__input">
             <option
               v-for="sc in scenarioOptions"
               :key="sc.id"

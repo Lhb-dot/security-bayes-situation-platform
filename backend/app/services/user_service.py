@@ -214,6 +214,10 @@ class UserService(ServiceBase):
         """分配/修改用户绑定场景（管理级角色）。
 
         SUPER_ADMIN 可改任意场景管理员/场景用户；SCENARIO_ADMIN 只能改自己场景的用户。
+
+        注意：路由层 `PUT /users/{id}/scenario` 已收紧为 `require_admin`（仅平台超管），
+        所以下面这条 SCENARIO_ADMIN 分支在 HTTP 入口上不可达；保留是因为本方法
+        在 service 层仍按「管理级角色」自洽，直接调用（含测试）时行为不变。
         """
         self.require_scenario_admin(current_user)
         user = self._get(user_id)

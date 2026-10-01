@@ -6,7 +6,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_scenario_admin
+from app.api.deps import get_current_user, require_admin, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -89,13 +89,13 @@ def create_user(
 @router.put(
     "/{user_id}/scenario",
     response_model=ResponseModel,
-    summary="分配/修改用户绑定场景（仅管理员，V3.0 §1.1.6；普通用户登录后自动确定场景）",
+    summary="分配/修改用户绑定场景（仅平台超管 SUPER_ADMIN，V3.0 §1.1.6；场景用户登录后自动确定场景）",
 )
 def update_user_scenario(
     user_id: int,
     payload: UserUpdateScenario,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
+    current_user: AppUser = Depends(require_admin),
 ):
     return unwrap(
         UserService(db).update_scenario(
