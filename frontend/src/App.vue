@@ -401,7 +401,7 @@ const navItems: NavItem[] = [
       isSuperAdmin.value ? atPath('/scenarios') : route.path.startsWith('/scenarios/') || atPath('/scenarios'),
   },
   { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter, isActive: () => atPath('/datasets') },
-  { path: '/alerts', label: '告警中心', roles: ALL_ROLES, action: goAlertsList, isActive: () => atPath('/alerts') },
+  { path: '/alerts', label: '风险事件', roles: ALL_ROLES, action: goAlertsList, isActive: () => atPath('/alerts') },
   { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage, isActive: () => atPath('/risk') },
   { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter, isActive: () => atPath('/models') },
   { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference, isActive: () => atPath('/inference') },

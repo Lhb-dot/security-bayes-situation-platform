@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * AlertsView - 风险事件列表页（使用 RiskEvent 统一结构）
+ * RiskEventListView - 风险事件列表页
  *
  * P0 功能：展示跨场景风险事件，支持场景/风险等级/状态筛选
  * 数据来源：getRiskEventPage() 跨场景聚合
  *
- * 筛选与分页都在后端执行（每页 20 条）：前端只持有当前页数据，
+ * 筛选与分页都在后端执行（每页 10 条）：前端只持有当前页数据，
  * 因此筛选结果跨全量事件生效，翻页也不会把页面拉长。
  */
 import { computed, onMounted, ref, watch } from 'vue';
@@ -36,7 +36,28 @@ const loading = ref(true);
 const error = ref('');
 const total = ref(0);
 const page = ref(1);
-const pageSize = 20;
+const pageSize = 10;
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
+
+/** 页码项：页数多时收成 `1 2 … 末`（与用户管理 / 报告中心同一套） */
+const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
+  const totalN = totalPages.value;
+  const cur = page.value;
+  const nums =
+    totalN <= 7
+      ? Array.from({ length: totalN }, (_, i) => i + 1)
+      : [...new Set([1, totalN, cur - 1, cur, cur + 1])]
+          .filter((p) => p >= 1 && p <= totalN)
+          .sort((a, b) => a - b);
+  const out: Array<{ gap: boolean; value: number }> = [];
+  let prev = 0;
+  for (const p of nums) {
+    if (prev && p - prev > 1) out.push({ gap: true, value: 0 });
+    out.push({ gap: false, value: p });
+    prev = p;
+  }
+  return out;
+});
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -89,12 +110,6 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: '已处置',
 };
 
-/** 已隐藏事件选项（隐藏 = 软隐藏，数据与处置记录都保留） */
-const hiddenOptions = [
-  { value: false, label: '不显示' },
-  { value: true, label: '显示' },
-];
-
 /** 当前筛选条件 → 后端查询参数（'all' 表示该维度不过滤） */
 const queryParams = computed(() => ({
   scenario_id: selectedScenario.value === 'all' ? undefined : selectedScenario.value,
@@ -137,7 +152,10 @@ watch([selectedScenario, selectedRiskLevel, selectedStatus, showHidden], () => {
 const tableWrapRef = ref<HTMLElement | null>(null);
 
 /** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
-const changePage = (target: number) => keepScroll(() => loadEvents(target), tableWrapRef.value);
+const goPage = (target: number) => {
+  if (target < 1 || target > totalPages.value || target === page.value) return;
+  keepScroll(() => loadEvents(target), tableWrapRef.value);
+};
 
 /** 风险等级 → 中文（配色由 .ev-level--* 类承担，这里只管文案） */
 const RISK_LEVEL_LABEL: Record<string, string> = {
@@ -192,7 +210,9 @@ const toggleHidden = async (row: RiskEventItem) => {
     if (willHide) await hideRiskEvent(String(row.id));
     else await unhideRiskEvent(String(row.id));
     ElMessage.success(willHide ? '风险事件已隐藏' : '风险事件已取消隐藏');
-    await loadEvents();
+    // 隐藏后当前页可能空掉（total 仍 > 0，不会走空态分支）→ 回退一页，别停在空表格上
+    const targetPage = events.value.length === 1 && page.value > 1 ? page.value - 1 : page.value;
+    await loadEvents(targetPage);
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '操作失败');
   } finally {
@@ -213,7 +233,6 @@ onMounted(() => {
         <h2>风险事件列表</h2>
         <p class="risk-events-page__desc">各场景风险事件汇总与筛选</p>
       </div>
-      <span class="section-tag">{{ total }} 条事件</span>
     </div>
 
     <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉）。
@@ -242,10 +261,8 @@ onMounted(() => {
       </label>
 
       <label class="filter-item">
-        <span class="filter-item__label">已隐藏</span>
-        <select v-model="showHidden" class="filter-select">
-          <option v-for="opt in hiddenOptions" :key="String(opt.value)" :value="opt.value">{{ opt.label }}</option>
-        </select>
+        <span class="filter-item__label">显示已隐藏</span>
+        <el-switch v-model="showHidden" />
       </label>
     </div>
 
@@ -262,20 +279,10 @@ onMounted(() => {
       <button class="ghost-button" @click="loadEvents(1)">重试</button>
     </section>
 
-    <!-- 空数据提示 -->
-    <section v-else-if="total === 0" class="state-card">
-      <p>暂无匹配的风险事件</p>
-    </section>
-
-    <!-- 事件列表 -->
-    <div v-else ref="tableWrapRef" class="risk-events-table-wrap">
+    <!-- 事件列表（无数据时整块不渲染，不写占位语） -->
+    <div v-else-if="total > 0" ref="tableWrapRef" class="risk-events-table-wrap">
       <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
-      <el-table
-        :data="events"
-        stripe
-        style="width: 100%"
-        empty-text="暂无匹配的风险事件"
-      >
+      <el-table :data="events" stripe style="width: 100%">
         <el-table-column prop="id" label="事件编号" width="88" align="center" show-overflow-tooltip />
 
         <el-table-column label="所属场景" width="96" align="center">
@@ -336,18 +343,26 @@ onMounted(() => {
       </el-table>
     </div>
 
-    <!-- 页码条：翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
+    <!-- 页码条：首页 / 上一页 / 页码 / 下一页 / 末页 + 「第 X / Y 页 · 共 N 条」 -->
     <div v-if="!error && total > 0" class="risk-events-pager">
-      <span class="risk-events-pager__total">共 {{ total }} 条</span>
-      <el-pagination
-        v-model:current-page="page"
-        layout="prev, pager, next"
-        :page-size="pageSize"
-        :total="total"
-        :disabled="loading"
-        background
-        @current-change="changePage"
-      />
+      <span class="risk-events-pager__info">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
+      <div class="risk-events-pager__btns">
+        <button class="risk-events-pager__btn" :disabled="page === 1" @click="goPage(1)">首页</button>
+        <button class="risk-events-pager__btn" :disabled="page === 1" @click="goPage(page - 1)">上一页</button>
+        <template v-for="item in pageItems" :key="item.gap ? 'gap' : item.value">
+          <span v-if="item.gap" class="risk-events-pager__gap">…</span>
+          <button
+            v-else
+            class="risk-events-pager__btn risk-events-pager__btn--num"
+            :class="{ 'is-active': item.value === page }"
+            @click="goPage(item.value)"
+          >
+            {{ item.value }}
+          </button>
+        </template>
+        <button class="risk-events-pager__btn" :disabled="page === totalPages" @click="goPage(page + 1)">下一页</button>
+        <button class="risk-events-pager__btn" :disabled="page === totalPages" @click="goPage(totalPages)">末页</button>
+      </div>
     </div>
   </div>
 </template>
@@ -397,6 +412,41 @@ onMounted(() => {
   border-radius: 18px;
   overflow: hidden;
   background: rgba(8, 18, 34, 0.7);
+}
+
+/* 首屏骨架：形状对齐真实表格（表头 46px + 每行 48px），不写「加载中」文案 */
+.risk-events-skeleton {
+  border: 1px solid rgba(125, 201, 255, 0.10);
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(8, 18, 34, 0.7);
+}
+
+.risk-events-skeleton__head {
+  height: 46px;
+  background: rgba(16, 34, 60, 0.9);
+}
+
+.risk-events-skeleton__row {
+  height: 48px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.04);
+  background: linear-gradient(
+    90deg,
+    rgba(20, 44, 72, 0.18) 0%,
+    rgba(20, 44, 72, 0.42) 50%,
+    rgba(20, 44, 72, 0.18) 100%
+  );
+  background-size: 200% 100%;
+  animation: risk-events-skeleton-shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes risk-events-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .event-table__scenario-tag {
@@ -475,59 +525,68 @@ onMounted(() => {
   color: rgba(83, 229, 200, 0.65);
 }
 
-/* ---------------- 分页器（暗色） ----------------
-   与数据集中心的只读预览表保持同一套分页外观；变量挂在包裹层上，
-   由 CSS 自定义属性继承进 el-pagination 内部。 */
+/* ---------------- 分页器 ----------------
+   与用户管理 / 报告中心同一套：首页 / 上一页 / 页码 / 下一页 / 末页 + 页数信息。 */
 .risk-events-pager {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  padding-top: 16px;
-  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
-  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
-  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
-  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
-  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
-  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
-  --el-pagination-hover-color: #5ba6ff;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
 }
 
-.risk-events-pager__total {
+.risk-events-pager__info {
+  font-size: 0.82rem;
   color: rgba(220, 234, 255, 0.6);
-  font-size: 0.85rem;
 }
 
-.risk-events-pager :deep(.el-pagination.is-background .el-pager li),
-.risk-events-pager :deep(.el-pagination.is-background .btn-prev),
-.risk-events-pager :deep(.el-pagination.is-background .btn-next) {
-  border: 1px solid rgba(125, 201, 255, 0.12);
+.risk-events-pager__btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.risk-events-pager__btn {
+  min-width: 34px;
+  padding: 5px 10px;
+  border: 1px solid rgba(125, 201, 255, 0.22);
   border-radius: 6px;
+  background: rgba(91, 166, 255, 0.08);
+  color: rgba(200, 224, 255, 0.85);
+  font-size: 0.8rem;
+  cursor: pointer;
 }
 
-.risk-events-pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
-.risk-events-pager :deep(.el-pagination.is-background .btn-prev:hover),
-.risk-events-pager :deep(.el-pagination.is-background .btn-next:hover) {
-  background-color: rgba(20, 44, 72, 0.95) !important;
-  color: #9ad6ff !important;
+.risk-events-pager__btn:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.45);
+  color: #fff;
 }
 
-.risk-events-pager :deep(.el-pagination.is-background .el-pager li.is-active) {
-  background-color: #3f7fd4 !important;
-  color: #ffffff !important;
-  border-color: transparent;
+.risk-events-pager__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
-.risk-events-pager :deep(.el-pagination.is-background .btn-prev),
-.risk-events-pager :deep(.el-pagination.is-background .btn-next) {
-  background-color: rgba(12, 26, 46, 0.9) !important;
-  color: rgba(220, 234, 255, 0.7) !important;
+.risk-events-pager__btn--num {
+  padding: 5px 0;
 }
 
-.risk-events-pager :deep(.el-pagination.is-background .btn-prev:disabled),
-.risk-events-pager :deep(.el-pagination.is-background .btn-next:disabled) {
-  background-color: rgba(8, 17, 31, 0.45) !important;
-  color: rgba(180, 200, 235, 0.25) !important;
+.risk-events-pager__btn.is-active {
+  background: rgba(91, 166, 255, 0.24);
+  border-color: rgba(91, 166, 255, 0.6);
+  color: #fff;
+  font-weight: 600;
+}
+
+.risk-events-pager__gap {
+  padding: 0 2px;
+  color: rgba(220, 234, 255, 0.4);
+  font-size: 0.8rem;
 }
 </style>
 
@@ -558,10 +617,6 @@ onMounted(() => {
 
 .risk-events-page .el-table__body tr:hover > td.el-table__cell {
   background-color: rgba(20, 44, 72, 0.9) !important;
-}
-
-.risk-events-page .el-table__empty-text {
-  color: rgba(155, 185, 225, 0.3) !important;
 }
 
 /* 风险说明：单元格内单行截断，完整说明进详情页看。

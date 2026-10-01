@@ -27,9 +27,10 @@ const routes = [
     meta: { title: '首页' },
   },
   {
+    // path 保留 /alerts 属历史遗留（改名会打断已分享的链接）；页面本身是风险事件列表。
     path: '/alerts',
     name: '风险事件列表',
-    component: () => import('@/views/Alert/AlertsView.vue'),
+    component: () => import('@/views/Event/RiskEventListView.vue'),
     meta: { title: '风险事件列表' },
   },
   {
