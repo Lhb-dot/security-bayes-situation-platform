@@ -285,7 +285,7 @@ onMounted(() => {
       <el-table :data="events" stripe style="width: 100%">
         <el-table-column prop="id" label="事件编号" width="88" align="center" show-overflow-tooltip />
 
-        <el-table-column label="所属场景" width="96" align="center">
+        <el-table-column label="所属场景" width="122" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
             <span class="event-table__scenario-tag">{{ scenarioName(row.scenario_id) }}</span>
           </template>
