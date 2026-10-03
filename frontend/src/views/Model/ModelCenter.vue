@@ -4,9 +4,9 @@
  *
  * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED）
  *  - 管理员：发布、禁用、删除、设置默认推荐模型
- *  - 普通用户：仅能看到已发布模型（需求 6.7.5）
+ *  - 场景用户：仅能看到已发布模型（需求 6.7.5）
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -17,7 +17,7 @@ import {
   deleteModelVersion,
   disableModel,
   enableModel,
-  getModelVersionList,
+  getModelVersionPage,
   publishModel,
   setDefaultModel,
 } from '@/api/modelVersionApi';
@@ -29,6 +29,7 @@ import {
   type ModelEvaluationResponse,
 } from '@/api/modelEvaluationApi';
 import type { EvaluationMetrics } from '@/types/security';
+import { keepScroll } from '@/utils/scrollAnchor';
 
 const userStore = useUserStore();
 const models = ref<BackendModelVersion[]>([]);
@@ -36,6 +37,12 @@ const algorithms = ref<Array<{ algorithm_id: string; display_name: string }>>([]
 const currentUser = computed(() => userStore.currentUser);
 const loading = ref(true);
 const error = ref('');
+
+/** 服务端分页：每页 10 条，计数与翻页都以服务端 total 为准（前端不再本地过滤） */
+const page = ref(1);
+const pageSize = 10;
+const total = ref(0);
+
 const selectedScenario = ref<string>('all');
 const selectedDataset = ref<string>('all');
 type ModelStatusFilter = 'all' | 'unpublished' | 'published' | 'disabled';
@@ -56,7 +63,7 @@ interface DatasetOption {
 const allScenarios = ref<ScenarioOption[]>([]);
 const allDatasets = ref<DatasetOption[]>([]);
 
-const isAdmin = computed(() => userStore.isManagement);
+const isManagement = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
 
 const algoName = (id: string) => algorithms.value.find((a) => a.algorithm_id === id)?.display_name ?? id;
@@ -66,7 +73,6 @@ const statusLabel: Record<string, string> = {
   FAILED: '训练失败',
   DRAFT: '待发布',
   PUBLISHED: '已发布',
-  OFFLINE: '禁用中',
   DISABLED: '禁用中',
 };
 
@@ -74,7 +80,7 @@ const scenarioLabel: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
 /** 数据集选项只按场景归属联动，不根据当前是否存在模型来生成选项。 */
@@ -92,35 +98,66 @@ watch(selectedScenario, () => {
   selectedDataset.value = 'all';
 });
 
-const filteredModels = computed(() => {
-  let list = models.value;
-  if (selectedScenario.value !== 'all') list = list.filter((m) => m.scenario_code === selectedScenario.value);
-  if (selectedDataset.value !== 'all') list = list.filter((m) => String(m.dataset_id) === selectedDataset.value);
-  if (isAdmin.value && selectedStatus.value === 'unpublished') {
-    list = list.filter((m) => ['TRAINING', 'FAILED', 'DRAFT'].includes(m.status));
-  } else if (isAdmin.value && selectedStatus.value === 'published') {
-    list = list.filter((m) => m.status === 'PUBLISHED');
-  } else if (isAdmin.value && selectedStatus.value === 'disabled') {
-    list = list.filter((m) => m.status === 'DISABLED');
-  }
-  return list;
-});
+/** 筛选条件 → 后端查询参数：场景 code 转 id，「未发布」展开成三个状态 */
+const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
+  const scenarioId = allScenarios.value.find((s) => s.code === selectedScenario.value)?.id;
+  const status =
+    !isManagement.value || selectedStatus.value === 'all'
+      ? undefined
+      : selectedStatus.value === 'unpublished'
+        ? 'TRAINING,FAILED,DRAFT'
+        : selectedStatus.value.toUpperCase();
+  return {
+    scenario_id: selectedScenario.value === 'all' ? undefined : scenarioId,
+    dataset_id: selectedDataset.value === 'all' ? undefined : selectedDataset.value,
+    status,
+    page_size: pageSize,
+  };
+};
 
-const scenarioOptions = computed(() => {
-  return allScenarios.value;
-});
+/** 请求序号：连续切筛选时丢弃过期响应，避免旧结果盖掉新结果 */
+let loadSeq = 0;
 
-const loadModels = async () => {
+const loadModels = async (targetPage: number = page.value) => {
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = '';
   try {
-    models.value = await getModelVersionList({ page: 1, page_size: 200 });
+    const data = await getModelVersionPage({ ...queryParams(), page: targetPage });
+    if (seq !== loadSeq) return;
+    // 删除或切筛选后页码可能越界（后端不修正页码），退回最后一页
+    if (!data.items.length && data.total > 0 && targetPage > 1) {
+      await loadModels(Math.max(1, Math.ceil(data.total / pageSize)));
+      return;
+    }
+    models.value = data.items;
+    total.value = data.total;
+    page.value = data.page;
+    // 当前页的对比选中项跟着刷新，避免对比面板停在旧状态
+    for (const item of data.items) {
+      if (compareCache.has(item.id)) compareCache.set(item.id, item);
+    }
   } catch (err) {
+    if (seq !== loadSeq) return;
     error.value = err instanceof Error ? err.message : '模型数据加载失败';
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 };
+
+const listRef = ref<HTMLElement | null>(null);
+
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadModels(target), listRef.value);
+
+/** 初始化期间不触发重载：场景是按当前用户预设的，onMounted 末尾自己会加载一次 */
+const ready = ref(false);
+
+/** 筛选变化回到第 1 页重载 */
+watch([selectedScenario, selectedDataset, selectedStatus], () => {
+  if (!ready.value) return;
+  void loadModels(1);
+});
 
 // ===================== 管理员操作 =====================
 const handlePublish = async (m: BackendModelVersion) => {
@@ -174,46 +211,61 @@ const handleSetDefault = async (m: BackendModelVersion) => {
   }
 };
 
-// ===================== 模型版本对比（需求 6.2 P1；普通用户仅可对比已发布模型） =====================
+// ===================== 模型版本对比（需求 6.2 P1；场景用户仅可对比已发布模型） =====================
+/** 对比上限（需求 6.2 P1：2-5 个模型） */
+const MAX_COMPARE_MODELS = 5;
+
 const compareIds = ref<number[]>([]);
+
+/** 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞 */
+const compareCache = new Map<number, BackendModelVersion>();
 
 const toggleCompare = (m: BackendModelVersion) => {
   const idx = compareIds.value.indexOf(m.id);
   if (idx >= 0) {
     compareIds.value.splice(idx, 1);
+    compareCache.delete(m.id);
   } else {
-    if (compareIds.value.length >= 5) {
-      ElMessage.warning('最多选择 5 个模型进行对比');
+    if (compareIds.value.length >= MAX_COMPARE_MODELS) {
+      ElMessage.warning(`最多选择 ${MAX_COMPARE_MODELS} 个模型进行对比`);
       return;
     }
     compareIds.value.push(m.id);
+    compareCache.set(m.id, m);
   }
 };
 
 const compareList = computed(() =>
-  models.value.filter((m) => compareIds.value.includes(m.id))
+  compareIds.value
+    .map((id) => compareCache.get(id))
+    .filter((m): m is BackendModelVersion => Boolean(m))
 );
 
 const clearCompare = () => {
   compareIds.value = [];
+  compareCache.clear();
 };
 
-/** 对比指标列定义 */
-const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics }> = [
+/**
+ * 指标列定义（对比表与模型卡片共用同一份，顺序即 README 的
+ * Accuracy/Recall/Precision/Specificity/F1/G-mean）。
+ * adminOnly = 仅管理员可见的内部指标（场景用户只看前 6 项）。
+ */
+const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics; adminOnly?: boolean }> = [
   { label: 'Accuracy', key: 'accuracy' },
   { label: 'Recall', key: 'recall' },
   { label: 'Precision', key: 'precision' },
   { label: 'Specificity', key: 'specificity' },
   { label: 'F1', key: 'f1' },
   { label: 'G-mean', key: 'g_mean' },
-  { label: 'Risk Recall', key: 'risk_recall' },
-  { label: 'Risk F1', key: 'risk_f1' },
-  { label: 'CV Mean', key: 'cv_mean' },
-  { label: 'CV Std', key: 'cv_std' },
+  { label: 'Risk Recall', key: 'risk_recall', adminOnly: true },
+  { label: 'Risk F1', key: 'risk_f1', adminOnly: true },
+  { label: 'CV Mean', key: 'cv_mean', adminOnly: true },
+  { label: 'CV Std', key: 'cv_std', adminOnly: true },
 ];
 
 const visibleMetricRows = computed(() =>
-  isAdmin.value ? allMetricRows : allMetricRows.slice(0, 6)
+  allMetricRows.filter((row) => isManagement.value || !row.adminOnly)
 );
 
 /** 判断某模型在某指标上是否为最优（高亮） */
@@ -238,11 +290,16 @@ const canPublish = (model: BackendModelVersion) => currentUser.value?.id === mod
 // 管理员视角与用户视角在后端是两份独立产物，前端按视角分桶缓存，切标签时互不覆盖。
 type EvaluationTab = Extract<ModelEvaluationAudience, 'current' | 'user'>;
 
+/** 评价弹窗里最多列出的场景重点字段数（超出只截断展示，不影响后端数据） */
+const FEATURE_PROFILE_LIMIT = 8;
+
 interface EvaluationBucket {
   loaded: boolean;
   pending: boolean;
   response: ModelEvaluationResponse | null;
   markdown: string;
+  /** 推理型模型的思维链：只用于等待期展示「确实在生成」，正文到达即覆盖，且不落库 */
+  reasoning: string;
   status: string;
   error: string;
 }
@@ -257,6 +314,7 @@ const emptyEvaluationBucket = (): EvaluationBucket => ({
   pending: false,
   response: null,
   markdown: '',
+  reasoning: '',
   status: '',
   error: '',
 });
@@ -269,8 +327,30 @@ const evaluationBuckets = reactive<Record<EvaluationTab, EvaluationBucket>>({
 const activeEvaluation = computed(() => evaluationBuckets[evaluationAudience.value]);
 const evaluation = computed(() => activeEvaluation.value.response);
 const evaluationMarkdown = computed(() => activeEvaluation.value.markdown);
+const evaluationReasoning = computed(() => activeEvaluation.value.reasoning);
 const evaluationStatus = computed(() => activeEvaluation.value.status);
 const evaluationError = computed(() => activeEvaluation.value.error);
+
+/**
+ * 「用户视角」已保存的评价不给非管理级「重新生成」入口：该产物面向所有场景用户，
+ * 管理员可能已经代写过，一键覆盖会把它抹掉。管理员不受限，仍可随时重新生成。
+ */
+const canGenerateEvaluation = computed(() => isManagement.value || !evaluationMarkdown.value);
+
+const evaluationBodyRef = ref<HTMLElement | null>(null);
+const evaluationReasoningRef = ref<HTMLElement | null>(null);
+
+/** 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。 */
+const stickEvaluationToBottom = () => {
+  if (!evaluationLoading.value) return;
+  void nextTick(() => {
+    for (const el of [evaluationBodyRef.value, evaluationReasoningRef.value]) {
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+};
+
+watch([evaluationReasoning, evaluationMarkdown], stickEvaluationToBottom);
 
 const safeEvaluationHtml = computed(() => {
   if (!evaluationMarkdown.value) return '';
@@ -288,6 +368,7 @@ const loadEvaluation = async (audience: EvaluationTab) => {
     if (evaluationTarget.value?.id !== target.id) return;
     bucket.response = response;
     bucket.markdown = response.evaluation.markdown || '';
+    bucket.reasoning = '';
     // 评价读取完成后的结果由正文/空状态呈现，不再用状态条重复一遍。
     bucket.status = '';
     bucket.error = '';
@@ -313,7 +394,7 @@ const openModelEvaluation = (model: BackendModelVersion) => {
   evaluationTarget.value = model;
   evaluationBuckets.current = emptyEvaluationBucket();
   evaluationBuckets.user = emptyEvaluationBucket();
-  evaluationAudience.value = isAdmin.value ? 'current' : 'user';
+  evaluationAudience.value = isManagement.value ? 'current' : 'user';
   evaluationLoading.value = false;
   ensureEvaluationLoaded(evaluationAudience.value);
 };
@@ -340,20 +421,30 @@ const generateModelEvaluation = async (
   evaluationAudience.value = audience;
   evaluationLoading.value = true;
   bucket.error = '';
+  bucket.reasoning = '';
   if (regenerate) bucket.markdown = '';
   bucket.status = audience === 'user'
-    ? '正在生成普通用户评价...'
+    ? '正在生成用户视角评价...'
     : regenerate ? '正在重新生成模型评价...' : '正在生成模型评价...';
   try {
     await streamModelEvaluation(target.id, regenerate, {
       onStart: (data) => { bucket.status = String(data.status || '评价生成中'); },
-      onDelta: (content) => { bucket.markdown += content; },
+      onReasoning: (content) => { bucket.reasoning += content; },
+      onDelta: (content) => {
+        // 正文一到就覆盖思考链：它只负责让用户看到「确实在生成」，不留在结果里。
+        if (bucket.reasoning) bucket.reasoning = '';
+        bucket.markdown += content;
+      },
       onError: (data) => {
         bucket.error = String(data.message || 'AI 服务不可用');
+        // 流式中途失败时先丢弃半截正文，避免「半句 AI 文本 + 规则模板」拼在一起。
+        bucket.markdown = '';
+        bucket.reasoning = '';
       },
       onDone: () => {
         // 生成结束即清空状态条，正文自己会呈现结果。
         bucket.status = '';
+        stickEvaluationToBottom();
       },
     }, evaluationAbort.signal, audience);
     bucket.response = await getModelEvaluation(target.id, audience);
@@ -362,12 +453,30 @@ const generateModelEvaluation = async (
     if ((err as Error)?.name !== 'AbortError') {
       bucket.error = err instanceof Error ? err.message : '模型评价生成失败';
       bucket.status = '';
+      bucket.reasoning = '';
     }
   } finally {
     bucket.pending = false;
     evaluationLoading.value = false;
     evaluationAbort = null;
   }
+};
+
+/** 导出当前视角的模型评价为 Markdown 文件（内容与弹窗中展示的一致） */
+const exportModelEvaluation = () => {
+  const target = evaluationTarget.value;
+  const markdown = evaluationMarkdown.value;
+  if (!target || !markdown) return;
+  const audienceLabel = evaluationAudience.value === 'user' ? '用户视角' : '管理员视角';
+  const content = `# 模型 #${target.id} 评价（${audienceLabel}）\n\n${markdown}\n`;
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `model-${target.id}-evaluation-${evaluationAudience.value}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  ElMessage.success('模型评价已导出');
 };
 
 /** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
@@ -392,25 +501,53 @@ onBeforeUnmount(() => {
   document.body.style.overflow = '';
 });
 
+/**
+ * 下拉框数据源的行类型（描述后端**实际返回**的字段）：
+ * - GET /algorithms 返回算法表原始行，而 algorithmApi 声明的 AlgorithmDefinition 与后端不符，
+ *   所以下面只能双重断言收口（根因在 algorithmApi.ts，属跨分区提案）；
+ * - GET /scenarios、GET /datasets 来自未类型化的 trainingApi.js，只能在此就地声明。
+ */
+interface AlgorithmRow {
+  id: number;
+  code: string;
+  display_name: string;
+}
+
+interface ScenarioRow {
+  id: number;
+  code: string;
+  name: string;
+  access_status: string;
+}
+
+interface DatasetRow {
+  id: number;
+  logical_id: string;
+  name: string;
+  version: number;
+  scenario_id: number;
+}
+
 onMounted(async () => {
   await userStore.bootstrap();
   if (currentUser.value?.role !== 'SUPER_ADMIN' && currentUser.value?.scenario_code) {
     selectedScenario.value = currentUser.value.scenario_code;
   }
-  const rows = await getAlgorithms() as unknown as Array<{ id: number; code: string; display_name: string }>;
+  const rows = await getAlgorithms() as unknown as AlgorithmRow[];
   algorithms.value = rows.map((a) => ({ algorithm_id: String(a.id), display_name: a.display_name || a.code }));
-  const scenarioRows = await getScenarios() as Array<{ id: number; code: string; name: string; access_status: string }>;
+  const scenarioRows = await getScenarios() as ScenarioRow[];
   allScenarios.value = scenarioRows
     .filter((scenario) => scenario.access_status === 'ACTUAL')
     .map((scenario) => ({ id: scenario.id, code: scenario.code, name: scenario.name }));
   const datasetRows = await Promise.all(allScenarios.value.map((scenario) => getDatasets(scenario.id)));
   allDatasets.value = datasetRows.flatMap((rows) =>
-    (rows as Array<{ id: number; logical_id: string; name: string; version: number; scenario_id: number }>).map((dataset) => ({
+    (rows as DatasetRow[]).map((dataset) => ({
       ...dataset,
       scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
     }))
   );
-  await loadModels();
+  await loadModels(1);
+  ready.value = true;
 });
 </script>
 
@@ -421,23 +558,23 @@ onMounted(async () => {
         <p class="eyebrow">Model Center</p>
         <h2>模型中心</h2>
         <p class="model-center__desc">
-          {{ isAdmin ? '模型版本管理（发布 / 禁用 / 删除）' : '仅展示已发布模型及其评估指标' }}
+          {{ isManagement ? '模型版本的发布、禁用与删除' : '已发布模型及其评估指标' }}
         </p>
       </div>
     </div>
 
-    <!-- 筛选栏：管理员可按模型状态查看；普通用户只显示已发布模型 -->
+    <!-- 筛选栏：管理员可按模型状态查看；场景用户只显示已发布模型 -->
     <div class="model-center__toolbar">
       <div class="model-center__filters">
         <select v-if="isSuperAdmin" v-model="selectedScenario" class="model-filter-select">
           <option value="all">所有场景</option>
-          <option v-for="s in scenarioOptions" :key="s.code" :value="s.code">{{ s.name }}</option>
+          <option v-for="s in allScenarios" :key="s.code" :value="s.code">{{ s.name }}</option>
         </select>
         <select v-model="selectedDataset" class="model-filter-select">
           <option value="all">全部数据集</option>
           <option v-for="d in datasetOptions" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
-        <select v-if="isAdmin" v-model="selectedStatus" class="model-filter-select">
+        <select v-if="isManagement" v-model="selectedStatus" class="model-filter-select">
           <option value="all">全部状态</option>
           <option value="unpublished">未发布</option>
           <option value="published">已发布</option>
@@ -445,7 +582,7 @@ onMounted(async () => {
         </select>
       </div>
       <span class="model-center__count">
-        共 <strong>{{ filteredModels.length }}</strong> 个模型版本
+        共 <strong>{{ total }}</strong> 个模型版本
       </span>
     </div>
 
@@ -464,7 +601,7 @@ onMounted(async () => {
               <div class="model-evaluation-modal__scope">
                 <div class="model-evaluation-audience-tabs" role="tablist" aria-label="评价视角">
                   <button
-                    v-if="isAdmin"
+                    v-if="isManagement"
                     type="button"
                     role="tab"
                     class="model-evaluation-audience-tab"
@@ -479,10 +616,10 @@ onMounted(async () => {
                     type="button"
                     role="tab"
                     class="model-evaluation-audience-tab"
-                    :class="{ 'is-active': evaluationAudience === 'user' || !isAdmin }"
-                    :aria-selected="evaluationAudience === 'user' || !isAdmin"
+                    :class="{ 'is-active': evaluationAudience === 'user' || !isManagement }"
+                    :aria-selected="evaluationAudience === 'user' || !isManagement"
                     :disabled="evaluationLoading"
-                    @click="isAdmin && (evaluationAudience = 'user')"
+                    @click="isManagement && (evaluationAudience = 'user')"
                   >
                     用户视角
                   </button>
@@ -491,6 +628,15 @@ onMounted(async () => {
             </div>
             <div class="model-evaluation-modal__head-actions">
               <button
+                class="op-btn op-btn--quiet"
+                type="button"
+                :disabled="!evaluationMarkdown"
+                @click="exportModelEvaluation"
+              >
+                导出
+              </button>
+              <button
+                v-if="canGenerateEvaluation"
                 class="op-btn"
                 :disabled="evaluationLoading || (evaluationAudience === 'user' && evaluationTarget.status !== 'PUBLISHED')"
                 @click="generateModelEvaluation(Boolean(evaluationMarkdown), evaluationAudience)"
@@ -507,7 +653,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="model-evaluation-modal__body">
+          <div ref="evaluationBodyRef" class="model-evaluation-modal__body">
             <div v-if="evaluationError" class="model-evaluation-modal__notice model-evaluation-modal__notice--error">
               {{ evaluationError }}
             </div>
@@ -515,6 +661,11 @@ onMounted(async () => {
             <div v-if="evaluationLoading" class="model-evaluation-loading">
               <span class="model-evaluation-loading__dot"></span>
               <span>AI 正在生成评价，请稍候…</span>
+            </div>
+
+            <div v-if="evaluationReasoning" class="model-evaluation-reasoning">
+              <div class="model-evaluation-reasoning__label">模型推理中</div>
+              <div ref="evaluationReasoningRef" class="model-evaluation-reasoning__text">{{ evaluationReasoning }}</div>
             </div>
 
             <div v-if="evaluation?.model_attributes" class="model-evaluation-facts">
@@ -538,7 +689,7 @@ onMounted(async () => {
 
             <div v-if="evaluation?.model_attributes?.feature_profile?.length" class="model-evaluation-fields">
               <span class="model-evaluation-fields__label">场景重点字段</span>
-              <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, 8)" :key="field.name" class="model-evaluation-field">
+              <span v-for="field in evaluation.model_attributes.feature_profile.slice(0, FEATURE_PROFILE_LIMIT)" :key="field.name" class="model-evaluation-field">
                 {{ field.display_name || field.name }}
               </span>
             </div>
@@ -554,8 +705,8 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <!-- 加载状态 -->
-    <section v-if="loading" class="state-card">
+    <!-- 首屏加载：列表还是空的才用整块状态卡，翻页走列表内的局部遮罩 -->
+    <section v-if="loading && !models.length" class="state-card">
       <div class="loader"></div>
       <p>正在加载模型数据...</p>
     </section>
@@ -563,14 +714,17 @@ onMounted(async () => {
     <!-- 错误状态 -->
     <section v-else-if="error" class="state-card state-card--error">
       <p>{{ error }}</p>
-      <button class="ghost-button" @click="loadModels">重试</button>
+      <button class="ghost-button" @click="loadModels()">重试</button>
     </section>
 
     <!-- 空状态 -->
-    <section v-else-if="filteredModels.length === 0" class="state-card">
+    <section v-else-if="!models.length" class="state-card">
       <p>当前筛选范围内暂无模型版本</p>
     </section>
 
+    <!-- 对比面板与模型列表并存：勾满 2 个模型后还要能继续勾（上限 5 个）。
+         原先用 v-else-if 分支，选到第 2 个模型列表就整块消失，3~5 个模型永远选不到。 -->
+    <template v-else>
     <!-- 模型版本对比（需求 6.2 P1） -->
     <div v-if="compareList.length >= 2" class="compare-panel card">
       <div class="compare-panel__head">
@@ -618,9 +772,10 @@ onMounted(async () => {
     </div>
 
     <!-- 模型卡片列表 -->
-    <div v-else class="model-center__list">
+    <div ref="listRef" class="model-center__list">
+      <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
       <div
-        v-for="model in filteredModels"
+        v-for="model in models"
         :key="model.id"
         class="model-card card"
       >
@@ -679,52 +834,19 @@ onMounted(async () => {
         </div>
 
         <div class="model-card__metrics">
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'accuracy') }}</span>
-            <span class="model-card__metric-label">Accuracy</span>
+          <div
+            v-for="row in visibleMetricRows"
+            :key="row.key"
+            class="model-card__metric"
+            :class="{ 'model-card__metric--internal': row.adminOnly }"
+          >
+            <span class="model-card__metric-value">{{ metricValue(model, row.key) }}</span>
+            <span class="model-card__metric-label">{{ row.label }}</span>
           </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'precision') }}</span>
-            <span class="model-card__metric-label">Precision</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'recall') }}</span>
-            <span class="model-card__metric-label">Recall</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'specificity') }}</span>
-            <span class="model-card__metric-label">Specificity</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'f1') }}</span>
-            <span class="model-card__metric-label">F1</span>
-          </div>
-          <div class="model-card__metric">
-            <span class="model-card__metric-value">{{ metricValue(model, 'g_mean') }}</span>
-            <span class="model-card__metric-label">G-mean</span>
-          </div>
-          <template v-if="isAdmin">
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'risk_recall') }}</span>
-              <span class="model-card__metric-label">Risk Recall</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'risk_f1') }}</span>
-              <span class="model-card__metric-label">Risk F1</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'cv_mean') }}</span>
-              <span class="model-card__metric-label">CV Mean</span>
-            </div>
-            <div class="model-card__metric model-card__metric--internal">
-              <span class="model-card__metric-value">{{ metricValue(model, 'cv_std') }}</span>
-              <span class="model-card__metric-label">CV Std</span>
-            </div>
-          </template>
         </div>
 
         <!-- 训练参数 -->
-        <div v-if="isAdmin && Object.keys(model.training_parameters || {}).length" class="model-card__params">
+        <div v-if="isManagement && Object.keys(model.training_parameters || {}).length" class="model-card__params">
           <span
             v-for="(v, k) in model.training_parameters"
             :key="k"
@@ -735,7 +857,7 @@ onMounted(async () => {
         </div>
 
         <!-- 管理员操作区 -->
-        <div v-if="isAdmin" class="model-card__footer">
+        <div v-if="isManagement" class="model-card__footer">
           <template v-if="model.status === 'DRAFT' && canPublish(model)">
             <button class="op-btn op-btn--publish" @click="handlePublish(model)">发布模型</button>
           </template>
@@ -762,6 +884,19 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+    </template>
+
+    <div v-if="total > 0" class="model-center__pager">
+      <el-pagination
+        v-model:current-page="page"
+        layout="prev, pager, next"
+        :page-size="pageSize"
+        :total="total"
+        :disabled="loading"
+        background
+        @current-change="changePage"
+      />
+    </div>
   </div>
 </template>
 
@@ -782,11 +917,12 @@ onMounted(async () => {
 .model-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .model-center__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -803,16 +939,6 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.model-center__scenario-tag {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(83, 229, 200, 0.3);
-  background: rgba(83, 229, 200, 0.08);
-  color: #53e5c8;
-  font-size: 0.85rem;
-  white-space: nowrap;
 }
 
 .model-filter-select {
@@ -841,8 +967,59 @@ onMounted(async () => {
 }
 
 .model-center__list {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   display: grid;
   gap: 18px;
+}
+
+/* ---------------- 分页器（暗色） ----------------
+   与推理记录 / 数据集预览保持同一套分页外观；变量挂在包裹层上，
+   由 CSS 自定义属性继承进 el-pagination 内部。 */
+.model-center__pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
+  --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
+  --el-pagination-button-disabled-bg-color: rgba(8, 17, 31, 0.45);
+  --el-pagination-text-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-color: rgba(220, 234, 255, 0.75);
+  --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
+  --el-pagination-hover-color: #5ba6ff;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li),
+.model-center__pager :deep(.el-pagination.is-background .btn-prev),
+.model-center__pager :deep(.el-pagination.is-background .btn-next) {
+  border: 1px solid rgba(125, 201, 255, 0.12);
+  border-radius: 6px;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover),
+.model-center__pager :deep(.el-pagination.is-background .btn-prev:hover),
+.model-center__pager :deep(.el-pagination.is-background .btn-next:hover) {
+  background-color: rgba(20, 44, 72, 0.95) !important;
+  color: #9ad6ff !important;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #3f7fd4 !important;
+  color: #ffffff !important;
+  border-color: transparent;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .btn-prev),
+.model-center__pager :deep(.el-pagination.is-background .btn-next) {
+  background-color: rgba(12, 26, 46, 0.9) !important;
+  color: rgba(220, 234, 255, 0.7) !important;
+}
+
+.model-center__pager :deep(.el-pagination.is-background .btn-prev:disabled),
+.model-center__pager :deep(.el-pagination.is-background .btn-next:disabled) {
+  background-color: rgba(8, 17, 31, 0.45) !important;
+  color: rgba(180, 200, 235, 0.25) !important;
 }
 
 .model-card {
@@ -912,11 +1089,6 @@ onMounted(async () => {
 .model-status--PUBLISHED {
   background: rgba(83, 229, 200, 0.15);
   color: #53e5c8;
-}
-
-.model-status--OFFLINE {
-  background: rgba(220, 234, 255, 0.08);
-  color: rgba(220, 234, 255, 0.55);
 }
 
 .model-status--DISABLED {
@@ -1278,6 +1450,31 @@ onMounted(async () => {
   margin-bottom: 14px;
   color: rgba(154, 214, 255, 0.85);
   font-size: 0.84rem;
+}
+
+/* 等待期的思维链：正文一到就被清空，所以这里只求「看得出在动」，不求好读 */
+.model-evaluation-reasoning {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 22, 40, 0.5);
+}
+
+.model-evaluation-reasoning__label {
+  margin-bottom: 6px;
+  color: rgba(154, 214, 255, 0.72);
+  font-size: 0.78rem;
+}
+
+.model-evaluation-reasoning__text {
+  max-height: 200px;
+  overflow: auto;
+  color: rgba(196, 214, 240, 0.66);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .model-evaluation-loading__dot {

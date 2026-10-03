@@ -20,6 +20,8 @@ class Report(Base):
     )
     title: Mapped[str] = mapped_column(String(128), nullable=False, default="未命名报告")
     report_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 遗留列：报告不再支持「定向给某个用户」（需求 6.8.5 只区分聚合/本人数据），
+    # 现有代码一律写 None；保留列是为了与已应用的迁移保持一致，不可删除。
     target_user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("app_user.id"), nullable=True
     )
@@ -29,10 +31,16 @@ class Report(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # 结构化报告数据（统计 + 算法解释 + NL 分析），供前端渲染图表与溯源
     report_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 遗留列：只在 POST /reports 手工建报告时原样存入，全项目没有任何读写文件的代码，
+    # 也不参与导出（导出产物在内存里生成）。保留列是为了与已应用的迁移一致，不可删除。
     file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     format: Mapped[str] = mapped_column(String(16), nullable=False, default="markdown")
     scheduled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     interval_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 定时报告的下次生成时刻（UTC）。仅 scheduled=True 时有值，由后台调度器消费。
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     generator: Mapped["AppUser"] = relationship(

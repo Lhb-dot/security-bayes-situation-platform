@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_session, get_current_user
-from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.models.auth_session import AuthSession
@@ -75,7 +74,15 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     )
     db.commit()
     _set_cookies(response, session_token, csrf_token, ttl)
-    return {"code": 0, "data": {"user": _payload(user), "expires_in": ttl, "csrf_token": csrf_token}, "message": "success"}
+    return {
+        "code": 0,
+        "data": {
+            "user": _payload(user),
+            "expires_in": ttl,
+            "csrf_token": csrf_token,
+        },
+        "message": "success",
+    }
 
 
 @router.get("/me", response_model=ResponseModel, summary="获取当前登录账号")

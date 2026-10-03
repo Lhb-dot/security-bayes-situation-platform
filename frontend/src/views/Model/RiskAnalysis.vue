@@ -7,24 +7,38 @@
  *   - 场景 / 数据集 / 算法 全部从 /api/v1 数据库渲染，不再使用 mock
  *   - 训练参数表单由算法注册的 param_schema 动态生成（需求 6.6.3）
  * 需求 6.7.2：训练成功生成 DRAFT 模型版本（待管理员在模型中心审核发布）
- * 需求 6.5.2：仅管理员可训练；普通用户只能使用已发布模型执行推理
+ * 需求 6.5.2：仅管理员可训练；场景用户只能使用已发布模型执行推理
  *
- * 训练执行策略（后端 /api/v1/model-versions/train）：所有已注册算法均调用真实 Java/Weka 服务；
+ * 训练执行策略（后端 /api/v1/model-versions/train-async）：提交后立刻返回 TRAINING 版本，
+ * 真实训练由服务端 training_runner 在后台线程调 Java/Weka 执行。轮询与完成通知都放在
+ * trainingJobStore（不是本组件），所以离开页面训练照跑、完成时全局弹通知、刷新后靠
+ * resumePending 接回来 —— 页面只负责提交，**不展示训练结果**。
  * 页面参数来自 algorithm.param_schema，并随训练请求传入服务。
+ *
+ * 训练是异步长任务，页面**不显示已用秒数**：秒表跳动给不出可用信息（耗时长短由样本量决定，
+ * 不在前端掌控），提交后按钮变「训练中」，完成 / 失败由全局通知给出。store 里仍按真实时间差
+ * 维护 elapsed（顶栏任务面板在用），本页不读它。
+ *
+ * **本页没有结果面板**：训练动辄数分钟，用户基本不会守在这一页；完成后从顶栏任务铃铛
+ * （消息中心）进模型中心看结果，所以这里既不回填 evaluation_metrics、也不提供跳转按钮。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { AlgorithmParamDef, UserAccount } from '@/types/security';
+import type { AlgorithmParamDef } from '@/types/security';
 import { useUserStore } from '@/stores/userStore';
-import { getScenarios, getDatasets, getAlgorithms, trainModel } from '@/api/trainingApi';
+import { useTrainingJobStore } from '@/stores/trainingJobStore';
+import { getScenarios, getDatasets, getAlgorithms, trainModelAsync } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
 const userStore = useUserStore();
 
 // ===================== 权限 =====================
-const currentUser = ref<UserAccount | null>(null);
-const isAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'SCENARIO_ADMIN');
+// 直接读 store getter，不再在 onMounted 里拷一份 ref 快照：快照只有在
+// 「main.ts 先 await bootstrap() 再装路由」这条隐式顺序成立时才对，
+// 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成场景用户。
+const currentUser = computed(() => userStore.currentUser);
+const isManagement = computed(() => userStore.isManagement);
 
 // ===================== 场景（数据库） =====================
 interface DbScenario {
@@ -51,15 +65,12 @@ interface DbDataset {
 }
 const datasetList = ref<DbDataset[]>([]);
 const selectedDatasetId = ref<number | ''>('');
-const selectedDatasetVersion = ref<number | null>(null);
 const loadingDatasets = ref(false);
 
 // ===================== 算法（数据库 + param_schema 动态表单） =====================
 interface AlgoOption {
   id: number;
-  code: string;
   display_name: string;
-  description: string;
   available: boolean;
   params: AlgorithmParamDef[];
 }
@@ -73,8 +84,13 @@ const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
     const item = (raw ?? {}) as Record<string, unknown>;
     let type: AlgorithmParamDef['type'];
     switch (item.type) {
+      // 后端 validate_params_schema 认的数值型是 int|integer|float|number
+      // （见 backend/app/utils/common.py），此前只列了 int/float，
+      // 注册成 integer/number 的算法会被当成字符串渲染成文本框
       case 'int':
+      case 'integer':
       case 'float':
+      case 'number':
         type = 'number';
         break;
       case 'bool':
@@ -100,6 +116,7 @@ const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
           ? (item.enum_values as string[]).map((v) => ({ value: v, label: v }))
           : undefined,
       description: String(item.description ?? ''),
+      requires_numeric_features: Boolean(item.requires_numeric_features),
     };
   });
 };
@@ -107,92 +124,94 @@ const mapBackendParams = (schema: unknown[]): AlgorithmParamDef[] => {
 /** 当前算法定义 */
 const currentAlgo = computed(() => algorithms.value.find((a) => a.id === selectedAlgoId.value));
 
+/** 数据集字段结构里的数值型 type 取值（与后端 NUMERIC_FIELD_TYPES 对齐） */
+const NUMERIC_FIELD_TYPES = ['numeric', 'real', 'float', 'double', 'int', 'integer', 'number'];
+
+/** 当前所选数据集是否含数值特征：决定离散化参数是否适用 */
+const datasetHasNumericFeatures = computed(() => {
+  const ds = datasetList.value.find((d) => d.id === selectedDatasetId.value);
+  if (!ds || !Array.isArray(ds.fields_schema)) return false;
+  return ds.fields_schema.some((raw) => {
+    const f = (raw ?? {}) as Record<string, unknown>;
+    return f.role === 'feature' && NUMERIC_FIELD_TYPES.includes(String(f.type ?? '').toLowerCase());
+  });
+});
+
+/** 训练参数表单实际展示的参数：不适用于当前数据集的参数不出现 */
+const visibleParams = computed(() => {
+  const params = currentAlgo.value?.params ?? [];
+  if (datasetHasNumericFeatures.value) return params;
+  return params.filter((p) => !p.requires_numeric_features);
+});
+
 /** 训练参数表单（动态生成，默认值来自算法 param_schema，需求 6.6.3） */
 const paramForm = ref<Record<string, number | string | boolean>>({});
 
 const algoNameById = (id: number) => algorithms.value.find((a) => a.id === id)?.display_name ?? String(id);
 const scenarioNameById = (id: number) => scenarios.value.find((s) => s.id === id)?.name ?? String(id);
 
-// ===================== 训练结果 =====================
-interface TrainOutcome {
-  model_version_id: string;
-  status: string;
-  scenario_id: number;
-  dataset_id: number;
-  algorithm_id: number;
-  evaluation_metrics: Record<string, unknown>;
-  training_parameters: Record<string, unknown>;
+// ===== 训练状态（数据源在 store：离开页面后台照样跑，完成时全局通知） =====
+// 页面只取「在跑 / 不在跑」这一位信息 —— 秒数不显示（见文件头注释），所以不读 activeJob.elapsed。
+const trainingJobStore = useTrainingJobStore();
+const activeJob = computed(() => trainingJobStore.activeJob);
+const training = computed(() => Boolean(activeJob.value));
+
+/** 提交训练后返回的模型版本行（trainingApi 为 JS 模块无类型，本页只用到 id） */
+interface ModelVersionRow {
+  id: number;
 }
-const trainResult = ref<TrainOutcome | null>(null);
-const training = ref(false);
-// ===== 训练计时（需求：点击训练后实时显示已训练秒数） =====
-const trainingElapsed = ref(0);            // 已训练秒数（实时递增）
-let trainingTimer: number | null = null;   // setInterval 句柄
-
-const startTrainingTimer = () => {
-  trainingElapsed.value = 0;
-  if (trainingTimer !== null) window.clearInterval(trainingTimer);
-  trainingTimer = window.setInterval(() => {
-    trainingElapsed.value += 1;
-  }, 1000);
-};
-
-const stopTrainingTimer = () => {
-  if (trainingTimer !== null) {
-    window.clearInterval(trainingTimer);
-    trainingTimer = null;
-  }
-};
-
-const trainMetrics = computed(() => trainResult.value?.evaluation_metrics ?? {});
-const isRealTrain = computed(() => String(trainMetrics.value.source ?? '').startsWith('java_'));
-
-/** 百分比指标展示：缺字段（如 PMWNB 无 specificity/g_mean）显示 — */
-const metricText = (key: string) => {
-  const v = trainMetrics.value[key];
-  return typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—';
-};
-const trainTimeText = () => {
-  const v = trainMetrics.value.train_time_s;
-  return typeof v === 'number' ? `${v} s` : '—';
-};
-const datasetText = () => {
-  const ds = datasetList.value.find((d) => d.id === trainResult.value?.dataset_id);
-  return ds ? `${ds.name}（v${ds.version}）` : String(trainResult.value?.dataset_id);
-};
 
 // ===================== 场景切换 → 加载数据集 =====================
+/** 竞态令牌：连着切两个场景时只认最后一次请求的结果。否则先发出的旧场景请求
+ *  后返回，会把旧场景的数据集盖在新场景上，训练就成了「B 场景 + A 场景数据集」 */
+let datasetToken = 0;
+
 watch(selectedScenario, async (scenario) => {
+  const token = ++datasetToken;
   selectedDatasetId.value = '';
-  selectedDatasetVersion.value = null;
-  trainResult.value = null;
   if (!scenario) {
     datasetList.value = [];
+    // 作废在途请求（它的 finally 不会再动这个标志），避免遮罩一直转
+    loadingDatasets.value = false;
     return;
   }
   loadingDatasets.value = true;
   try {
-    datasetList.value = await getDatasets(scenario);
+    const list = await getDatasets(scenario);
+    if (token !== datasetToken) return; // 期间又切了场景，这批数据已过期
+    datasetList.value = list;
+    // 下拉框不留「请选择」占位项：有数据集就直接落到第一条，选中的那个就是真实值。
+    selectedDatasetId.value = list.length ? list[0].id : '';
   } catch {
+    if (token !== datasetToken) return;
     datasetList.value = [];
   } finally {
-    loadingDatasets.value = false;
+    // 只有最新那次请求负责收尾，过期的请求不能把加载态关掉
+    if (token === datasetToken) loadingDatasets.value = false;
   }
 });
 
-// ===================== 算法切换 → 重置参数表单 =====================
-watch(selectedAlgoId, () => {
-  trainResult.value = null;
+// ===================== 算法/数据集切换 → 重建参数表单 =====================
+const resetParamForm = () => {
   paramForm.value = {};
-  const algo = currentAlgo.value;
-  if (algo) {
-    for (const p of algo.params) {
-      paramForm.value[p.param_name] = p.default_value;
-    }
+  for (const p of visibleParams.value) {
+    paramForm.value[p.param_name] = p.default_value;
   }
-});
+};
+
+watch(selectedAlgoId, resetParamForm);
+
+// 数据集切换会改变参数的适用性（离散化参数对纯离散数据集不适用），表单需一并重建。
+watch(datasetHasNumericFeatures, resetParamForm);
 
 // ===================== 模型训练 =====================
+/** 通知文案里的任务名：场景 · 算法 */
+const trainJobTitle = computed(() => {
+  const scenario = selectedScenario.value ? scenarioNameById(Number(selectedScenario.value)) : '';
+  const algo = selectedAlgoId.value ? algoNameById(Number(selectedAlgoId.value)) : '';
+  return [scenario, algo].filter(Boolean).join(' · ') || '模型训练';
+});
+
 const handleTrain = async () => {
   if (!selectedScenario.value) {
     ElMessage.warning('请先选择业务场景');
@@ -207,38 +226,26 @@ const handleTrain = async () => {
     return;
   }
 
-  training.value = true;
-  trainResult.value = null;
-  startTrainingTimer();
   try {
-    const row = await trainModel({
+    // 只提交表单上真实展示的参数，避免把不适用于当前数据集的参数带进训练请求。
+    const training_parameters: Record<string, number | string | boolean> = {};
+    for (const p of visibleParams.value) {
+      if (p.param_name in paramForm.value) training_parameters[p.param_name] = paramForm.value[p.param_name];
+    }
+    const submitted: ModelVersionRow = await trainModelAsync({
       scenario_id: selectedScenario.value,
       dataset_id: selectedDatasetId.value,
       algorithm_id: selectedAlgoId.value,
-      training_parameters: { ...paramForm.value },
+      training_parameters,
     });
-    trainResult.value = {
-      model_version_id: String(row.id),
-      status: row.status,
-      scenario_id: row.scenario_id,
-      dataset_id: row.dataset_id,
-      algorithm_id: row.algorithm_id,
-      evaluation_metrics: row.evaluation_metrics ?? {},
-      training_parameters: row.training_parameters ?? {},
-    };
-    const done = row.status === 'DRAFT';
-    ElMessage.success(done ? '训练完成，已生成待发布模型版本，请在模型中心审核发布' : `训练状态：${row.status}`);
+    // 提交即返回：训练交给服务端后台线程，页面只留一条「训练中」，完成时全局弹通知。
+    // 用户离开本页不会中断训练，也不会在页面上留下结果 —— 结果统一在模型中心看。
+    trainingJobStore.track(submitted.id, trainJobTitle.value);
+    ElMessage.success('训练已开始，完成后会通知你');
   } catch (err) {
     const e = err as { response?: { data?: { message?: string } }; message?: string };
     ElMessage.error(e.response?.data?.message || e.message || '模型训练失败');
-  } finally {
-    stopTrainingTimer();
-    training.value = false;
   }
-};
-
-const goModelCenter = () => {
-  router.push('/models');
 };
 
 /** /api/v1/algorithms 返回的算法行（trainingApi 为 JS 模块无类型，此处显式声明） */
@@ -252,14 +259,11 @@ interface ApiAlgorithmRow {
 }
 
 onMounted(async () => {
-  currentUser.value = userStore.currentUser;
   try {
     scenarios.value = await getScenarios();
     algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
       id: a.id,
-      code: a.code,
       display_name: a.display_name,
-      description: a.description ?? '',
       available: a.status === 'AVAILABLE',
       params: mapBackendParams(a.param_schema ?? []),
     }));
@@ -273,48 +277,44 @@ onMounted(async () => {
   }
   selectedAlgoId.value = algorithms.value.find((a) => a.available)?.id ?? '';
 });
-
-// 离开页面时清理训练计时器，防止内存泄漏
-onBeforeUnmount(() => {
-  stopTrainingTimer();
-});
 </script>
 
 <template>
   <div class="risk-analysis-page">
-    <!-- ==================== 页面头部 ==================== -->
-    <div class="page-header">
-      <div>
-        <p class="eyebrow">Model Training</p>
-        <h2>模型训练</h2>
-        <p class="page-header__desc">
-          选择业务场景、数据集与算法，配置训练参数后启动训练
-        </p>
-      </div>
-    </div>
-
-    <!-- 非管理员提示 -->
-    <section v-if="!isAdmin" class="card permission-tip">
-      <div class="permission-tip__icon">🔒</div>
-      <h3>仅管理员可进行模型训练</h3>
-      <p>普通用户可在「风险研判」页面选择管理员已发布模型执行单条样本推理。</p>
-      <button class="train-btn train-btn--ghost" @click="router.push('/inference')">前往风险研判</button>
-    </section>
-
-    <div v-else class="train-flow">
-      <!-- ==================== 训练配置 ==================== -->
-      <section class="card train-config">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Configuration</p>
-            <h3>训练配置</h3>
-          </div>
+    <div class="page-inner">
+      <!-- ==================== 页面头部 ==================== -->
+      <div class="page-header">
+        <div>
+          <p class="eyebrow">Model Training</p>
+          <h2>模型训练</h2>
+          <p class="page-header__desc">基于数据集训练贝叶斯分类模型</p>
         </div>
+      </div>
 
-        <!-- 业务场景（数据库注册）：系统管理员可选全部；管理员场景已固定（账号绑定），直接选数据集 -->
-        <div v-if="currentUser?.role !== 'SCENARIO_ADMIN'" class="form-group">
-          <label class="form-label">业务场景</label>
-          <!-- 系统管理员（或用户信息未加载时兜底）：显示全部场景可选 -->
+      <!-- 兜底：/risk 的路由 meta.roles 与本文件的 isManagement 判的是同一对角色
+           （SUPER_ADMIN / SCENARIO_ADMIN），守卫会先把非管理角色挡在门外，
+           所以这块实际不会渲染。保留是因为守卫一旦放宽，直接露出训练表单会误导用户
+           —— 提交必然被后端 403 拒掉。 -->
+      <section v-if="!isManagement" class="card permission-tip">
+        <div class="permission-tip__icon">🔒</div>
+        <h3>仅管理员可进行模型训练</h3>
+        <p>场景用户可在「风险研判」页面选择管理员已发布模型执行单条样本推理。</p>
+        <button class="train-btn train-btn--ghost" @click="router.push('/inference')">前往风险研判</button>
+      </section>
+
+      <!-- ==================== 训练配置 ==================== -->
+      <section v-else class="card train-card">
+        <header class="train-card__head">
+          <p class="eyebrow">Configuration</p>
+          <h3>训练配置</h3>
+        </header>
+
+        <!-- 业务场景（数据库注册）：系统管理员可选全部；场景管理员的场景由账号绑定，不显示 -->
+        <div
+          v-if="currentUser?.role !== 'SCENARIO_ADMIN' && scenarioOptions.length"
+          class="train-section"
+        >
+          <span class="section-label">业务场景</span>
           <div class="scenario-tabs">
             <button
               v-for="sc in scenarioOptions"
@@ -326,65 +326,62 @@ onBeforeUnmount(() => {
               {{ sc.name }}
             </button>
           </div>
-          <p v-if="!scenarioOptions.length" class="form-hint form-hint--muted">
-            暂无可训练场景
-          </p>
         </div>
 
-        <!-- 数据集版本（数据库） -->
-        <div class="form-group">
-          <label class="form-label">数据集</label>
-          <select
-            v-model="selectedDatasetId"
-            class="form-select"
-            :disabled="!selectedScenario || loadingDatasets"
-            @change="selectedDatasetVersion = datasetList.find(d => d.id === selectedDatasetId)?.version ?? null"
-          >
-            <option value="" disabled>-- 请选择数据集 --</option>
-            <option
-              v-for="ds in datasetList"
-              :key="ds.id"
-              :value="ds.id"
-            >
-              {{ ds.name }}（v{{ ds.version }} · {{ ds.fields_schema?.length ?? 0 }} 字段）{{ ds.status === 'ACTIVE' ? '' : '【已停用】' }}
-            </option>
-          </select>
+        <!-- 数据集 + 算法 -->
+        <div class="train-section train-section--pair">
+          <div class="form-group">
+            <span class="section-label">数据集</span>
+            <div class="field">
+              <select
+                v-model="selectedDatasetId"
+                class="form-select"
+                :disabled="!selectedScenario || loadingDatasets"
+              >
+                <option v-if="loadingDatasets" value="" disabled>加载中…</option>
+                <option v-else-if="!datasetList.length" value="" disabled>暂无数据集</option>
+                <option v-for="ds in datasetList" :key="ds.id" :value="ds.id">
+                  {{ ds.name }}（v{{ ds.version }} · {{ ds.fields_schema?.length ?? 0 }} 字段）{{ ds.status === 'ACTIVE' ? '' : '【已停用】' }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <span class="section-label">算法</span>
+            <div class="field">
+              <select v-model="selectedAlgoId" class="form-select" :disabled="!algorithms.length">
+                <option v-if="!algorithms.length" value="" disabled>暂无算法</option>
+                <option
+                  v-for="a in algorithms"
+                  :key="a.id"
+                  :value="a.id"
+                  :disabled="!a.available"
+                >
+                  {{ a.display_name }}
+                </option>
+              </select>
+            </div>
+          </div>
         </div>
 
-        <!-- 算法（需求 6.6.1 五种算法注册） -->
-        <div class="form-group">
-          <label class="form-label">算法</label>
-          <select v-model="selectedAlgoId" class="form-select">
-            <option
-              v-for="a in algorithms"
-              :key="a.id"
-              :value="a.id"
-              :disabled="!a.available"
-            >
-              {{ a.display_name }}
-            </option>
-          </select>
-        </div>
-
-        <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成） -->
-        <div v-if="currentAlgo" class="form-group">
-          <label class="form-label">训练参数</label>
-          <div v-if="currentAlgo.params.length" class="param-list">
-            <div
-              v-for="p in currentAlgo.params"
-              :key="p.param_name"
-              class="param-item"
-            >
+        <!-- 训练参数（需求 6.6.3 由 param_schema 动态生成；无适用参数时整节隐藏） -->
+        <div v-if="visibleParams.length" class="train-section">
+          <span class="section-label">训练参数</span>
+          <div class="param-grid">
+            <div v-for="p in visibleParams" :key="p.param_name" class="param-item">
               <div class="param-item__head">
                 <span class="param-item__label">{{ p.label }}</span>
+                <span
+                  v-if="p.type === 'number' && (p.min !== undefined || p.max !== undefined)"
+                  class="param-item__range"
+                >{{ p.min }} – {{ p.max }}</span>
               </div>
-              <select
-                v-if="p.type === 'select'"
-                v-model="paramForm[p.param_name]"
-                class="form-select"
-              >
-                <option v-for="o in p.options" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
+              <div v-if="p.type === 'select'" class="field">
+                <select v-model="paramForm[p.param_name]" class="form-select">
+                  <option v-for="o in p.options" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+              </div>
               <input
                 v-else-if="p.type === 'number'"
                 v-model.number="paramForm[p.param_name]"
@@ -394,108 +391,23 @@ onBeforeUnmount(() => {
                 :max="p.max"
                 :step="p.step ?? 'any'"
               />
-              <input
-                v-else
-                v-model="paramForm[p.param_name]"
-                type="text"
-                class="form-input"
-              />
-              <p v-if="p.type === 'number' && (p.min !== undefined || p.max !== undefined)" class="param-item__range">
-                取值范围：[{{ p.min }} ~ {{ p.max }}]
-              </p>
+              <input v-else v-model="paramForm[p.param_name]" type="text" class="form-input" />
             </div>
-          </div>
-          <p v-else class="form-hint">
-            当前算法没有可调整的训练参数，将使用内置默认配置训练。
-          </p>
-        </div>
-
-        <!-- 训练按钮 -->
-        <button
-          class="train-btn"
-          :disabled="training || !selectedDatasetId || !selectedAlgoId"
-          @click="handleTrain"
-        >
-          <span v-if="training" class="btn-spinner"></span>
-          {{ training ? `训练中... ${trainingElapsed}s` : '开始训练' }}
-        </button>
-      </section>
-
-      <!-- ==================== 训练结果 ==================== -->
-      <section class="card train-result-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Training Result</p>
-            <h3>训练结果</h3>
           </div>
         </div>
 
-        <div v-if="!trainResult" class="infer-placeholder">
-          <div class="infer-placeholder__icon">{{ training ? '⏳' : '🧠' }}</div>
-          <h4>{{ training ? `训练中... 已用时 ${trainingElapsed} 秒` : '尚未开始训练' }}</h4>
-          <p>
-            {{
-              training
-              ? '正在执行模型训练，大样本数据集可能需要数十秒。'
-                : '完成左侧配置后启动训练。训练成功的模型将进入待发布状态，可在模型中心审核发布。'
-            }}
-          </p>
+        <!-- 训练按钮：异步提交，点击后只表示「已开始」，不显示已用秒数 -->
+        <div class="train-actions">
+          <button
+            class="train-btn train-btn--primary"
+            :class="{ 'is-running': training }"
+            :disabled="training || !selectedDatasetId || !selectedAlgoId"
+            @click="handleTrain"
+          >
+            <span v-if="training" class="btn-spinner"></span>
+            {{ training ? '训练中' : '开始训练' }}
+          </button>
         </div>
-
-        <template v-else>
-          <div class="result-model-id">
-            <span class="result-model-id__label">模型版本</span>
-            <span class="result-model-id__value">{{ trainResult.model_version_id }}</span>
-            <span class="result-model-id__status">待发布</span>
-          </div>
-
-          <div class="train-metrics">
-            <div class="metric-card">
-              <span class="metric-card__label">Accuracy</span>
-              <span class="metric-card__value metric-card__value--acc">{{ metricText('accuracy') }}</span>
-            </div>
-            <div class="metric-card">
-              <span class="metric-card__label">Recall</span>
-              <span class="metric-card__value metric-card__value--rec">{{ metricText('recall') }}</span>
-            </div>
-            <div class="metric-card">
-              <span class="metric-card__label">Precision</span>
-              <span class="metric-card__value metric-card__value--pre">{{ metricText('precision') }}</span>
-            </div>
-            <div class="metric-card">
-              <span class="metric-card__label">Specificity</span>
-              <span class="metric-card__value metric-card__value--spe">{{ metricText('specificity') }}</span>
-            </div>
-            <div class="metric-card">
-              <span class="metric-card__label">F1</span>
-              <span class="metric-card__value metric-card__value--f1">{{ metricText('f1') }}</span>
-            </div>
-            <div class="metric-card">
-              <span class="metric-card__label">G-mean</span>
-              <span class="metric-card__value metric-card__value--gm">{{ metricText('g_mean') }}</span>
-            </div>
-          </div>
-
-          <div class="result-detail">
-            <div class="result-detail__row">
-              <span>场景</span><strong>{{ scenarioNameById(trainResult.scenario_id) }}</strong>
-            </div>
-            <div class="result-detail__row">
-              <span>数据集</span><strong>{{ datasetText() }}</strong>
-            </div>
-            <div class="result-detail__row">
-              <span>算法</span><strong>{{ algoNameById(trainResult.algorithm_id) }}</strong>
-            </div>
-            <div class="result-detail__row">
-              <span>训练耗时</span><strong>{{ trainTimeText() }}</strong>
-            </div>
-            <div v-if="isRealTrain" class="result-detail__row">
-              <span>训练样本 / 特征 / 类别</span><strong>{{ trainMetrics.num_instances }} / {{ trainMetrics.num_attributes }} / {{ trainMetrics.num_classes }}</strong>
-            </div>
-          </div>
-
-          <button class="train-btn train-btn--ghost" @click="goModelCenter">前往模型中心发布</button>
-        </template>
       </section>
     </div>
   </div>
@@ -507,6 +419,7 @@ onBeforeUnmount(() => {
   z-index: 1;
 }
 
+/* ==================== 页头 ==================== */
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -527,17 +440,17 @@ onBeforeUnmount(() => {
   font-size: 0.95rem;
 }
 
-/* 权限提示 */
+/* ==================== 权限提示 ==================== */
 .permission-tip {
   display: grid;
   place-items: center;
-  gap: 10px;
-  padding: 60px 20px;
+  gap: 12px;
+  padding: 64px 20px;
   text-align: center;
 }
 
 .permission-tip__icon {
-  font-size: 2.6rem;
+  font-size: 2.4rem;
 }
 
 .permission-tip h3 {
@@ -548,93 +461,147 @@ onBeforeUnmount(() => {
 
 .permission-tip p {
   margin: 0;
-  color: rgba(220, 234, 255, 0.6);
+  color: rgba(200, 222, 255, 0.55);
   font-size: 0.92rem;
 }
 
-/* 两列布局 */
-.train-flow {
-  display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 24px;
-  align-items: start;
+/* 内容区容器：限宽只在超宽屏才生效（1600px）。
+   1440 及以下不触发 —— 页头与卡片都铺满，左右边距就等于 .app-shell 的 padding，
+   和其它页面完全一致（页头位置不变）；超宽屏才居中收窄，且页头与卡片始终共用同一条左边缘。 */
+.page-inner {
+  max-width: 1600px;
+  margin: 0 auto;
 }
 
-/* 表单通用 */
+/* ==================== 配置卡 ====================
+   内部按「场景 / 数据集·算法 / 参数 / 按钮」分节，节与节之间用细线分隔 ——
+   横向空间被用起来，纵向也有层次。宽度由 .page-inner 决定。 */
+.train-card {
+  display: flex;
+  flex-direction: column;
+  padding: 26px 28px;
+}
+
+.train-card__head h3 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 600;
+  color: #e8f1ff;
+}
+
+.train-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+/* 数据集 + 算法并排：两个字段同类、都短，各占一半，省掉一整行高度 */
+.train-section--pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.section-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  color: rgba(180, 200, 235, 0.6);
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-.form-label {
-  font-size: 0.85rem;
-  color: rgba(220, 234, 255, 0.7);
-}
-
-.form-hint {
-  margin: 0;
-  font-size: 0.8rem;
-  color: rgba(220, 234, 255, 0.5);
-}
-
-.form-hint--muted {
-  color: rgba(220, 234, 255, 0.35);
-  font-style: italic;
-}
-
-/* 场景选择器 */
+/* 场景 chips：每个 chip 自带圆角，不套外层胶囊 —— 场景多于一行时换行也自然 */
 .scenario-tabs {
   display: flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 999px;
-  background: rgba(8, 17, 31, 0.5);
-  border: 1px solid rgba(125, 201, 255, 0.12);
-  width: fit-content;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .scenario-tab {
-  border: 0;
-  padding: 6px 16px;
+  border: 1px solid rgba(125, 201, 255, 0.16);
+  background: rgba(10, 21, 38, 0.6);
+  color: rgba(200, 222, 255, 0.7);
+  padding: 8px 16px;
   border-radius: 999px;
-  color: rgba(220, 234, 255, 0.7);
-  background: transparent;
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .scenario-tab:hover {
+  border-color: rgba(125, 201, 255, 0.38);
   background: rgba(91, 166, 255, 0.1);
-  color: #fff;
+  color: #dceaff;
 }
 
 .scenario-tab.is-active {
-  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(125, 201, 255, 0.5);
+  background: linear-gradient(180deg, rgba(91, 166, 255, 0.26), rgba(91, 166, 255, 0.12));
   color: #fff;
   font-weight: 500;
+  box-shadow: 0 6px 18px rgba(28, 82, 160, 0.26);
 }
 
-/* 选择框 */
-.form-select {
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 201, 255, 0.2);
-  background: rgba(8, 17, 31, 0.6);
+/* 下拉 / 输入同一套 token，高度两边都显式钉住 —— 原生 select 的内容盒由 UA 决定，
+   同 padding 字号下 input 会高出 4px。箭头自绘：appearance:auto 的系统箭头
+   在深色主题下与整体不搭。 */
+.field {
+  position: relative;
+  display: block;
+}
+
+.form-select,
+.form-input {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 201, 255, 0.18);
+  background: rgba(6, 14, 26, 0.7);
   color: #e8f1ff;
   font-size: 0.9rem;
   outline: none;
-  transition: border-color 0.2s;
-  appearance: auto;
+  color-scheme: dark;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.form-select:focus {
-  border-color: rgba(91, 166, 255, 0.5);
+.form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 38px;
+  cursor: pointer;
 }
 
-.form-select:disabled {
-  opacity: 0.5;
+.field::after {
+  content: '';
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid rgba(160, 200, 255, 0.6);
+  border-bottom: 1.6px solid rgba(160, 200, 255, 0.6);
+  transform: translateY(-72%) rotate(45deg);
+  pointer-events: none;
+}
+
+.form-select:focus,
+.form-input:focus {
+  border-color: rgba(125, 201, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(91, 166, 255, 0.14);
+}
+
+.form-select:disabled,
+.form-input:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -643,217 +610,126 @@ onBeforeUnmount(() => {
   color: #e8f1ff;
 }
 
-/* 参数列表 */
-.param-list {
-  display: grid;
-  gap: 14px;
+/* 训练参数：弹性换行，每张卡 200–300px —— 参数少时不会被拉成一张巨宽的卡，
+   参数多（CAVWNB 5 项）时一行放得下，不会堆成很高的单列。 */
+.param-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .param-item {
+  flex: 1 1 200px;
+  max-width: 300px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(125, 201, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(125, 201, 255, 0.09);
 }
 
 .param-item__head {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .param-item__label {
-  font-size: 0.85rem;
-  color: #d9e8ff;
+  font-size: 0.82rem;
   font-weight: 600;
+  color: #d3e5ff;
 }
 
 .param-item__range {
-  margin: 0;
-  font-size: 0.75rem;
-  color: rgba(255, 209, 102, 0.7);
+  font-size: 0.72rem;
+  color: rgba(160, 200, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-/* 按钮 */
+/* ==================== 按钮 ==================== */
+.train-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+/* 卡片宽了之后通栏按钮会拉成一条 1200px 的横带，这里改成右对齐的定宽主按钮 */
+.train-actions .train-btn--primary {
+  width: auto;
+  min-width: 180px;
+  padding: 0 34px;
+}
+
 .train-btn {
   width: 100%;
-  padding: 12px;
-  border: none;
+  height: 44px;
+  border: 1px solid transparent;
   border-radius: 12px;
-  background: linear-gradient(135deg, #5ba6ff, #407acc);
-  color: #fff;
   font-size: 0.95rem;
   font-weight: 600;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: opacity 0.2s;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   justify-content: center;
-  margin: 6px 0;
+  gap: 8px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 
-.train-btn:hover {
-  opacity: 0.9;
+.train-btn--primary {
+  color: #04121f;
+  background: linear-gradient(135deg, #7dc9ff, #4f8ff0);
+  box-shadow: 0 12px 28px rgba(45, 108, 200, 0.26);
 }
 
-.train-btn:disabled {
-  opacity: 0.5;
+.train-btn--primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 34px rgba(45, 108, 200, 0.34);
+}
+
+/* 训练中仍保持蓝底 —— 灰化的 disabled 看着像「不可用」，而这里是「正在跑」 */
+.train-btn--primary.is-running {
+  color: #04121f;
+  background: linear-gradient(135deg, #7dc9ff, #4f8ff0);
+  box-shadow: 0 10px 24px rgba(45, 108, 200, 0.22);
+  cursor: default;
+}
+
+.train-btn--primary:disabled:not(.is-running) {
+  color: rgba(200, 222, 255, 0.38);
+  background: rgba(125, 201, 255, 0.12);
+  border-color: rgba(125, 201, 255, 0.14);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
 .train-btn--ghost {
-  background: rgba(91, 166, 255, 0.12);
-  color: #9ad6ff;
-  border: 1px solid rgba(125, 201, 255, 0.25);
   width: auto;
-  padding: 10px 22px;
+  height: 40px;
+  padding: 0 22px;
+  color: #9ad6ff;
+  background: rgba(91, 166, 255, 0.1);
+  border-color: rgba(125, 201, 255, 0.24);
 }
 
 .train-btn--ghost:hover {
-  background: rgba(91, 166, 255, 0.2);
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(125, 201, 255, 0.4);
 }
 
-/* 结果面板 */
-.result-model-id {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: rgba(255, 209, 102, 0.07);
-  border: 1px solid rgba(255, 209, 102, 0.25);
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.result-model-id__label {
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.6);
-}
-
-.result-model-id__value {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #e8f1ff;
-}
-
-.result-model-id__status {
-  margin-left: auto;
-  padding: 3px 12px;
-  border-radius: 999px;
-  background: rgba(255, 209, 102, 0.16);
-  color: #ffd166;
-  font-size: 0.8rem;
-}
-
-/* 训练结果指标 */
-.train-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.metric-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(125, 201, 255, 0.08);
-}
-
-.metric-card__label {
-  font-size: 0.72rem;
-  color: rgba(220, 234, 255, 0.5);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.metric-card__value {
-  font-size: 1.3rem;
-  font-weight: 700;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-}
-
-.metric-card__value--acc { color: #53e5c8; }
-.metric-card__value--rec { color: #9ad6ff; }
-.metric-card__value--pre { color: #ffc37d; }
-.metric-card__value--spe { color: #a78bfa; }
-.metric-card__value--f1  { color: #ff7b72; }
-.metric-card__value--gm  { color: #53e5c8; }
-
-/* 结果详情 */
-.result-detail {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.result-detail__row {
-  display: flex;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  font-size: 0.85rem;
-}
-
-.result-detail__row span {
-  color: rgba(220, 234, 255, 0.6);
-}
-
-.result-detail__row strong {
-  color: #d9e8ff;
-}
-
-.result-detail__mono {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.75rem;
-  word-break: break-all;
-  text-align: right;
-}
-
-/* 占位 */
-.infer-placeholder {
-  display: grid;
-  place-items: center;
-  gap: 12px;
-  padding: 60px 20px;
-  text-align: center;
-  color: rgba(220, 234, 255, 0.4);
-}
-
-.infer-placeholder__icon {
-  font-size: 3rem;
-}
-
-.infer-placeholder h4 {
-  margin: 0;
-  font-size: 1.1rem;
-  color: rgba(220, 234, 255, 0.6);
-}
-
-.infer-placeholder p {
-  margin: 0;
-  max-width: 360px;
-  font-size: 0.9rem;
-}
-
-/* 加载动画 */
+/* ==================== 加载动画 ==================== */
 .btn-spinner {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
+  border: 2px solid rgba(4, 18, 31, 0.25);
+  border-top-color: #04121f;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
@@ -862,13 +738,10 @@ onBeforeUnmount(() => {
   to { transform: rotate(360deg); }
 }
 
-/* 响应式 */
-@media (max-width: 1200px) {
-  .train-flow {
+/* ==================== 响应式 ==================== */
+@media (max-width: 900px) {
+  .train-section--pair {
     grid-template-columns: 1fr;
-  }
-  .train-metrics {
-    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -42,7 +44,27 @@ import weka.core.converters.ConverterUtils.DataSource;
  */
 public class PredictServer {
 
-    private static final ConcurrentHashMap<String, Classifier> MODEL_CACHE = new ConcurrentHashMap<>();
+    /** 模型缓存上限：超过后按最久未使用（LRU）淘汰。 */
+    private static final int MODEL_CACHE_CAPACITY = 4;
+
+    /**
+     * 模型缓存（LRU，上限见 MODEL_CACHE_CAPACITY）。
+     * 反序列化一个模型要读几百 MB 文件，所以缓存结果；但必须有上限，否则读过的模型
+     * 会一直常驻堆内，内存随「历史上访问过多少个模型」无限增长。
+     * 访问顺序由 LinkedHashMap(accessOrder=true) 维护，get/put 由 synchronizedMap 保证原子。
+     */
+    private static final Map<String, Classifier> MODEL_CACHE =
+            Collections.synchronizedMap(new LinkedHashMap<String, Classifier>(MODEL_CACHE_CAPACITY, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Classifier> eldest) {
+                    if (size() > MODEL_CACHE_CAPACITY) {
+                        System.out.println("[PredictServer] 缓存已满，淘汰最久未使用的模型: " + eldest.getKey());
+                        return true;
+                    }
+                    return false;
+                }
+            });
+
     private static final ConcurrentHashMap<String, Instances> HEADER_CACHE = new ConcurrentHashMap<>();
 
     public static void main(String[] args) throws Exception {
@@ -290,14 +312,25 @@ public class PredictServer {
         return Math.round(value * 10000.0) / 10000.0;
     }
 
+    /**
+     * 读取模型，命中缓存则直接返回。
+     * 刻意不用 computeIfAbsent：缓存是 synchronizedMap，其 computeIfAbsent 会在持锁期间
+     * 执行反序列化（几百 MB、数百毫秒），把其它模型的读取一起堵住。
+     * 这里拆成 get / 锁外反序列化 / put，与另两个服务的写法保持一致。
+     */
     private static Classifier loadModel(String modelPath) throws Exception {
-        return MODEL_CACHE.computeIfAbsent(modelPath, p -> {
-            try {
-                return (Classifier) SerializationHelper.read(p);
-            } catch (Exception e) {
-                throw new RuntimeException("模型加载失败: " + e.getMessage(), e);
-            }
-        });
+        Classifier cached = MODEL_CACHE.get(modelPath);
+        if (cached != null) {
+            return cached;
+        }
+        Classifier classifier;
+        try {
+            classifier = (Classifier) SerializationHelper.read(modelPath);
+        } catch (Exception e) {
+            throw new RuntimeException("模型加载失败: " + e.getMessage(), e);
+        }
+        MODEL_CACHE.put(modelPath, classifier);
+        return classifier;
     }
 
     /** 只读 ARFF 头部结构（不加载数据行），class 索引取最后一列（与训练 loadDataset 一致）。 */

@@ -34,6 +34,40 @@ export interface DatasetStat {
   record_count: number;
   risk_count: number;
   risk_rate: number;
+  /** 字段（属性）总数，= ARFF 头部字段数 */
+  attribute_count: number;
+  /** 字段名列表，顺序与 ARFF 头部一致 */
+  field_names: string[];
+  /** 可见性：platform / company / personal */
+  visibility: string;
+  /** 上传者角色，无上传者时为 null */
+  uploader_role: string | null;
+  /** 上传时间（ISO 8601 字符串），缺失时为 null */
+  uploaded_at: string | null;
+  /** 所属同源组 key（内容指纹或显式同源族 ID） */
+  source_group: string;
+  /** 文件内容指纹 "{size}-{sha1前16位}"，文件缺失时为 "missing:{logical_id}" */
+  content_fingerprint: string;
+  /** 显式登记的正类取值列表（升序），未登记则为空数组 */
+  positive_labels: string[];
+  /** 标签列实际取值，按计数降序，最多 12 个 */
+  label_values: string[];
+  /** 标签类型：二分类 / 多分类 / 数值 / 未知（纯描述性，不参与正类判定） */
+  label_kind: 'binary' | 'multiclass' | 'numeric' | 'unknown';
+  /** 是否已登记风险口径（= logical_id 在显式登记表中）；false 表示不产风险事件 */
+  caliber_registered: boolean;
+}
+
+/** 数据集建模覆盖统计（按数据集维度） */
+export interface ModelingStat {
+  /** 数据集逻辑 ID */
+  logical_id: string;
+  /** 已发布模型版本数（status === 'PUBLISHED'） */
+  published: number;
+  /** 草稿模型版本数（非 PUBLISHED） */
+  draft: number;
+  /** 模型版本总数；为 0 表示「数据白躺」 */
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +139,54 @@ export interface ProfileBase {
   risk_count: number;
   risk_rate: number;
   datasets: DatasetStat[];
-  groups: Array<{ group_id: string; datasets: string[]; record_count: number; deduplicated: boolean }>;
+  groups: Array<{
+    group_id: string;
+    datasets: string[];
+    record_count: number;
+    deduplicated: boolean;
+    /** 该同源组包含的物理文件数（成员数） */
+    file_count: number;
+    /** 该同源组的组 key（内容指纹或显式同源族 ID） */
+    fingerprint: string;
+  }>;
+  /** 每数据集的模型版本覆盖统计（无模型的数据集也在列，published/draft/total 均为 0） */
+  modeling: ModelingStat[];
+}
+
+/** 数据集风险口径可比性矩阵的一行（每数据集一行） */
+export interface CaliberRow {
+  /** 数据集逻辑 ID */
+  logical_id: string;
+  /** 数据集展示名 */
+  name: string;
+  /** 标签字段名 */
+  label_field: string;
+  /** 显式登记的正类取值列表 */
+  positive_labels: string[];
+  /** 标签列实际取值（按计数降序，最多 12 个） */
+  label_values: string[];
+  /** 标签类型：binary / multiclass / numeric / unknown */
+  label_kind: string;
+  /** 该数据集样本量 */
+  record_count: number;
+  /** 该数据集风险样本数 */
+  risk_count: number;
+  /** 该数据集风险占比 */
+  risk_rate: number;
+  /** 与场景合并风险占比的偏离倍数（risk_rate / 场景 risk_rate），场景 risk_rate 为 0 时 null */
+  deviation: number | null;
+  /** 是否已登记风险口径 */
+  registered: boolean;
+}
+
+/** 流量统计维度覆盖矩阵的一行（每维度一行） */
+export interface DimensionCoverage {
+  /** 维度中文名（如「协议」「目的端口」） */
+  dimension: string;
+  /** 维度标识 key */
+  key: string;
+  /** 覆盖该维度的数据集 logical_id 列表 */
+  datasets: string[];
 }
 
 export interface NetworkProfile extends ProfileBase {
@@ -123,6 +204,40 @@ export interface NetworkProfile extends ProfileBase {
     in_bytes_stats: NumericStats | null;
     retrans_stats: NumericStats | null;
   };
+  /** 数据集风险口径可比性矩阵（每数据集一行，顺序与 datasets 一致） */
+  caliber_matrix: CaliberRow[];
+  /** 流量统计维度覆盖矩阵（每维度一行） */
+  dimension_coverage: DimensionCoverage[];
+}
+
+/** 单数据集电参量基线与遥测统计（每数据集一行） */
+export interface TelemetryByDataset {
+  /** 数据集逻辑 ID */
+  logical_id: string;
+  /** 数据集展示名 */
+  name: string;
+  /** 该数据集样本量 */
+  record_count: number;
+  /** 各电参量的均值（key/name/unit 口径与场景画像一致），无法计算时 mean 为 null */
+  params: Array<{ key: string; name: string; unit: string; mean: number | null }>;
+  /** 工频 PowerFrequencyHz 落在 [49.8, 50.2] 区间的占比 */
+  frequency_pass_rate: number;
+  /** 遥测丢包率 Sensor_Packet_Loss_% 均值，无该字段时 null */
+  packet_loss_mean: number | null;
+  /** 全部电参量均值是否都在电力基线区间内 */
+  baseline_ok: boolean;
+  /** 越界项的中文名列表（baseline_ok 为 true 时为空） */
+  violations: string[];
+}
+
+/** 设备 / 系统覆盖矩阵的一行 */
+export interface ComponentMatrixRow {
+  /** 设备名或系统名 */
+  value: string;
+  /** 该行类型：设备 component / 系统 system */
+  kind: 'component' | 'system';
+  /** 各数据集下的计数与风险占比 */
+  counts: Array<{ logical_id: string; count: number; risk_rate: number }>;
 }
 
 export interface PowerProfile extends ProfileBase {
@@ -133,6 +248,46 @@ export interface PowerProfile extends ProfileBase {
   components: CountItem[];
   systems: CountItem[];
   device_fault_rates: Array<{ value: string; count: number; risk_count: number; risk_rate: number }>;
+  /** 跨数据集的电参量基线一致性（每数据集一行） */
+  telemetry_by_dataset: TelemetryByDataset[];
+  /** 设备 × 系统 覆盖矩阵（每设备/系统一行） */
+  component_matrix: ComponentMatrixRow[];
+}
+
+/** 同源编码族治理表的一行（每数据集一行） */
+export interface EncodingFamilyRow {
+  /** 数据集逻辑 ID */
+  logical_id: string;
+  /** 数据集展示名 */
+  name: string;
+  /** 所属同源组 key */
+  source_group: string;
+  /** 编码形态：数值连续 / 离散区间 / 配对轨迹 / 未知 */
+  encoding: 'numeric' | 'interval' | 'paired' | 'unknown';
+  /** 字段数 */
+  attribute_count: number;
+  /** 样本量 */
+  record_count: number;
+  /** 正类（碰撞）样本数 */
+  risk_count: number;
+  /** 正类数是否与同源组代表一致 */
+  collision_consistent: boolean;
+  /** 该数据集已发布模型版本数 */
+  published_model_count: number;
+}
+
+/** 同源冗余度与去重收益 */
+export interface RedundancyStat {
+  /** 物理文件总数 */
+  file_count: number;
+  /** 去重后的有效同源组数 */
+  effective_group_count: number;
+  /** 同源冗余率 = 1 - effective_group_count / file_count */
+  redundancy_rate: number;
+  /** 去重前样本量（按文件逐个求和） */
+  raw_samples: number;
+  /** 去重后样本量（同源组代表求和） */
+  deduped_samples: number;
 }
 
 export interface FlightdeckProfile extends ProfileBase {
@@ -145,6 +300,44 @@ export interface FlightdeckProfile extends ProfileBase {
   relative_angle: { mean: number | null; max: number | null };
   distance_curve: Array<{ step: number; mean: number | null }>;
   collision_comparison: Record<'collision' | 'normal', { count: number; mean_min_distance: number | null }>;
+  /** 同源编码族治理表（每数据集一行） */
+  encoding_family: EncodingFamilyRow[];
+  /** 同源冗余度与去重收益 */
+  redundancy: RedundancyStat;
+}
+
+/** 数据集角色分工矩阵的一行（每数据集一行） */
+export interface RoleRow {
+  /** 数据集逻辑 ID */
+  logical_id: string;
+  /** 数据集展示名 */
+  name: string;
+  /** 数据集角色（因子表 / 风险标签表 / 致灾因子表 / 全球编目表 / 随机基线集 / 未分类） */
+  role: string;
+  /** 字段数 */
+  attribute_count: number;
+  /** 标签字段名 */
+  label_field: string;
+  /** 标签类型：binary / multiclass / numeric / unknown */
+  label_kind: string;
+  /** 是否参与建模（该数据集存在模型版本） */
+  participates_in_training: boolean;
+  /** 是否产生风险事件（= 已登记风险口径） */
+  produces_risk_events: boolean;
+  /** 样本量 */
+  record_count: number;
+  /** 风险占比 */
+  risk_rate: number;
+}
+
+/** 地形因子跨数据集覆盖矩阵的一行（每因子一行） */
+export interface FactorCoverageRow {
+  /** 因子名 */
+  factor: string;
+  /** 含该因子字段的数据集 logical_id 列表 */
+  datasets: string[];
+  /** 各数据集中该字段的分箱（取值定义）是否一致 */
+  consistent_binning: boolean;
 }
 
 export interface GeologicalProfile extends ProfileBase {
@@ -156,6 +349,10 @@ export interface GeologicalProfile extends ProfileBase {
     size: CountItem[];
     country: CountItem[];
   };
+  /** 数据集角色分工矩阵（每数据集一行） */
+  roles: RoleRow[];
+  /** 地形因子跨数据集覆盖矩阵（每因子一行） */
+  factor_coverage: FactorCoverageRow[];
 }
 
 export type ScenarioProfile = NetworkProfile | PowerProfile | FlightdeckProfile | GeologicalProfile;

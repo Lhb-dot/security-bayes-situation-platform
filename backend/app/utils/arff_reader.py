@@ -257,3 +257,26 @@ def enrich_sample_values(existing: list[dict], new_fields: list[dict]) -> list[d
         item["sample_values"] = samples_by_name.get(f["name"], [])
         out.append(item)
     return out
+
+
+def sync_enum_values(existing: list[dict], new_fields: list[dict]) -> list[dict]:
+    """把 ARFF 解析出的枚举值域同步进已有 fields_schema（按字段名对齐）。
+
+    ARFF 是模型训练时的取值来源，值域必须以它为准 —— 例如老师给的离散化数据集
+    把枚举写成 `{'\\'(-inf-0.021606]\\'',...}`，Weka 认的值是**带引号**的
+    `'(-inf-0.021606]'`，剥掉引号入库会让样本库取值和值域永远对不上。
+    只在「库内是 enum 且 ARFF 也是 enum」时覆盖，类型冲突原样保留（由调用方提示）。
+    """
+    by_name = {f["name"]: f for f in new_fields}
+    out = []
+    for f in existing:
+        item = dict(f)
+        fresh = by_name.get(f["name"])
+        if (
+            fresh
+            and str(item.get("type", "")).lower() == "enum"
+            and str(fresh.get("type", "")).lower() == "enum"
+        ):
+            item["enum_values"] = list(fresh.get("enum_values") or [])
+        out.append(item)
+    return out

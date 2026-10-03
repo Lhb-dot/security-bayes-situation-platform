@@ -18,8 +18,13 @@ from app.models.user_ai_setting import UserAISetting
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    EVALUATION_AUDIENCE_USER,
     dataset_display_name_of,
+    evaluation_audience,
+    MODEL_STATUS_PUBLISHED,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     USER_VISIBLE_MODEL_STATUSES,
@@ -30,15 +35,20 @@ from app.services.explanation_service import (
     _openai_stream,
     get_scenario_config,
 )
+from app.utils.common import get_logger
 
 
+logger = get_logger("model_evaluation")
 MODEL_EVALUATION_VERSION = "1.0"
-ADMIN_ROLE = "management"
-USER_ROLE = "user"
+#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+MODEL_EVALUATION_PROMPT_VERSION = "1.0"
+ADMIN_ROLE = EVALUATION_AUDIENCE_MANAGEMENT
+USER_ROLE = EVALUATION_AUDIENCE_USER
 
 
 def _role_key(user: Any) -> str:
-    return ADMIN_ROLE if getattr(user, "role", None) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) else USER_ROLE
+    """三级角色 → 两级评价受众（与样本级研判共用同一套受众键）。"""
+    return evaluation_audience(getattr(user, "role", None))
 
 
 def _quality_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
@@ -49,6 +59,21 @@ def _quality_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
         "num_instances", "num_attributes", "num_classes", "class_distribution",
     )
     return {key: source.get(key) for key in keys if key in source}
+
+
+def _algorithm_reference(algorithm: Any) -> dict[str, Any]:
+    """Algorithm-owned metadata, which stays mutable after a model is trained.
+
+    The display name, description and parameter schema belong to the algorithm
+    row, not to the model version. They can legitimately be corrected later, so
+    a stored snapshot must follow the live row instead of freezing them.
+    """
+    return {
+        "code": getattr(algorithm, "code", None),
+        "name": getattr(algorithm, "display_name", None),
+        "description": getattr(algorithm, "description", None),
+        "parameter_schema": getattr(algorithm, "param_schema", None) or [],
+    }
 
 
 def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
@@ -95,12 +120,7 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
             "field_count": len(feature_profile),
             "visibility": getattr(dataset, "visibility", None),
         },
-        "algorithm": {
-            "code": getattr(algorithm, "code", None),
-            "name": getattr(algorithm, "display_name", None),
-            "description": getattr(algorithm, "description", None),
-            "parameter_schema": getattr(algorithm, "param_schema", None) or [],
-        },
+        "algorithm": _algorithm_reference(algorithm),
         "training_parameters": getattr(model, "training_parameters", None) or {},
         "quality_metrics": _quality_metrics(getattr(model, "evaluation_metrics", None)),
         "feature_profile": feature_profile,
@@ -110,6 +130,27 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
         },
         "evaluation_scope": "这是模型版本评价，不是某条样本的风险推理；评价不得改变模型预测结果。",
     }
+
+
+def refresh_model_attributes(model: ModelVersion) -> dict[str, Any]:
+    """Return the model snapshot with lifecycle and algorithm blocks re-read live.
+
+    Model-owned facts (training parameters, quality metrics, feature profile,
+    dataset binding) stay frozen at training time. Two blocks do not belong to
+    the model and must not be served stale: ``status``, and the algorithm-owned
+    reference block. Returns the identical object when nothing changed, so the
+    caller can detect a real update with an identity check.
+    """
+    current = getattr(model, "model_attributes", None)
+    if not isinstance(current, dict) or current.get("contract_version") != MODEL_EVALUATION_VERSION:
+        return build_model_attributes(model)
+    patch: dict[str, Any] = {}
+    if current.get("status") != model.status:
+        patch["status"] = model.status
+    reference = _algorithm_reference(getattr(model, "algorithm", None))
+    if current.get("algorithm") != reference:
+        patch["algorithm"] = reference
+    return {**current, **patch} if patch else current
 
 
 def public_model_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
@@ -147,6 +188,18 @@ def build_model_evaluation_facts(attributes: dict[str, Any], role: str) -> dict[
         "audience": "管理员" if role == ADMIN_ROLE else "场景普通用户",
         "model": facts,
     }
+
+
+def evaluation_is_current(artifact: dict[str, Any], attributes: dict[str, Any], role: str) -> bool:
+    """A saved evaluation is only valid for the exact facts it was written from.
+
+    Algorithm metadata can be corrected after an evaluation was generated, in
+    which case the stored markdown may state conclusions that no longer match
+    the model. Such an artifact is treated as absent so it gets regenerated.
+    """
+    if not artifact.get("markdown"):
+        return False
+    return artifact.get("facts_snapshot") == build_model_evaluation_facts(attributes, role)
 
 
 def fallback_model_evaluation(facts: dict[str, Any], role: str) -> str:
@@ -223,36 +276,50 @@ class ModelEvaluationService(ServiceBase):
             raise ServiceError(404, "模型版本不存在")
         role = getattr(current_user, "role", None)
         dataset = self.db.get(Dataset, model.dataset_id)
+        # 可见性分档：平台数据（platform）全员可见；公司数据（company）仅场景内可见。
+        shared_visibility = (
+            dataset is not None
+            and dataset.visibility
+            in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+        )
+        in_own_scenario = model.scenario_id == getattr(current_user, "scenario_id", None)
         if role == ROLE_SUPER_ADMIN:
-            allowed = model.trained_by == getattr(current_user, "id", None) and dataset is not None and dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            allowed = (
+                model.trained_by == getattr(current_user, "id", None)
+                and dataset is not None
+                and dataset.visibility == DATASET_VISIBILITY_PLATFORM
+            )
         elif role == ROLE_SCENARIO_ADMIN:
             trainer = self.db.get(AppUser, model.trained_by)
+            # 场景管理员看不到「超管训练但尚未发布」的模型（未定稿的中间产物）
+            draft_by_super_admin = (
+                trainer is not None
+                and trainer.role == ROLE_SUPER_ADMIN
+                and model.status != MODEL_STATUS_PUBLISHED
+            )
             allowed = (
-                model.scenario_id == getattr(current_user, "scenario_id", None)
-                and dataset is not None
-                and dataset.visibility in ("platform", "company")
-                and not (
-                    trainer is not None
-                    and trainer.role == ROLE_SUPER_ADMIN
-                    and model.status != "PUBLISHED"
-                )
+                in_own_scenario
+                and shared_visibility
+                and not draft_by_super_admin
             )
         else:
-            allowed = model.status in USER_VISIBLE_MODEL_STATUSES and model.scenario_id == getattr(current_user, "scenario_id", None) and dataset is not None and (dataset.visibility in ("platform", "company") or dataset.uploaded_by == getattr(current_user, "id", None))
+            allowed = (
+                model.status in USER_VISIBLE_MODEL_STATUSES
+                and in_own_scenario
+                and dataset is not None
+                and (
+                    shared_visibility
+                    or dataset.uploaded_by == getattr(current_user, "id", None)
+                )
+            )
         if not allowed:
             raise ServiceError(403, "无权限查看该模型评价")
         return model
 
     def _attributes(self, model: ModelVersion) -> dict[str, Any]:
-        current = getattr(model, "model_attributes", None)
-        if not isinstance(current, dict) or current.get("contract_version") != MODEL_EVALUATION_VERSION:
-            current = build_model_attributes(model)
-            model.model_attributes = current
-            self.commit()
-        elif current.get("status") != model.status:
-            # Status is the only lifecycle fact that changes after training.
-            # Keep the model-owned snapshot aligned without rebuilding other facts.
-            current = {**current, "status": model.status}
+        stored = getattr(model, "model_attributes", None)
+        current = refresh_model_attributes(model)
+        if current is not stored:
             model.model_attributes = current
             self.commit()
         return current
@@ -264,26 +331,48 @@ class ModelEvaluationService(ServiceBase):
         # 与 stream 共用同一套受众解析：管理员可切换查看用户视角，普通用户无法越权。
         role = self.requested_role(current_user, audience)
         artifact = (getattr(model, "ai_evaluation", None) or {}).get(role) or {}
+        # 算法描述等元数据可能在上次生成评价后被修正，此时旧正文的结论已不可信，
+        # 按「未生成」返回，由用户重新触发生成。
+        fresh = evaluation_is_current(artifact, attributes, role)
         return ok(data={
             "model_version_id": model.id,
             "status": model.status,
             "role": role,
             "model_attributes": attributes if role == ADMIN_ROLE else public_model_attributes(attributes),
             "evaluation": {
-                "available": bool(artifact.get("markdown")),
-                "source": artifact.get("source"),
-                "markdown": artifact.get("markdown"),
-                "generated_at": artifact.get("generated_at"),
+                "available": fresh,
+                "source": artifact.get("source") if fresh else None,
+                "markdown": artifact.get("markdown") if fresh else None,
+                "generated_at": artifact.get("generated_at") if fresh else None,
             },
         })
 
-    def _save(self, model: ModelVersion, role: str, markdown: str, source: str, facts: dict[str, Any]) -> None:
+    def _save(
+        self,
+        model: ModelVersion,
+        role: str,
+        markdown: str,
+        source: str,
+        facts: dict[str, Any],
+        *,
+        generated_by: int | None = None,
+        ai_model: str | None = None,
+    ) -> None:
+        """写入该受众那一格。
+
+        ``ai_evaluation`` 是整块读-改-写的 JSONB，没有行锁时两个请求同时生成
+        会互相吞掉对方的结果，所以先锁住模型版本行再回写。
+        """
+        self.db.refresh(model, with_for_update=True)
         evaluations = dict(getattr(model, "ai_evaluation", None) or {})
         evaluations[role] = {
             "available": True,
             "markdown": markdown[:100_000],
             "source": source if source in {"ai", "fallback"} else "fallback",
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_by": generated_by,
+            "model": ai_model,
+            "prompt_version": MODEL_EVALUATION_PROMPT_VERSION,
             "facts_snapshot": facts,
         }
         model.ai_evaluation = evaluations
@@ -304,16 +393,22 @@ class ModelEvaluationService(ServiceBase):
         evaluations = getattr(model, "ai_evaluation", None) or {}
         cached = evaluations.get(role) or {}
         yield "start", {"status": "开始读取模型评价"}
-        if cached.get("markdown") and not regenerate:
+        # 事实已变（如算法描述被修正）时缓存失效，走重新生成而不是下发旧结论。
+        if not regenerate and evaluation_is_current(cached, attributes, role):
             for chunk in _chunk_text(str(cached["markdown"])):
                 yield "delta", {"content": chunk}
             yield "done", {"status": "已读取已保存模型评价", "source": "cached"}
             return
         facts = build_model_evaluation_facts(attributes, role)
         setting = self.db.get(UserAISetting, current_user.id)
+        # 产物随评价一起落库，便于回溯「谁、用哪个模型、哪版提示词生成的」。
+        save_meta = {
+            "generated_by": getattr(current_user, "id", None),
+            "ai_model": getattr(setting, "model", None),
+        }
         if setting is None or not setting.enabled:
             markdown = fallback_model_evaluation(facts, role)
-            self._save(model, role, markdown, "fallback", facts)
+            self._save(model, role, markdown, "fallback", facts, **save_meta)
             yield "error", {"message": "当前账号未配置可用的 AI 服务", "reason_code": "not_configured"}
             for chunk in _chunk_text(markdown):
                 yield "delta", {"content": chunk}
@@ -321,19 +416,30 @@ class ModelEvaluationService(ServiceBase):
             return
         try:
             parts: list[str] = []
-            for chunk in _openai_stream(setting, build_model_evaluation_prompt(facts, role)):
-                parts.append(chunk)
-                yield "delta", {"content": chunk}
+            for kind, text in _openai_stream(setting, build_model_evaluation_prompt(facts, role)):
+                if kind == "reasoning":
+                    # 思维链只透传给前端做「正在生成」的反馈，不进 parts、不落库。
+                    yield "reasoning", {"content": text}
+                    continue
+                parts.append(text)
+                yield "delta", {"content": text}
             markdown = "".join(parts).strip()
             if not markdown:
                 raise RuntimeError("empty AI response")
-            self._save(model, role, markdown, "ai", facts)
+            self._save(model, role, markdown, "ai", facts, **save_meta)
             yield "done", {"status": "模型评价完成", "source": "ai"}
         except Exception as exc:  # noqa: BLE001
-            reason_code, _ = _classify_ai_error(exc)
+            reason_code, reason_message = _classify_ai_error(exc)
+            logger.warning(
+                "model evaluation fell back to rules model_version_id=%s role=%s reason=%s",
+                model_id, role, reason_code,
+            )
             markdown = fallback_model_evaluation(facts, role)
-            self._save(model, role, markdown, "fallback", facts)
-            yield "error", {"message": "AI 服务不可用，已回退规则模型评价", "reason_code": reason_code}
+            self._save(model, role, markdown, "fallback", facts, **save_meta)
+            yield "error", {
+                "message": f"AI 评价未生成完成，已回退规则模板：{reason_message}",
+                "reason_code": reason_code,
+            }
             for chunk in _chunk_text(markdown):
                 yield "delta", {"content": chunk}
             yield "done", {"status": "已使用规则模板完成模型评价", "source": "fallback"}

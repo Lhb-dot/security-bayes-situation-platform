@@ -3,8 +3,6 @@
 对应 Service：SituationSnapshotService（backend/app/services/situation_snapshot_service.py）。
 权限：个人/场景态势 → 登录用户；平台总览 → 仅 SUPER_ADMIN；快照生成 → 管理级角色。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -53,7 +51,7 @@ def get_my_situation(
 def get_global_situation(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤"),
+    scenario_id: int | None = Query(None, description="按场景过滤"),
 ):
     return unwrap(
         SituationSnapshotService(db).compute_scene_stats(current_user, scenario_id)
@@ -98,7 +96,7 @@ def create_snapshot(
 def list_snapshots(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤"),
+    scenario_id: int | None = Query(None, description="按场景过滤"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):

@@ -22,7 +22,8 @@ function Stop-All {
     # ② 按名字兜底杀（java/node/python 一个不漏）
     Get-Process -Name java,node,python -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
 
-    # ③ 按端口兜底杀：谁占着 12312/12313/12314/5173 就杀谁（最彻底）
+    # ③ 按端口兜底杀：谁占着这些端口就杀谁（最彻底）
+    #    12315-12319 是合并前各算法独占的端口，留着是为了清掉旧版本残留的进程
     foreach ($port in 12312,12313,12314,12315,12316,12317,12318,12319,5173) {
         Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique |
@@ -40,6 +41,7 @@ if (-not (Get-Command java   -EA SilentlyContinue)) { Write-Host "  [X] Java not
 if (-not (Get-Command python -EA SilentlyContinue)) { Write-Host "  [X] Python not installed" -ForegroundColor Red;   $err=$true }
 if (-not (Get-Command node   -EA SilentlyContinue)) { Write-Host "  [X] Node.js not installed" -ForegroundColor Red;  $err=$true }
 if (-not (Test-Path $jar))  { Write-Host "  [X] lib/pmwnb-service.jar missing" -ForegroundColor Red; $err=$true }
+if (-not (Test-Path "$backend\lib\nb-algorithm-service.jar")) { Write-Host "  [X] lib/nb-algorithm-service.jar missing (跑 scripts/build_nb_algorithm_jars.ps1 重建)" -ForegroundColor Red; $err=$true }
 if ($err) { Write-Host ""; Read-Host "Press Enter to exit"; exit 1 }
 
 # ---- 先清掉上次可能残留的进程（不依赖上次是否正常退出）----
@@ -123,33 +125,26 @@ while ((Get-Date) -lt $t) {
 if ($ok) { Write-Host ":12314  OK" -ForegroundColor Green }
 else     { Write-Host ":12314  FAIL" -ForegroundColor Red }
 
-# ---- Java algorithm services ----
-$algorithmServices = @(
-    @{ Name = "A2WNB"; Jar = "a2wnb-service.jar"; Port = 12315; Code = "A2WNB" },
-    @{ Name = "CAVWNB"; Jar = "cavwnb-service.jar"; Port = 12316; Code = "CAVWNB" },
-    @{ Name = "EMAWNB"; Jar = "emawnb-service.jar"; Port = 12317; Code = "EMAWNB" },
-    @{ Name = "MAWNB"; Jar = "mawnb-service.jar"; Port = 12318; Code = "MAWNB" },
-    @{ Name = "DIWNB"; Jar = "diwnb-service.jar"; Port = 12319; Code = "DIWNB" }
-)
+# ---- Java NB 算法服务（5 个算法共用同一进程）----
+# 5 个 jar 字节完全相同，原本是同一个程序起 5 次、只差第 2 个启动参数；
+# 合并后算法由请求体的 algorithm_code 指定，端口 12315-12319 → 12315。
+Write-Host "  Java NB Algo  " -NoNewline
 $algoLogDir = Join-Path $backend "storage\logs"
 New-Item -ItemType Directory -Path $algoLogDir -Force | Out-Null
-foreach ($svc in $algorithmServices) {
-    Write-Host ("  Java {0}    " -f $svc.Name) -NoNewline
-    $svcArgs = @("-jar", (Join-Path $backend ("lib\{0}" -f $svc.Jar)), [string]$svc.Port, $svc.Code)
-    $svcProc = Start-Process -FilePath $javaBin -ArgumentList $svcArgs `
-        -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $algoLogDir ("{0}.out.log" -f $svc.Name)) `
-        -RedirectStandardError (Join-Path $algoLogDir ("{0}.err.log" -f $svc.Name))
-    if ($svcProc) { $algoPids += $svcProc.Id }
-    $svcOk = $false
-    $t = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $t) {
-        try { if ((Invoke-RestMethod ("http://127.0.0.1:{0}/health" -f $svc.Port) -TimeoutSec 2).status -eq "ok") { $svcOk = $true; break } } catch {}
-        Start-Sleep 1
-    }
-    if ($svcOk) { Write-Host (":{0}  OK" -f $svc.Port) -ForegroundColor Green }
-    else { Write-Host (":{0}  FAIL" -f $svc.Port) -ForegroundColor Red }
+$nbAlgoProc = Start-Process -FilePath $javaBin `
+    -ArgumentList @("-jar", (Join-Path $backend "lib\nb-algorithm-service.jar"), "12315") `
+    -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $algoLogDir "nb-algorithm.out.log") `
+    -RedirectStandardError (Join-Path $algoLogDir "nb-algorithm.err.log")
+if ($nbAlgoProc) { $algoPids += $nbAlgoProc.Id }
+$nbOk = $false
+$t = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $t) {
+    try { if ((Invoke-RestMethod "http://127.0.0.1:12315/health" -TimeoutSec 2).status -eq "ok") { $nbOk = $true; break } } catch {}
+    Start-Sleep 1
 }
+if ($nbOk) { Write-Host ":12315  OK  A2WNB/CAVWNB/EMAWNB/MAWNB/DIWNB" -ForegroundColor Green }
+else       { Write-Host ":12315  FAIL" -ForegroundColor Red }
 
 # ---- Python FastAPI ----
 Write-Host "  FastAPI       " -NoNewline

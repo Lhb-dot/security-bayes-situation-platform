@@ -9,12 +9,12 @@ PMWNB_SERVICE_URL = os.getenv("PMWNB_SERVICE_URL", "http://127.0.0.1:12313")
 PREDICT_SERVICE_URL = os.getenv("PREDICT_SERVICE_URL", "http://127.0.0.1:12314")
 TRAIN_TIMEOUT = int(os.getenv("NB_TRAIN_TIMEOUT", "600"))
 PREDICT_TIMEOUT = int(os.getenv("NB_PREDICT_TIMEOUT", "60"))
+# 5 个 NB 算法共用同一个服务进程：jar 字节完全相同，算法由请求体的 algorithm_code 指定。
+# 单算法独立部署时可用 <算法名>_SERVICE_URL 覆盖其中一路。
+NB_ALGORITHM_SERVICE_URL = os.getenv("NB_ALGORITHM_SERVICE_URL", "http://127.0.0.1:12315")
 ALGORITHM_SERVICE_URLS = {
-    "A2WNB": os.getenv("A2WNB_SERVICE_URL", "http://127.0.0.1:12315"),
-    "CAVWNB": os.getenv("CAVWNB_SERVICE_URL", "http://127.0.0.1:12316"),
-    "EMAWNB": os.getenv("EMAWNB_SERVICE_URL", "http://127.0.0.1:12317"),
-    "MAWNB": os.getenv("MAWNB_SERVICE_URL", "http://127.0.0.1:12318"),
-    "DIWNB": os.getenv("DIWNB_SERVICE_URL", "http://127.0.0.1:12319"),
+    code: os.getenv(f"{code}_SERVICE_URL", NB_ALGORITHM_SERVICE_URL)
+    for code in ("A2WNB", "CAVWNB", "EMAWNB", "MAWNB", "DIWNB")
 }
 
 MODEL_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)

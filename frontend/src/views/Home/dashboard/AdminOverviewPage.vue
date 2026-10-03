@@ -40,7 +40,6 @@ onMounted(load);
     eyebrow="Admin · Platform"
     title="平台运行总览 · 管理端"
     subtitle="数据规模与运行态指标"
-    badge="实时数据"
     :loading="loading"
     :error="error"
     @retry="load"

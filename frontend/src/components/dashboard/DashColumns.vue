@@ -2,8 +2,11 @@
 /**
  * DashColumns —— 纵向柱状图（纯 SVG，对应 demo 内联 svg 的柱图）。
  * 用于「各场景有效样本量 / 数据集数量 / 风险占比 / 包长五段 / 两数据集规模对比」等。
+ *
+ * 坐标按容器实测宽度计算（viewBox 与渲染尺寸 1:1），
+ * 因此柱子圆角与文字不会被横向拉伸/压缩。
  */
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { colorAt, fmtInt, fmtPercent, fmtPercentValue } from './dashFormat';
 
 const props = withDefaults(
@@ -23,16 +26,41 @@ const props = withDefaults(
   { height: 200, percent: false, percentValue: false, digits: 2, color: '', axisUnit: '' },
 );
 
-const VIEW_W = 560;
 const TOP = 20;
 const BOTTOM = 26;
+/** 绘图区左右留白 */
+const PAD_X = 30;
+/** 容器宽度未知时的兜底宽度 */
+const FALLBACK_W = 560;
+
+const hostRef = ref<HTMLElement | null>(null);
+const hostWidth = ref(0);
+let observer: ResizeObserver | null = null;
+
+onMounted(() => {
+  const host = hostRef.value;
+  if (!host) return;
+  hostWidth.value = Math.round(host.getBoundingClientRect().width);
+  observer = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect.width ?? 0;
+    if (width > 0) hostWidth.value = Math.round(width);
+  });
+  observer.observe(host);
+});
+
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  observer = null;
+});
+
+const viewWidth = computed(() => (hostWidth.value > 0 ? hostWidth.value : FALLBACK_W));
 
 const plotHeight = computed(() => Math.max(props.height - TOP - BOTTOM, 40));
 
 const values = computed(() => props.items.map((item) => Number(item.value ?? item.count ?? 0)));
 const peak = computed(() => Math.max(...values.value.map((v) => (Number.isFinite(v) ? Math.abs(v) : 0)), 0));
 
-const slot = computed(() => (VIEW_W - 60) / Math.max(props.items.length, 1));
+const slot = computed(() => (viewWidth.value - PAD_X * 2) / Math.max(props.items.length, 1));
 const barWidth = computed(() => Math.min(116, slot.value * 0.72));
 
 const valueText = (value: number): string => {
@@ -47,7 +75,7 @@ const bars = computed(() =>
     const value = Math.abs(values.value[index] || 0);
     const ratio = peak.value ? value / peak.value : 0;
     const height = Math.round(Math.max(ratio * plotHeight.value, value > 0 ? 2.5 : 0) * 10) / 10;
-    const x = Math.round((30 + slot.value * index + (slot.value - barWidth.value) / 2) * 10) / 10;
+    const x = Math.round((PAD_X + slot.value * index + (slot.value - barWidth.value) / 2) * 10) / 10;
     return {
       key: String(item.label ?? index),
       label: String(item.label ?? index),
@@ -65,30 +93,31 @@ const bars = computed(() =>
 </script>
 
 <template>
-  <div v-if="!items.length" class="d-empty">暂无数据</div>
-  <svg
-    v-else
-    :viewBox="`0 0 ${VIEW_W} ${height}`"
-    width="100%"
-    :height="height"
-    preserveAspectRatio="none"
-    role="img"
-  >
-    <g v-for="bar in bars" :key="bar.key">
-      <rect :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" rx="4" :fill="bar.fill">
-        <title>{{ bar.label }}: {{ bar.text }}</title>
-      </rect>
-      <text
-        :x="bar.centerX"
-        :y="Math.max(bar.y - 5, 11)"
-        text-anchor="middle"
-        fill="#cfe3ff"
-        font-size="10"
-      >{{ bar.text }}</text>
-      <text :x="bar.centerX" :y="height - 8" text-anchor="middle" fill="rgba(220,234,255,.6)" font-size="10">
-        {{ bar.label }}
-      </text>
-    </g>
-    <text v-if="axisUnit" x="30" :y="height - 8" fill="rgba(220,234,255,.38)" font-size="9">{{ axisUnit }}</text>
-  </svg>
+  <div ref="hostRef">
+    <div v-if="!items.length" class="d-empty">暂无数据</div>
+    <svg
+      v-else
+      :viewBox="`0 0 ${viewWidth} ${height}`"
+      width="100%"
+      :height="height"
+      role="img"
+    >
+      <g v-for="bar in bars" :key="bar.key">
+        <rect :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" rx="4" :fill="bar.fill">
+          <title>{{ bar.label }}: {{ bar.text }}</title>
+        </rect>
+        <text
+          :x="bar.centerX"
+          :y="Math.max(bar.y - 5, 11)"
+          text-anchor="middle"
+          fill="#cfe3ff"
+          font-size="10"
+        >{{ bar.text }}</text>
+        <text :x="bar.centerX" :y="height - 8" text-anchor="middle" fill="rgba(220,234,255,.6)" font-size="10">
+          {{ bar.label }}
+        </text>
+      </g>
+      <text v-if="axisUnit" x="30" :y="height - 8" fill="rgba(220,234,255,.38)" font-size="9">{{ axisUnit }}</text>
+    </svg>
+  </div>
 </template>

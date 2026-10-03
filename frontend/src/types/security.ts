@@ -118,7 +118,7 @@ export interface DatasetVersion {
 }
 
 /** 模型生命周期状态（需求 6.7.2） */
-export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'OFFLINE' | 'DISABLED';
+export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'DISABLED';
 
 /** 模型评估指标（需求 6.4 统一计算规范） */
 export interface EvaluationMetrics {
@@ -165,9 +165,9 @@ export interface RiskEvent {
   risk_type: string;
   risk_level: RiskLevelUpper;
   risk_score: number;
-  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
   fault_position_x?: number | null;
-  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅航母甲板场景使用，坐标基准 1000px） */
+  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
   fault_position_y?: number | null;
   occurred_at: string;
   status: '待处置' | '处理中' | '已处置';
@@ -319,15 +319,6 @@ export interface ReportData {
     calculation_method: string | null;
     has_views: boolean;
   }>;
-  model_evaluations?: Array<{
-    model_version_id: number;
-    algorithm_code: string | null;
-    algorithm_name: string | null;
-    available: boolean;
-    source: 'ai' | 'fallback' | null;
-    markdown: string | null;
-    generated_at: string | null;
-  }>;
   feature_analysis: {
     calculation_method: string | null;
     top_features: Array<ReportFeature>;
@@ -348,6 +339,8 @@ export interface ReportData {
     status: string;
     key_features: string[];
   }>;
+  /** key_events 是概率最高的前 N 条，这里是总起数 */
+  key_events_total: number;
   data_notes: string;
   analysis_nl: string;
   guidance_nl: string;
@@ -357,23 +350,24 @@ export interface ReportData {
 export interface Report {
   report_id: string;
   title: string;
-  scenario_id: ScenarioId;
+  /** 场景编码；后端 scenario_id 为 NULL、或不在映射表内时是空串，渲染侧显示 — */
+  scenario_id: ScenarioId | '';
   scenario_name: string;
-  summary: string;
   content?: string;
   /** 结构化报告数据（自动生成报告时由后端返回，供详情页渲染图表与 NL 文本） */
   report_data?: ReportData;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
-  status: 'generating' | 'completed' | 'failed';
-  file_url?: string;
+  /** 后端 report 表没有 status 列，`_serialize` 恒下发 "completed"；前端不渲染该字段 */
+  status: 'completed';
   /** 是否定时生成 */
   scheduled?: boolean;
   /** 定时生成周期（天） */
   interval_days?: number;
-  /** 报告生成者（用户 ID），用于"普通用户只看自己生成的报告" */
+  /** 定时报告的下次生成时间（后端按北京时间下发，仅 scheduled=true 时有值） */
+  next_run_at?: string;
+  /** 报告生成者（用户 ID），用于"场景用户只看自己生成的报告" */
   generated_by?: string;
-  target_user_id?: string;
 }
 
 // ===================== v2.0 用户与权限（需求 6.5） =====================
@@ -411,6 +405,8 @@ export interface AlgorithmParamDef {
   step?: number;
   options?: { value: string; label: string }[];           // select 类型可选项
   description: string;
+  /** 仅对含数值特征的数据集生效；纯离散数据集上该参数不起作用，训练表单不展示。 */
+  requires_numeric_features?: boolean;
 }
 
 /** 算法注册定义（需求 6.6.2 算法接入规则） */
@@ -461,6 +457,14 @@ export interface ThresholdConfig {
   updated_at: string;
 }
 
+/**
+ * 后端原始形状：`scenario_id` 是场景数字主键（`risk_threshold.scenario_id` 为 BigInteger FK）。
+ * 只在 `api/riskThresholdApi.ts` 的转换函数入参处出现，页面层一律用 `ThresholdConfig`。
+ */
+export interface ApiThresholdConfig extends Omit<ThresholdConfig, 'scenario_id'> {
+  scenario_id: number;
+}
+
 /** 阈值变更记录（需求 5.4.1.5） */
 export interface ThresholdChangeLog {
   id?: number;
@@ -472,13 +476,11 @@ export interface ThresholdChangeLog {
   old_high?: number;
   new_medium?: number;
   new_high?: number;
-  // 兼容旧 mock 数据结构
-  log_id?: string;
-  changed_at?: string;
-  old_medium_threshold?: number;
-  old_high_threshold?: number;
-  new_medium_threshold?: number;
-  new_high_threshold?: number;
+}
+
+/** 后端原始形状：`scenario_id` 是场景数字主键。 */
+export interface ApiThresholdChangeLog extends Omit<ThresholdChangeLog, 'scenario_id'> {
+  scenario_id: number;
 }
 
 // ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================

@@ -3,7 +3,7 @@
  * RiskLevelTag - 统一风险等级标签组件
  *
  * 根据 risk_level 显示不同颜色和文本的标签
- * 适配网络安全/电力系统/航母甲板三大场景
+ * 适配网络安全/电力系统/舰面调度三大场景
  */
 
 defineProps<{
@@ -45,7 +45,8 @@ const levelLabel: Record<string, string> = {
   white-space: nowrap;
 }
 
-/* 尺寸变体 */
+/* 尺寸变体（height 显式钉住，避免字号 × 行高算出 33.28px 这类非整数值，
+   与同排的 32px 按钮对不齐） */
 .risk-level-small {
   min-width: 44px;
   padding: 2px 8px;
@@ -54,11 +55,12 @@ const levelLabel: Record<string, string> = {
 
 .risk-level-large {
   min-width: 80px;
-  padding: 8px 16px;
-  font-size: 0.9rem;
+  height: 32px;
+  padding: 0 16px;
+  font-size: 0.85rem;
 }
 
-/* 风险等级颜色（与全局 style.css 中的 .risk-badge 保持一致） */
+/* 风险等级配色（本组件自有；全局 style.css 的 .risk-badge 只定义尺寸、不含配色） */
 .risk-level-critical {
   background: rgba(255, 123, 114, 0.18);
   color: #ff8c84;

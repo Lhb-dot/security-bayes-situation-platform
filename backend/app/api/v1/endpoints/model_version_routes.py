@@ -4,12 +4,10 @@
 权限（需求 6.7/6.5.2）：训练/发布/下线/默认推荐 → 仅 ADMIN；查看 → 登录用户
 （普通用户仅见 PUBLISHED 模型）。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin, require_scenario_admin
+from app.api.deps import get_current_user, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -33,11 +31,14 @@ router = APIRouter(prefix="/model-versions", tags=["模型管理"])
 def list_model_versions(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤"),
-    dataset_id: Optional[int] = Query(None, description="按数据集过滤"),
-    status: Optional[str] = Query(
+    scenario_id: int | None = Query(None, description="按场景过滤"),
+    dataset_id: int | None = Query(None, description="按数据集过滤"),
+    status: str | None = Query(
         None,
-        description="按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED",
+        description=(
+            "按状态过滤（仅管理员生效）：TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED，"
+            "支持逗号分隔多值"
+        ),
     ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
@@ -127,6 +128,48 @@ def train_model_version(
             dataset_id=payload.dataset_id,
             algorithm_id=payload.algorithm_id,
             training_parameters=payload.training_parameters,
+        )
+    )
+
+
+@router.post(
+    "/train-async",
+    response_model=ResponseModel,
+    summary="提交异步训练（仅管理员）：立刻返回 TRAINING 版本，后台线程执行真实训练",
+)
+def train_model_version_async(
+    payload: ModelVersionCreate,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    return unwrap(
+        ModelVersionService(db).train_and_save_async(
+            current_user=current_user,
+            scenario_id=payload.scenario_id,
+            dataset_id=payload.dataset_id,
+            algorithm_id=payload.algorithm_id,
+            training_parameters=payload.training_parameters,
+        )
+    )
+
+
+@router.get(
+    "/training-jobs",
+    response_model=ResponseModel,
+    summary="我的在途训练任务（刷新/切页回来能恢复「训练中」的状态）",
+)
+def list_training_jobs(
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+    include_finished: bool = Query(
+        False,
+        description="是否把已完成（DRAFT/FAILED）的版本一并返回，供顶栏任务面板判定未读",
+    ),
+):
+    # 必须声明在 /{model_id} 之前：否则 "training-jobs" 会被当成 model_id 做整型校验
+    return unwrap(
+        ModelVersionService(db).list_training_jobs(
+            current_user, include_finished=include_finished
         )
     )
 

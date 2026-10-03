@@ -1,13 +1,12 @@
 <script setup lang="ts">
 /**
- * Settings — 设置（普通用户）/ 系统设置（管理员）
+ * Settings — 设置（场景用户）/ 系统设置（管理员）
  *
- * 布局对齐 settings-demo/index.html：
  * - 顶部横向页签：账号与安全 / 基础设置 / 风险阈值（按角色过滤可见性）
  * - 每个页签内容为左右两栏卡片；需要横向空间的卡片用 .settings-section--span 占满整行
  *
  * 功能口径保持不变：
- * - 普通用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + 模型解释服务）
+ * - 场景用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + AI 解释服务）
  * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）
  *
  * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
@@ -22,7 +21,7 @@ import {
   getRiskThresholds,
   updateRiskThreshold,
 } from '@/api/riskThresholdApi';
-import { useSettingsStore } from '@/stores/settingsStore';
+import { useSettingsStore, ALLOWED_INTERVALS } from '@/stores/settingsStore';
 import { useUserStore } from '@/stores/userStore';
 import { getAISetting, testAISetting, updateAISetting, type AISetting } from '@/api/aiSettingApi';
 import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } from '@/types/security';
@@ -30,17 +29,24 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } fro
 const userStore = useUserStore();
 const settingsStore = useSettingsStore();
 const router = useRouter();
-const currentUser = ref<UserAccount | null>(null);
-const isScenarioAdmin = computed(() => currentUser.value?.role === 'SCENARIO_ADMIN');
+/** 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据） */
+const currentUser = computed<UserAccount | null>(() => userStore.currentUser);
 const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
-const isAdmin = computed(() => isSuperAdmin.value || isScenarioAdmin.value);
 /** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
 const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
+
+/** 全部场景编码（与后端 seed 一致）：管理员可逐个配置，其余账号只有绑定场景 */
+const ALL_SCENARIO_IDS: ScenarioId[] = [
+  'network_security',
+  'power_system',
+  'flightdeck_operation',
+  'geological_risk',
+];
 
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
-  flightdeck_operation: '航母甲板作业',
+  flightdeck_operation: '舰面调度态势',
   geological_risk: '地质风险',
 };
 const ROLE_LABEL: Record<string, string> = {
@@ -71,7 +77,8 @@ const accountRoleBadge = computed(() => {
   const role = currentUser.value?.role;
   if (role === 'SUPER_ADMIN') return 'role-badge--super';
   if (role === 'SCENARIO_USER') return 'role-badge--user';
-  return 'role-badge--admin';
+  if (role === 'SCENARIO_ADMIN') return 'role-badge--admin';
+  return 'role-badge--unknown';
 });
 const accountScenarioLabel = computed(() => {
   if (isSuperAdmin.value) return '全部场景';
@@ -81,12 +88,15 @@ const accountScenarioLabel = computed(() => {
 const accountEnabled = computed(() => currentUser.value?.status !== 'disabled');
 
 // ===================== 修改密码（弹窗） =====================
+/** 改密表单初值：打开弹窗与提交成功后都要清空，抽成工厂避免两处字面量漂移 */
+const emptyPwdForm = () => ({ oldPassword: '', newPassword: '', confirm: '' });
+
 const pwdDialogVisible = ref(false);
-const pwdForm = ref({ oldPassword: '', newPassword: '', confirm: '' });
+const pwdForm = ref(emptyPwdForm());
 const changingPwd = ref(false);
 
 const openPwdDialog = () => {
-  pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+  pwdForm.value = emptyPwdForm();
   pwdDialogVisible.value = true;
 };
 
@@ -99,12 +109,16 @@ const changePwd = async () => {
     ElMessage.warning('两次输入的新密码不一致');
     return;
   }
+  if (pwdForm.value.newPassword.length < 6) {
+    ElMessage.warning('新密码至少 6 位');
+    return;
+  }
   changingPwd.value = true;
   try {
     await userStore.changePassword(pwdForm.value.oldPassword, pwdForm.value.newPassword);
     ElMessage.success('密码修改成功，请重新登录');
     pwdDialogVisible.value = false;
-    pwdForm.value = { oldPassword: '', newPassword: '', confirm: '' };
+    pwdForm.value = emptyPwdForm();
     await userStore.logout();
     router.push('/login');
   } catch (err) {
@@ -120,7 +134,7 @@ const savePersonalSettings = () => {
   ElMessage.success('个人设置已保存');
 };
 
-// ===================== 模型解释服务 =====================
+// ===================== AI 解释服务 =====================
 const aiSetting = ref<AISetting | null>(null);
 const savingAI = ref(false);
 const testingAI = ref(false);
@@ -235,8 +249,8 @@ const testAI = async () => {
 
 // ===================== 风险阈值 =====================
 const activeScenarios = computed<ScenarioId[]>(() =>
-  currentUser.value?.role === 'SUPER_ADMIN'
-    ? ['network_security', 'power_system', 'flightdeck_operation', 'geological_risk']
+  isSuperAdmin.value
+    ? [...ALL_SCENARIO_IDS]
     : currentUser.value?.scenario_code
       ? [currentUser.value.scenario_code]
       : []
@@ -248,12 +262,10 @@ const logsLoading = ref(false);
 const saving = ref(false);
 /** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
 const thresholdScenario = ref<ScenarioId>('network_security');
-const editing = ref<Record<string, { medium: number | null; high: number | null }>>({
-  network_security: { medium: null, high: null },
-  power_system: { medium: null, high: null },
-  flightdeck_operation: { medium: null, high: null },
-  geological_risk: { medium: null, high: null },
-});
+/** 输入框初值：全部场景留空，loadThresholds 会按账号可见场景回填后端值或兜底值 */
+const editing = ref<Record<string, { medium: number | null; high: number | null }>>(
+  Object.fromEntries(ALL_SCENARIO_IDS.map(id => [id, { medium: null, high: null }])),
+);
 /** 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。 */
 const thresholdUnconfigured = ref<Record<string, boolean>>({});
 
@@ -309,9 +321,12 @@ const toFixed2 = (v: number | string | null | undefined): string => {
   return Number.isFinite(n) ? n.toFixed(2) : '—';
 };
 
-/** 记录唯一标识：后端用自增 id，历史 mock 用 log_id，再兜底用「场景 + 时间」。 */
+/** 阈值精度：后端列为 Numeric(4,2)，故校验与提交统一按「两位小数」取整 */
+const roundTo2 = (v: number): number => Math.round(v * 100) / 100;
+
+/** 记录唯一标识：后端审计表自增主键（ThresholdAuditLog.id，非空）；类型上可选，缺失时退回「场景@时间」 */
 const logKey = (log: ThresholdChangeLog): string =>
-  String(log.id ?? log.log_id ?? `${log.scenario_id}@${log.operated_at ?? log.changed_at ?? ''}`);
+  log.id != null ? String(log.id) : `${log.scenario_id}@${log.operated_at ?? ''}`;
 
 /**
  * 首次配置的行：该场景在列表里最早的一条记录，且旧值等于新值。
@@ -323,16 +338,14 @@ const initialLogKeys = computed(() => {
   for (const log of changeLogs.value) {
     const key = String(log.scenario_id);
     const prev = earliest.get(key);
-    const at = log.operated_at ?? log.changed_at ?? '';
-    const prevAt = prev ? prev.operated_at ?? prev.changed_at ?? '' : '';
+    const at = log.operated_at ?? '';
+    const prevAt = prev?.operated_at ?? '';
     if (!prev || at < prevAt) earliest.set(key, log);
   }
   const keys = new Set<string>();
   for (const log of earliest.values()) {
-    const sameMedium =
-      Number(log.old_medium ?? log.old_medium_threshold) === Number(log.new_medium ?? log.new_medium_threshold);
-    const sameHigh =
-      Number(log.old_high ?? log.old_high_threshold) === Number(log.new_high ?? log.new_high_threshold);
+    const sameMedium = Number(log.old_medium) === Number(log.new_medium);
+    const sameHigh = Number(log.old_high) === Number(log.new_high);
     if (sameMedium && sameHigh) keys.add(logKey(log));
   }
   return keys;
@@ -342,23 +355,28 @@ const initialLogKeys = computed(() => {
  * 修改记录表的高度。
  * 直接用 vh 做 max-height 会把最后一行切掉一半（露出半截胶囊），
  * 所以按「表头 + 整数行」算一个像素值，配合下面 style 块里固定的行高。
+ * 三个常量与第二个 <style> 块里 .el-table th/td 的 40px / 42px 必须一起改。
  */
 const LOG_TABLE_HEADER_HEIGHT = 40;
 const LOG_TABLE_ROW_HEIGHT = 42;
-const logTableMaxHeight = ref('64vh');
+/** 弹窗表体占视口高度的比例（同步用于首帧默认值与 resize 计算，避免两处各写一个魔数） */
+const LOG_TABLE_VIEWPORT_RATIO = 0.64;
+/** 至少显示的行数：视口过矮时也不再压缩，靠弹窗自身滚动兜底 */
+const LOG_TABLE_MIN_ROWS = 4;
+const logTableMaxHeight = ref(`${Math.round(LOG_TABLE_VIEWPORT_RATIO * 100)}vh`);
 const syncLogTableMaxHeight = () => {
-  const available = Math.round(window.innerHeight * 0.64);
-  const rows = Math.max(4, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
+  const available = Math.round(window.innerHeight * LOG_TABLE_VIEWPORT_RATIO);
+  const rows = Math.max(LOG_TABLE_MIN_ROWS, Math.floor((available - LOG_TABLE_HEADER_HEIGHT) / LOG_TABLE_ROW_HEIGHT));
   logTableMaxHeight.value = `${LOG_TABLE_HEADER_HEIGHT + rows * LOG_TABLE_ROW_HEIGHT}px`;
 };
 
 const oldValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
   initialLogKeys.value.has(logKey(log))
     ? '—'
-    : toFixed2(kind === 'medium' ? log.old_medium ?? log.old_medium_threshold : log.old_high ?? log.old_high_threshold);
+    : toFixed2(kind === 'medium' ? log.old_medium : log.old_high);
 
 const newValueText = (log: ThresholdChangeLog, kind: 'medium' | 'high'): string =>
-  toFixed2(kind === 'medium' ? log.new_medium ?? log.new_medium_threshold : log.new_high ?? log.new_high_threshold);
+  toFixed2(kind === 'medium' ? log.new_medium : log.new_high);
 
 const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   const e = editing.value[scenarioId];
@@ -370,7 +388,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('高风险阈值必须大于中风险阈值');
     return;
   }
-  if (Math.round(e.medium * 100) / 100 !== e.medium || Math.round(e.high * 100) / 100 !== e.high) {
+  if (roundTo2(e.medium) !== e.medium || roundTo2(e.high) !== e.high) {
     ElMessage.warning('阈值最多只能有两位小数');
     return;
   }
@@ -384,8 +402,8 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
   }
   saving.value = true;
   try {
-    const medium = Math.round(e.medium * 100) / 100;
-    const high = Math.round(e.high * 100) / 100;
+    const medium = roundTo2(e.medium);
+    const high = roundTo2(e.high);
     const saved = await updateRiskThreshold(scenarioId, { medium_threshold: medium, high_threshold: high });
     editing.value[scenarioId] = {
       medium: Number(Number(saved.medium_threshold).toFixed(2)),
@@ -401,8 +419,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
 };
 
 onMounted(async () => {
-  currentUser.value = userStore.currentUser;
-  settingsStore.loadForUser(currentUser.value?.user_id);
+  settingsStore.loadForUser(userStore.currentUser?.user_id);
   syncLogTableMaxHeight();
   window.addEventListener('resize', syncLogTableMaxHeight);
   await loadAISetting();
@@ -418,10 +435,10 @@ onBeforeUnmount(() => {
   <div class="settings-page">
     <div class="settings-page__header">
       <div>
-        <p class="eyebrow">{{ isAdmin ? 'System Settings' : 'My Settings' }}</p>
-        <h2>{{ isAdmin ? '系统设置' : '设置' }}</h2>
-        <p v-if="isAdmin" class="settings-page__desc">风险阈值按当前账号和场景配置，其余为全局基础参数</p>
-        <p v-else class="settings-page__desc">选择你感兴趣的场景（可多选），其它页面将实时更新；下方为个人设置</p>
+        <p class="eyebrow">{{ isSuperAdmin ? 'System Settings' : 'My Settings' }}</p>
+        <h2>{{ isSuperAdmin ? '系统设置' : '设置' }}</h2>
+        <p v-if="isSuperAdmin" class="settings-page__desc">账号安全与风险阈值配置</p>
+        <p v-else class="settings-page__desc">关注场景与账号安全设置</p>
       </div>
     </div>
 
@@ -468,7 +485,7 @@ onBeforeUnmount(() => {
             <span>账号状态</span>
             <strong>
               <span class="status-badge" :class="accountEnabled ? 'status-badge--on' : 'status-badge--off'">
-                {{ accountEnabled ? '启用' : '停用' }}
+                {{ accountEnabled ? '启用' : '禁用' }}
               </span>
             </strong>
           </div>
@@ -497,7 +514,7 @@ onBeforeUnmount(() => {
         <div class="section-heading">
           <div>
             <p class="eyebrow">AI Provider</p>
-            <h3>模型解释服务</h3>
+            <h3>AI 解释服务</h3>
           </div>
           <span
             class="ai-badge"
@@ -547,13 +564,9 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="settings-form__item">
-            <label class="settings-form__label">刷新间隔（秒）</label>
+            <label class="settings-form__label">刷新间隔</label>
             <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
-              <option :value="10">10 秒</option>
-              <option :value="30">30 秒</option>
-              <option :value="60">60 秒</option>
-              <option :value="120">120 秒</option>
-              <option :value="300">300 秒</option>
+              <option v-for="sec in ALLOWED_INTERVALS" :key="sec" :value="sec">{{ sec }} 秒</option>
             </select>
           </div>
         </div>
@@ -590,11 +603,11 @@ onBeforeUnmount(() => {
           </div>
           <div class="threshold-bar__form">
             <div class="threshold-field">
-              <label>中风险阈值（0~1）</label>
+              <label>中风险阈值</label>
               <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
             </div>
             <div class="threshold-field">
-              <label>高风险阈值（0~1）</label>
+              <label>高风险阈值</label>
               <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
             </div>
             <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
@@ -656,11 +669,11 @@ onBeforeUnmount(() => {
         stripe
         :max-height="logTableMaxHeight"
         style="width: 100%"
-        :empty-text="logsLoading ? '加载中…' : '暂无阈值修改记录'"
+        :empty-text="logsLoading ? '加载中…' : ''"
       >
         <el-table-column label="变更时间" min-width="170" align="center">
           <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.operated_at ?? row.changed_at ?? '—' }}
+            {{ row.operated_at ?? '—' }}
           </template>
         </el-table-column>
         <el-table-column label="场景" width="130" align="center">
@@ -689,10 +702,10 @@ onBeforeUnmount(() => {
       </el-table>
     </el-dialog>
 
-    <!-- ==================== 编辑 AI 设置弹窗 ==================== -->
+    <!-- ==================== 编辑 AI 解释服务弹窗 ==================== -->
     <el-dialog
       v-model="aiDialogVisible"
-      title="编辑 AI 设置"
+      title="编辑 AI 解释服务"
       class="ai-setting-dialog"
       width="520px"
       top="10vh"
@@ -747,11 +760,12 @@ onBeforeUnmount(() => {
 .settings-page__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .settings-page__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 
@@ -879,6 +893,13 @@ onBeforeUnmount(() => {
   background: rgba(91, 166, 255, 0.16);
   color: #9ad6ff;
   border: 1px solid rgba(91, 166, 255, 0.28);
+}
+
+/* 角色未知（会话恢复中或后端下发未登记取值）时的中性色 */
+.role-badge--unknown {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.28);
 }
 
 .status-badge--on {

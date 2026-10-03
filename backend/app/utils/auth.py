@@ -15,7 +15,12 @@ def _pepper() -> bytes:
 
 
 def session_ttl() -> int:
-    value = int(os.environ.get("AUTH_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS))
+    raw = os.environ.get("AUTH_SESSION_TTL_SECONDS", str(DEFAULT_SESSION_TTL_SECONDS))
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        # 配置写错时给可读错误，而不是在登录路径上抛裸 ValueError
+        raise RuntimeError("AUTH_SESSION_TTL_SECONDS must be an integer number of seconds") from None
     if value <= 0:
         raise RuntimeError("AUTH_SESSION_TTL_SECONDS must be positive")
     return value

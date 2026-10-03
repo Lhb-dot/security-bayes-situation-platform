@@ -63,12 +63,16 @@ export const logout = async (): Promise<void> => {
   }
 };
 
-export const getUserList = async (params?: {
+export interface UserListParams {
   page?: number;
   page_size?: number;
   keyword?: string;
   role?: UserRole;
-}): Promise<UserListResult> => {
+  status?: 'ENABLED' | 'DISABLED';
+  scenario_id?: number;
+}
+
+export const getUserList = async (params?: UserListParams): Promise<UserListResult> => {
   const data = await unwrapData(
     await request.get('/api/v1/users', {
       params: {
@@ -76,6 +80,8 @@ export const getUserList = async (params?: {
         page_size: params?.page_size ?? 200,
         keyword: params?.keyword,
         role: params?.role,
+        status: params?.status,
+        scenario_id: params?.scenario_id,
       },
     }),
   );

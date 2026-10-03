@@ -40,10 +40,11 @@ from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
     DATASET_POSITIVE_LABELS,
     dataset_display_name_of,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    EVALUATION_AUDIENCE_USER,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_DISABLED,
     MODEL_STATUS_FAILED,
-    MODEL_STATUS_OFFLINE,
     MODEL_STATUS_PUBLISHED,
     MODEL_STATUS_TRAINING,
     MODEL_STATUS_TRANSITIONS,
@@ -52,12 +53,27 @@ from app.services.constants import (
     USER_VISIBLE_MODEL_STATUSES,
 )
 from app.utils.common import (
+    dataset_has_numeric_features,
     get_logger,
     paginate,
     row_to_dict,
+    strip_inapplicable_params,
     validate_params_schema,
 )
 logger = get_logger("model_version")
+
+# list_training_jobs(include_finished=True) 最多回多少个已完成的版本。
+# 顶栏任务面板只需要「最近完成且没看过的」，取最近 20 个足够，也避免把几十个
+# 模型的完整 evaluation_metrics 一次性拉下来。
+TRAINING_FINISHED_LIMIT = 20
+
+#: 普通用户可见的质量指标键；管理级角色返回全量 evaluation_metrics。
+#: 与 model_evaluation_service.public_model_attributes 保持同一口径。
+_PUBLIC_METRIC_KEYS = ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+
+#: 管理级角色（场景管理员）可训练 / 可查看的数据集可见性口径：平台 + 公司。
+#: 与 inference_record_service._INFERABLE_VISIBILITIES 同一口径。
+_MANAGED_VISIBILITIES = (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
 
 
 class ModelVersionService(ServiceBase):
@@ -81,7 +97,7 @@ class ModelVersionService(ServiceBase):
         elif role == ROLE_SCENARIO_ADMIN:
             if (
                 model.scenario_id != getattr(current_user, "scenario_id", None)
-                or dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                or dataset.visibility not in _MANAGED_VISIBILITIES
             ):
                 raise ServiceError(403, "无权限操作")
         else:
@@ -104,15 +120,19 @@ class ModelVersionService(ServiceBase):
             exclude=("model_attributes", "ai_evaluation", "training_parameters"),
         )
         from app.services.model_evaluation_service import (
-            build_model_attributes,
+            evaluation_is_current,
             public_model_attributes,
+            refresh_model_attributes,
         )
 
-        attributes = model.model_attributes or build_model_attributes(model)
+        # 状态与算法元数据不随模型冻结，读取时对齐实时值，避免下发陈旧描述。
+        attributes = refresh_model_attributes(model)
+        quality_metrics = attributes.get("quality_metrics") or {}
         is_management = getattr(current_user, "role", None) in (
             ROLE_SUPER_ADMIN,
             ROLE_SCENARIO_ADMIN,
         )
+        role_key = EVALUATION_AUDIENCE_MANAGEMENT if is_management else EVALUATION_AUDIENCE_USER
         data.update(
             {
                 "model_version_id": model.id,
@@ -138,15 +158,17 @@ class ModelVersionService(ServiceBase):
                     "dataset": attributes.get("dataset"),
                     "algorithm": (attributes.get("algorithm") or {}) | {"parameter_schema": None},
                     "quality_metrics": {
-                        key: (attributes.get("quality_metrics") or {}).get(key)
-                        for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
-                        if key in (attributes.get("quality_metrics") or {})
+                        key: quality_metrics.get(key)
+                        for key in _PUBLIC_METRIC_KEYS
+                        if key in quality_metrics
                     },
                     "feature_profile": [],
                     "evaluation_scope": attributes.get("evaluation_scope"),
                 },
-                "model_evaluation_available": bool(
-                    ((model.ai_evaluation or {}).get("management" if is_management else "user") or {}).get("markdown")
+                "model_evaluation_available": evaluation_is_current(
+                    (model.ai_evaluation or {}).get(role_key) or {},
+                    attributes,
+                    role_key,
                 ),
             }
         )
@@ -159,7 +181,7 @@ class ModelVersionService(ServiceBase):
             return metrics
         return {
             key: metrics[key]
-            for key in ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
+            for key in _PUBLIC_METRIC_KEYS
             if key in metrics
         }
 
@@ -206,11 +228,8 @@ class ModelVersionService(ServiceBase):
         for field in schema:
             expect = field.get("type")
             got = actual_type.get(field["name"])
-            if expect == "numeric" and got != "numeric":
-                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
-            if expect == "enum" and got != "enum":
-                return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
-            if expect == "string" and got != "string":
+            # 注册类型只可能取 numeric / enum / string（见 build_fields_schema）
+            if expect in ("numeric", "enum", "string") and got != expect:
                 return f"字段 {field['name']} 类型不匹配：注册为 {expect}，实际为 {got}，禁止训练"
         return None
 
@@ -263,7 +282,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(403, "系统管理员只能使用平台数据集训练模型")
         if (
             getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
-            and dataset.visibility not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+            and dataset.visibility not in _MANAGED_VISIBILITIES
         ):
             raise ServiceError(403, "场景管理员不能使用个人数据集训练模型")
 
@@ -275,10 +294,17 @@ class ModelVersionService(ServiceBase):
 
         if not isinstance(training_parameters, dict):
             raise ServiceError(400, "training_parameters 必须是 JSON 对象")
+        # 离散化参数只在数据集含数值特征时生效（见 param_schema 的
+        # requires_numeric_features）。数据集本身已是离散属性时先剔除，避免把未生效的
+        # 参数写进模型记录，也避免必填校验误拦。
+        has_numeric = dataset_has_numeric_features(dataset.fields_schema)
+        training_parameters = strip_inapplicable_params(
+            algorithm.param_schema, training_parameters, has_numeric
+        )
         # 按算法注册的 param_schema 校验必填项、类型与范围（需求 6.6.3.2/6.6.3.4）。
         # 对 param_schema 为空的算法（如 PMWNB 不暴露超参数，使用服务内置默认参数），
         # 允许传入空对象 {}。
-        err = validate_params_schema(algorithm.param_schema, training_parameters)
+        err = validate_params_schema(algorithm.param_schema, training_parameters, has_numeric)
         if err:
             raise ServiceError(400, err)
 
@@ -333,17 +359,118 @@ class ModelVersionService(ServiceBase):
             metrics = self._run_algorithm_training(
                 model, algorithm.code, model.training_parameters or {}
             )
-            self._transition(model, MODEL_STATUS_DRAFT)
-            model.evaluation_metrics = metrics
-            from app.services.model_evaluation_service import build_model_attributes
-            model.model_attributes = build_model_attributes(model)
-            self.commit()
+            self.apply_training_success(model, metrics)
         except Exception as exc:
-            self._transition(model, MODEL_STATUS_FAILED)
-            model.evaluation_metrics = {"source": "error", "error": str(exc)}
-            self.commit()
+            self.apply_training_failure(model, exc)
             raise ServiceError(500, f"训练失败：{exc}")
         return ok(data=self._to_dict(model), message="训练完成，模型进入 DRAFT 待发布")
+
+    @service_call
+    def train_and_save_async(
+        self,
+        current_user,
+        scenario_id: int,
+        dataset_id: int,
+        algorithm_id: int,
+        training_parameters: Dict[str, Any],
+    ):
+        """提交异步训练：立刻返回 TRAINING 版本，真实训练在后台线程执行。
+
+        校验、建版本、参数落库与 train_and_save 完全一致（复用 create()），区别只是
+        不在请求线程里等训练结束 —— 同步路径最长会占住一个线程池 worker 到
+        TRAIN_TIMEOUT（600 秒）。
+
+        训练结果由 training_runner 写回：成功 → DRAFT，失败 → FAILED，字段与同步路径相同。
+        """
+        from app.services.training_runner import is_running, submit
+
+        if not is_running():
+            raise ServiceError(503, "训练执行器未启用，无法提交后台训练")
+
+        created = self.create(
+            current_user, scenario_id, dataset_id, algorithm_id, training_parameters
+        )
+        if created.code != 0:
+            # create() 内部把 ServiceError 转成了 fail 响应（不抛出），此处重新抛出让本
+            # 方法的 @service_call 按统一语义返回 HTTP 状态码。
+            raise ServiceError(created.code, created.message)
+
+        if not submit(created.data["id"]):
+            raise ServiceError(503, "训练执行器未启用，无法提交后台训练")
+        return ok(data=created.data, message="训练已提交，模型版本进入 TRAINING")
+
+    @service_call
+    def list_training_jobs(self, current_user, include_finished: bool = False):
+        """当前用户「还在训练中」的模型版本（刷新 / 切页回来能恢复在途状态）。
+
+        训练没有独立任务表：在途状态本身就落在 model_version.status 上，所以
+        「在途任务」= 本人创建且仍为 TRAINING 的版本。这比进程内任务表更结实 ——
+        服务重启后照样查得到，超时未完成的由 training_runner.reap_stale 兜底。
+
+        include_finished=True 时把 DRAFT / FAILED 也一并返回，供顶栏任务面板判定
+        「已完成但没看过」。**model_version 没有完成时间字段**（只有 trained_at，
+        那是提交时刻），所以前端按 id 集合差判定 —— id 自增，没见过的就是没看过，
+        不需要任何时间戳。条数上限 TRAINING_FINISHED_LIMIT，避免把几十个模型的
+        完整指标都拉下来。
+        """
+        self.require_login(current_user)
+        statuses = (
+            (MODEL_STATUS_TRAINING, MODEL_STATUS_DRAFT, MODEL_STATUS_FAILED)
+            if include_finished
+            else (MODEL_STATUS_TRAINING,)
+        )
+        statement = (
+            select(ModelVersion)
+            .where(
+                ModelVersion.trained_by == current_user.id,
+                ModelVersion.status.in_(statuses),
+            )
+            .order_by(ModelVersion.trained_at.desc())
+        )
+        if include_finished:
+            statement = statement.limit(TRAINING_FINISHED_LIMIT)
+        models = self.db.scalars(statement).all()
+        return ok(data=[self._to_dict(model, current_user) for model in models])
+
+    def apply_training_success(self, model: ModelVersion, metrics: dict) -> None:
+        """训练成功落库：TRAINING → DRAFT，写评估指标与模型属性。"""
+        self._transition(model, MODEL_STATUS_DRAFT)
+        model.evaluation_metrics = metrics
+        from app.services.model_evaluation_service import build_model_attributes
+        model.model_attributes = build_model_attributes(model)
+        self.commit()
+
+    def apply_training_failure(self, model: ModelVersion, error: object) -> None:
+        """训练失败落库：TRAINING → FAILED。
+
+        ``source="error"`` 是前端 isRealTrain（读 metrics.source 是否以 java_ 开头）的
+        判定依据，必须保留；现成的 fail_training() 只写 error 字段，不能直接复用。
+        """
+        self._transition(model, MODEL_STATUS_FAILED)
+        model.evaluation_metrics = {"source": "error", "error": str(error)}
+        self.commit()
+
+    def run_training_job(self, model: ModelVersion) -> None:
+        """后台执行一次训练并流转状态（供 training_runner 调用）。
+
+        与 train_and_save 的区别只有一处：不向调用方抛异常 —— 后台线程没有请求上下文，
+        失败只能体现在模型状态上（TRAINING → FAILED）。
+        """
+        model_id = model.id
+        try:
+            algorithm = self.db.get(Algorithm, model.algorithm_id)
+            metrics = self._run_algorithm_training(
+                model, algorithm.code, model.training_parameters or {}
+            )
+            self.apply_training_success(model, metrics)
+        except Exception as exc:  # noqa: BLE001 - 失败必须落到模型状态上
+            try:
+                self.apply_training_failure(model, exc)
+            except Exception:  # noqa: BLE001 - 状态已无法流转（例如被人工改过）
+                self.db.rollback()
+                logger.exception("训练任务 #%s 标记失败时再次异常", model_id)
+            else:
+                logger.warning("训练任务 #%s 失败：%s", model_id, exc)
 
     def _run_algorithm_training(
         self, model: ModelVersion, algorithm_code: str, training_parameters: dict
@@ -500,15 +627,19 @@ class ModelVersionService(ServiceBase):
         - 最外层管理员：仅自己训练的模型，可按状态过滤。
         - 场景管理员：自己场景内全部模型版本（管理视角）。
         - 场景用户：仅已发布模型（需求 6.7.3.4 / 6.7.5.1）。
+
+        status 支持逗号分隔的多值（如 "TRAINING,FAILED,DRAFT"），供前端「未发布」
+        这类跨状态筛选用；仅管理员生效。
         """
         self.require_login(current_user)
+        statuses = [s.strip() for s in (status or "").split(",") if s.strip()]
         role = getattr(current_user, "role", None)
         stmt = select(ModelVersion)
         if role == ROLE_SUPER_ADMIN:
             # 系统管理员不能看到场景管理员训练的模型，避免跨管理员泄露模型资产。
             stmt = stmt.where(ModelVersion.trained_by == current_user.id)
-            if status:
-                stmt = stmt.where(ModelVersion.status == status)
+            if statuses:
+                stmt = stmt.where(ModelVersion.status.in_(statuses))
         elif role == ROLE_SCENARIO_ADMIN:
             # 普通管理员可以管理本场景模型，但不展示系统管理员尚未发布的模型。
             # 系统管理员已发布的模型仍可作为本场景可用模型展示。
@@ -517,15 +648,15 @@ class ModelVersionService(ServiceBase):
                 .join(AppUser, AppUser.id == ModelVersion.trained_by)
                 .where(
                     ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                    Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
+                    Dataset.visibility.in_(_MANAGED_VISIBILITIES),
                     or_(
                         AppUser.role != ROLE_SUPER_ADMIN,
                         ModelVersion.status == MODEL_STATUS_PUBLISHED,
                     ),
                 )
             )
-            if status:
-                stmt = stmt.where(ModelVersion.status == status)
+            if statuses:
+                stmt = stmt.where(ModelVersion.status.in_(statuses))
         else:
             # 场景用户：仅看到绑定场景中可用的已发布模型；个人模型仅限本人。
             stmt = stmt.join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
@@ -536,7 +667,7 @@ class ModelVersionService(ServiceBase):
                 return ok(data={"items": [], "total": 0, "page": page, "page_size": page_size})
             stmt = stmt.where(
                 ModelVersion.scenario_id == bound,
-                Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY))
+                Dataset.visibility.in_(_MANAGED_VISIBILITIES)
                 | ((Dataset.visibility == DATASET_VISIBILITY_PERSONAL) & (Dataset.uploaded_by == current_user.id)),
             )
         if scenario_id is not None:
@@ -566,7 +697,7 @@ class ModelVersionService(ServiceBase):
             return (
                 model.scenario_id == getattr(current_user, "scenario_id", None)
                 and bool(dataset)
-                and dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                and dataset.visibility in _MANAGED_VISIBILITIES
                 and not (
                     trainer
                     and trainer.role == ROLE_SUPER_ADMIN
@@ -579,7 +710,7 @@ class ModelVersionService(ServiceBase):
             and model.status in USER_VISIBLE_MODEL_STATUSES
             and bool(dataset)
             and (
-                dataset.visibility in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                dataset.visibility in _MANAGED_VISIBILITIES
                 or (
                     dataset.visibility == DATASET_VISIBILITY_PERSONAL
                     and dataset.uploaded_by == getattr(current_user, "id", None)

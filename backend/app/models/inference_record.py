@@ -27,6 +27,8 @@ class InferenceRecord(Base):
     input_features: Mapped[dict] = mapped_column(JSONB, nullable=False)
     prediction_label: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_score: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
+    # 仅当预测为风险时由事件回填（数据库设计文档 v2 2.6）。对外展示一律按查看者阈值重算
+    # （唯一入口 services/risk_view.level_of），本列只作创建者视角留痕，不要直接拿它判级。
     risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # 算法可解释性信息（多视图预测 / 视图权重 / 特征加权条件概率），由 Java /predict 返回
     explain_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -28,7 +28,7 @@ defineProps<{ data: NetworkWorkspace }>();
     ]"
   />
 
-  <DashCard title="近 7 天推理活动趋势（条）" source="近 7 天推理活动趋势。实线=推理总数，虚线=判为风险数。">
+  <DashCard title="近 10 天推理活动趋势（条）" source="近 10 天推理活动趋势。实线=推理总数，虚线=判为风险数。">
     <DashLine
       :points="data.activity_trend.map((item) => ({ label: fmtDate(item.date), value: item.total, value2: item.risk }))"
       name="推理总数"

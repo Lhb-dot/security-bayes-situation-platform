@@ -6,26 +6,29 @@
  */
 import type { Router } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';
-import type { UserAccount } from '@/types/security';
+import type { UserAccount, UserRole } from '@/types/security';
 
 // vue-router RouteMeta 类型增强：路由 meta 字段（Task 005）
 declare module 'vue-router' {
   interface RouteMeta {
     /** 页面标题 */
     title: string;
-    /** 仅管理员可访问（USER 访问时重定向） */
-    requiresAdmin?: boolean;
-    /** 普通用户隐藏导航入口（仅入口隐藏，不影响路由注册） */
-    hiddenForUser?: boolean;
+    /**
+     * 可访问角色白名单。缺省 = 所有已登录角色可进。
+     * 此前只有一个布尔 requiresAdmin，表达不了「管理级两个角色可进」这种规则，
+     * 导致 /risk 的注释与守卫行为不一致（导航隐藏但手敲地址能进）。
+     */
+    roles?: UserRole[];
   }
 }
 
-/** 角色落地页：
+/**
+ * 角色落地页（全站唯一实现，router/index.ts 的 `/` redirect 复用同一函数）：
  * - SUPER_ADMIN（最外层）→ 全局总览 /overview（监控所有场景）
  * - SCENARIO_ADMIN（场景管理员）→ 自己场景详情页
  * - SCENARIO_USER（场景用户）→ 自己场景详情页
  */
-const roleLanding = (user: UserAccount): string => {
+export const roleLanding = (user: UserAccount): string => {
   if (user.role === 'SUPER_ADMIN') return '/overview';
   const bound = user.scenario_code;
   if (bound) return `/scenarios/${bound}/dashboard`;
@@ -46,8 +49,10 @@ export const setupRouterGuards = (router: Router): void => {
     if (!user) {
       return { path: '/login', query: { redirect: to.fullPath } };
     }
-    // 最外层管理员专属页面（/overview、/risk）：非 SUPER_ADMIN → 落地页
-    if (to.meta.requiresAdmin && user.role !== 'SUPER_ADMIN') {
+    // 角色白名单：声明了 meta.roles 的路由只有名单内角色可进（越权 → 落地页）。
+    // 与 App.vue 的 navItems.roles 同源，避免「导航里隐藏了、手敲地址却进得去」。
+    const allowed = to.meta.roles;
+    if (allowed && !allowed.includes(user.role)) {
       return roleLanding(user);
     }
     // 根路径按角色落地（路由配置中也有函数式 redirect，此处双保险）

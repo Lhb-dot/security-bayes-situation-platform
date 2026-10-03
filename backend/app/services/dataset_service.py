@@ -33,7 +33,6 @@ from app.services.constants import (
     DATASET_LOGICAL_ID_MAX_LEN,
     DATASET_STATUS_ACTIVE,
     DATASET_STATUS_INACTIVE,
-    DATASET_STATUSES,
     DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
@@ -47,7 +46,6 @@ from app.utils.common import (
     get_logger,
     paginate,
     row_to_dict,
-    validate_enum,
     validate_fields_schema,
     validate_length,
     validate_required,
@@ -236,6 +234,28 @@ class DatasetService(ServiceBase):
     # ------------------------------------------------------------------
     # 上传 / 版本 / 停用 / 删除（新建数据集允许场景用户上传 personal 数据）
     # ------------------------------------------------------------------
+    def _authorize_upload(self, current_user, scenario_id: int) -> Optional[str]:
+        """上传授权（create 与 upload_from_file 共用），返回调用者角色。
+
+        - SCENARIO_ADMIN：仅自己绑定的场景（require_scenario_admin_of）；
+        - SCENARIO_USER：仅自己绑定的场景，且只能上传 personal 数据；
+        - SUPER_ADMIN：平台方，任意场景（仍要求账号可用）。
+
+        抽成独立方法是为了让 upload_from_file 能在**落盘之前**完成鉴权
+        （原先先写文件再进 create 校验，未授权请求也会在 data/<场景编码>/ 下留下文件）。
+        """
+        role = getattr(current_user, "role", None)
+        if role == ROLE_SCENARIO_ADMIN:
+            self.require_scenario_admin_of(current_user, scenario_id)
+        elif role == ROLE_SCENARIO_USER:
+            if scenario_id != getattr(current_user, "scenario_id", None):
+                raise ServiceError(403, "场景用户只能在自己场景上传个人数据")
+        elif role == ROLE_SUPER_ADMIN:
+            self.require_login(current_user)
+        else:
+            raise ServiceError(403, "无权限操作")
+        return role
+
     @service_call
     def create(
         self,
@@ -254,16 +274,7 @@ class DatasetService(ServiceBase):
         - SCENARIO_ADMIN：公司数据 company（默认），仅自己场景
         - SCENARIO_USER：个人数据 personal（强制），仅自己场景
         """
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SCENARIO_ADMIN:
-            self.require_scenario_admin_of(current_user, scenario_id)
-        elif role == ROLE_SCENARIO_USER:
-            if scenario_id != getattr(current_user, "scenario_id", None):
-                raise ServiceError(403, "场景用户只能在自己场景上传个人数据")
-        elif role == ROLE_SUPER_ADMIN:
-            self.require_login(current_user)
-        else:
-            raise ServiceError(403, "无权限操作")
+        role = self._authorize_upload(current_user, scenario_id)
 
         # 可见性：默认按角色；SCENARIO_USER 强制 personal；显式传入则校验合法
         if role == ROLE_SCENARIO_USER:
@@ -343,6 +354,9 @@ class DatasetService(ServiceBase):
             read_dataset_file,
         )
 
+        # 先鉴权再落盘：未授权请求不得在 data/<场景编码>/ 下留下任何文件
+        self._authorize_upload(current_user, scenario_id)
+
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "场景不存在")
@@ -352,7 +366,11 @@ class DatasetService(ServiceBase):
             raise ServiceError(400, "仅支持 .arff / .csv 格式文件")
 
         # 保存到 data/<场景编码>/<安全文件名>（basename 防路径穿越）
-        safe_name = os.path.basename(filename)
+        # 统一按 "/" 切分再取 basename：Windows 上 os.path.basename 会把 "\" 当分隔符，
+        # 而 Linux 上不会——不统一就会让同名文件在两个平台上落到不同文件名。
+        safe_name = os.path.basename(filename.replace("\\", "/")).strip()
+        if not safe_name or safe_name in (".", ".."):
+            raise ServiceError(400, "文件名不合法")
         target_dir = PROJECT_ROOT / "data" / scenario.code / safe_name
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         with open(target_dir, "wb") as f:
@@ -536,27 +554,16 @@ class DatasetService(ServiceBase):
             raise ServiceError(403, "无权限操作")
 
         from app.services.training_executor import resolve_dataset_path
-        from app.utils.arff_reader import read_arff
+        from app.utils.dataset_file_reader import read_sample_rows
 
         path = resolve_dataset_path(dataset.file_path)
         if not os.path.exists(path):
             raise ServiceError(404, f"数据集文件不存在: {path}")
 
         offset = (page - 1) * page_size
-        raw_fields, rows = read_arff(path, max_rows=offset + page_size)  # 读够本页即可
-        # 优先使用登记的 fields_schema 字段名，保证与字段预览/标签列一致
-        if dataset.fields_schema:
-            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(dataset.fields_schema)]
-        else:
-            names = [str(f.get("name", f"col_{i}")) for i, f in enumerate(raw_fields)]
-        page_rows = []
-        for row in rows[offset: offset + page_size]:
-            page_rows.append(
-                {
-                    names[i]: (row[i] if i < len(row) else None)
-                    for i in range(len(names))
-                }
-            )
+        # 取样本的统一入口（ARFF / CSV 都支持，字段名取登记的 fields_schema），
+        # 与「批量研判」共用，避免两处口径漂移。
+        page_rows = read_sample_rows(path, dataset.fields_schema, offset, page_size)
         total = self._count_records(dataset.file_path)
         return ok(
             data={

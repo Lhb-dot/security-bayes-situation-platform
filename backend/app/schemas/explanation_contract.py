@@ -12,8 +12,24 @@ from typing import Any
 
 
 EXPLANATION_CONTRACT_VERSION = "1.0"
+
+#: 全部解释受众，按可见度从低到高：普通用户 → 场景管理员 → 超级管理员。
 EXPLANATION_ROLES = ("SCENARIO_USER", "SCENARIO_ADMIN", "SUPER_ADMIN")
+#: 可见算法内部明细（algorithm_details / model_quality / input_snapshot）的受众，
+#: 由 EXPLANATION_ROLES 派生，避免同一集合出现第二份字面量。
+#: （services/constants.py 里另有一份基于角色常量的 ADMIN_ROLES，值相同。）
+ADMIN_ROLES = EXPLANATION_ROLES[1:]
 ALGORITHM_CODES = ("A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB")
+
+#: 解释流的 SSE 事件词表（权威定义）。前端逐字对应
+#: ``frontend/src/api/inferenceRecordApi.ts`` 的 event 分支。
+#: 正常序列：start → reasoning* → delta* → done；error **不是终态**，
+#: 只表示「已降级/失败」通知 —— 一次流是否成功、正文出自谁，一律由 done 决定。
+EXPLANATION_EVENTS = ("start", "reasoning", "delta", "error", "done")
+#: done 事件 ``source`` 的取值域：ai = 大模型正文，fallback = 平台规则模板。
+EXPLANATION_SOURCES = ("ai", "fallback")
+#: 普通用户可见的 top_features 条数上限。
+PUBLIC_TOP_FEATURE_LIMIT = 3
 
 PUBLIC_FIELDS = (
     "contract_version",
@@ -137,6 +153,57 @@ def merge_algorithm_specific(algorithm_code: str, value: Any) -> dict[str, Any]:
     return template
 
 
+def _normalize_model_quality(value: Any) -> dict[str, Any]:
+    """固定 model_quality 的形状，并为每个指标附上 available/reason 标记。"""
+    quality = _dict(value)
+    risk_recall = finite_number(quality.get("risk_recall"))
+    risk_f1 = finite_number(quality.get("risk_f1"))
+    cv_mean = finite_number(quality.get("cv_mean"))
+    cv_std = finite_number(quality.get("cv_std"))
+    return {
+        "risk_recall": risk_recall,
+        "risk_f1": risk_f1,
+        "cv_mean": cv_mean,
+        "cv_std": cv_std,
+        "availability": {
+            "risk_recall": availability(risk_recall is not None, "训练结果未提供风险召回率"),
+            "risk_f1": availability(risk_f1 is not None, "训练结果未提供风险 F1"),
+            "cv_mean": availability(cv_mean is not None, "训练结果未提供交叉验证均值"),
+            "cv_std": availability(cv_std is not None, "训练结果未提供交叉验证标准差"),
+        },
+    }
+
+
+def _normalize_algorithm_details(value: Any) -> dict[str, Any]:
+    """固定 algorithm_details 的形状，并把 specific 合进算法模板。
+
+    注意：``value`` 是 dict 时**就地**补字段（调用方传入的是 deepcopy 出来的副本）。
+    """
+    details = _dict(value)
+    algorithm_code = str(details.get("algorithm_code", "")).upper()
+    details["algorithm_code"] = algorithm_code
+    details["class_distribution"] = _list(details.get("class_distribution"))
+    details["views"] = _list(details.get("views"))
+    details["view_weights"] = _list(details.get("view_weights"))
+    details["feature_evidence"] = _list(details.get("feature_evidence"))
+    details["specific"] = merge_algorithm_specific(algorithm_code, details.get("specific"))
+    marker = details.get("availability")
+    if isinstance(marker, dict):
+        details["availability"] = availability(
+            bool(marker.get("available", True)), marker.get("reason")
+        )
+    else:
+        details["availability"] = availability(
+            bool(
+                details["views"]
+                or details["feature_evidence"]
+                or details["specific"].get("available", True)
+            ),
+            None,
+        )
+    return details
+
+
 def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
     """Fill and type-normalize the v1 envelope without changing model facts."""
     data = deepcopy(explanation or {})
@@ -168,51 +235,8 @@ def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
         "configuration_available": bool(scenario.get("configuration_available", True)),
     }
 
-    quality = _dict(data.get("model_quality"))
-    data["model_quality"] = {
-        "risk_recall": finite_number(quality.get("risk_recall")),
-        "risk_f1": finite_number(quality.get("risk_f1")),
-        "cv_mean": finite_number(quality.get("cv_mean")),
-        "cv_std": finite_number(quality.get("cv_std")),
-        "availability": {
-            "risk_recall": availability(
-                finite_number(quality.get("risk_recall")) is not None,
-                "训练结果未提供风险召回率",
-            ),
-            "risk_f1": availability(
-                finite_number(quality.get("risk_f1")) is not None,
-                "训练结果未提供风险 F1",
-            ),
-            "cv_mean": availability(
-                finite_number(quality.get("cv_mean")) is not None,
-                "训练结果未提供交叉验证均值",
-            ),
-            "cv_std": availability(
-                finite_number(quality.get("cv_std")) is not None,
-                "训练结果未提供交叉验证标准差",
-            ),
-        },
-    }
-
-    details = _dict(data.get("algorithm_details"))
-    algorithm_code = str(details.get("algorithm_code", "")).upper()
-    specific = details.get("specific")
-    specific = merge_algorithm_specific(algorithm_code, specific)
-    details["algorithm_code"] = algorithm_code
-    details["class_distribution"] = _list(details.get("class_distribution"))
-    details["views"] = _list(details.get("views"))
-    details["view_weights"] = _list(details.get("view_weights"))
-    details["feature_evidence"] = _list(details.get("feature_evidence"))
-    details["specific"] = specific
-    details["availability"] = availability(
-        bool(details.get("availability", {}).get("available", True))
-        if isinstance(details.get("availability"), dict)
-        else bool(details["views"] or details["feature_evidence"] or specific.get("available", True)),
-        (details.get("availability") or {}).get("reason")
-        if isinstance(details.get("availability"), dict)
-        else None,
-    )
-    data["algorithm_details"] = details
+    data["model_quality"] = _normalize_model_quality(data.get("model_quality"))
+    data["algorithm_details"] = _normalize_algorithm_details(data.get("algorithm_details"))
     data["input_snapshot"] = _dict(data.get("input_snapshot"))
 
     # Keep legacy prediction fields when present, while making their types stable.
@@ -228,11 +252,11 @@ def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
 def explanation_for_role(explanation: dict[str, Any] | None, role: str | None) -> dict[str, Any]:
     """Apply the three-level explanation visibility policy."""
     data = normalize_explanation(explanation)
-    if role in ("SUPER_ADMIN", "SCENARIO_ADMIN"):
+    if role in ADMIN_ROLES:
         return data
 
     public = {key: data[key] for key in PUBLIC_FIELDS}
-    public["top_features"] = data["top_features"][:3]
+    public["top_features"] = data["top_features"][:PUBLIC_TOP_FEATURE_LIMIT]
     public["scenario"] = {
         key: data["scenario"].get(key)
         for key in (

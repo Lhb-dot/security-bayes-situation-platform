@@ -2,7 +2,7 @@
  * inferenceRecordApi.ts — 推理记录接口（与后端 /api/v1/inference-records 对齐）
  *
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.8）：执行推理需登录；普通用户仅本人记录。
+ * 权限边界由后端强制（需求 6.8）：执行推理需登录；场景用户仅本人记录。
  */
 import request, { getCsrfToken, unwrapData } from '@/utils/request';
 import type { InferenceExplain, InferenceRecord } from '@/types/security';
@@ -51,22 +51,124 @@ export const predictInference = async (params: {
 }): Promise<PredictResult> =>
   unwrapData(await request.post('/api/v1/inference-records/predict', params));
 
-/** 推理记录列表（GET /inference-records，普通用户仅本人；管理员全部） */
-export const getInferenceRecordList = async (params?: {
+/** 批量研判单条结果 */
+export interface BatchInferenceItem {
+  index: number;
+  prediction_label: string | null;
+  risk_probability: number | null;
+  risk_level: string | null;
+  is_risk_event: boolean;
+  inference_record_id: number | null;
+  risk_event_id: number | null;
+  /** 该条失败时的原因；成功为 null */
+  error: string | null;
+}
+
+/** 批量研判汇总结果 */
+export interface BatchInferenceResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  risk_count: number;
+  items: BatchInferenceItem[];
+  /** 样本数超过单批上限、只跑了前面部分时为 true */
+  truncated?: boolean;
+}
+
+/** 异步批量研判的提交回执 */
+export interface BatchJobReceipt {
+  job_id: string;
+  total: number;
+  /** 样本数超过单批上限、只提交了前面部分时为 true */
+  truncated: boolean;
+}
+
+/** 批量研判任务视图（GET /inference-records/predict-batch/jobs/{job_id}） */
+export interface BatchInferenceJob extends BatchJobReceipt {
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  model_version_id: number;
+  /** 已处理条数，用于进度展示 */
+  processed: number;
+  succeeded: number;
+  failed: number;
+  risk_count: number;
+  /** 任务整体失败时的原因 */
+  error: string | null;
+  /** 提交时刻（epoch 秒，服务端时钟）：已用时间以它为准，刷新后不会归零 */
+  created_at: number;
+  /** 终态（DONE / FAILED）才有；进行中为 null */
+  result: BatchInferenceResult | null;
+}
+
+/**
+ * 提交异步批量研判（POST /inference-records/predict-batch/jobs）
+ *
+ * 200 条最坏可跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒）：同步接口会让
+ * 前端拿到 504 而实际已经落了一半记录，所以页面走这条。模型可见性、数据集区间、
+ * CSV 列名等校验仍在提交时同步完成，错误照常抛出。
+ */
+export const submitInferenceBatch = async (params: {
+  model_version_id: string | number;
+  source: 'dataset' | 'samples';
+  offset?: number;
+  limit?: number;
+  samples?: Record<string, unknown>[];
+}): Promise<BatchJobReceipt> =>
+  unwrapData(await request.post('/api/v1/inference-records/predict-batch/jobs', params));
+
+/** 上传 CSV 并提交异步批量研判 */
+export const submitInferenceBatchUpload = async (params: {
+  model_version_id: string | number;
+  file: File;
+}): Promise<BatchJobReceipt> => {
+  const form = new FormData();
+  form.append('file', params.file);
+  form.append('model_version_id', String(params.model_version_id));
+  return unwrapData(
+    await request.post('/api/v1/inference-records/predict-batch/upload/jobs', form),
+  );
+};
+
+/** 批量研判任务进度（GET /inference-records/predict-batch/jobs/{job_id}，仅发起人） */
+export const getInferenceBatchJob = async (jobId: string): Promise<BatchInferenceJob> =>
+  unwrapData(await request.get(`/api/v1/inference-records/predict-batch/jobs/${jobId}`));
+
+/** 任务列表视图：不含逐条明细（明细走单任务接口，列表只用来恢复在途状态） */
+export type BatchInferenceJobBrief = Omit<BatchInferenceJob, 'result'>;
+
+/**
+ * 我的批量研判任务列表（GET /inference-records/predict-batch/jobs，最近的在前）
+ *
+ * 任务表在服务端进程内，前端这侧的状态随页面一起没；刷新 / 切页回来靠它把未完成的
+ * 任务接回轮询，这样离开研判页也不会丢掉完成通知。
+ */
+export const listInferenceBatchJobs = async (): Promise<BatchInferenceJobBrief[]> =>
+  unwrapData(await request.get('/api/v1/inference-records/predict-batch/jobs'));
+
+/** 推理记录分页列表（带 total，供列表页翻页用） */
+export interface InferenceRecordPage {
+  items: InferenceRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const getInferenceRecordPage = async (params?: {
   model_version_id?: string;
   page?: number;
   page_size?: number;
-}): Promise<InferenceRecord[]> => {
+}): Promise<InferenceRecordPage> => {
   const data = await unwrapData(await request.get('/api/v1/inference-records', { params }));
-  return data.items ?? [];
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    page: data.page ?? 1,
+    page_size: data.page_size ?? 10,
+  };
 };
 
-/** 推理记录详情（GET /inference-records/{record_id}，普通用户仅本人） */
-export const getInferenceRecordDetail = async (recordId: string): Promise<InferenceRecord> =>
-  unwrapData(await request.get(`/api/v1/inference-records/${recordId}`));
-
 /** 推理记录可解释性信息（GET /inference-records/{record_id}/explain） */
-export const getInferenceExplain = async (recordId: string): Promise<{
+export const getInferenceExplain = async (recordId: string | number): Promise<{
   inference_record_id: number;
   prediction_label: string;
   explain_data: InferenceExplain;
@@ -81,7 +183,7 @@ export const getInferenceExplain = async (recordId: string): Promise<{
   unwrapData(await request.get(`/api/v1/inference-records/${recordId}/explain`));
 
 /** 删除推理记录（DELETE /inference-records/{record_id}，仅管理员；已生成风险事件的记录后端禁止删除） */
-export const removeInferenceRecord = async (recordId: string): Promise<void> =>
+export const removeInferenceRecord = async (recordId: string | number): Promise<void> =>
   unwrapData(await request.delete(`/api/v1/inference-records/${recordId}`));
 
 export interface ExplanationStreamParams {
@@ -96,6 +198,8 @@ export interface ExplanationStreamParams {
 
 export interface ExplanationStreamHandlers {
   onStart?: (data: Record<string, unknown>) => void;
+  /** 推理型模型的思维链，只用于展示「确实在生成」，不落库 */
+  onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (message: string) => void;
   onDone?: (data: Record<string, unknown>) => void;
@@ -136,6 +240,7 @@ export const streamInferenceExplanation = async (
       let data: Record<string, unknown> = {};
       try { data = JSON.parse(dataText) as Record<string, unknown>; } catch { continue; }
       if (event === 'start') handlers.onStart?.(data);
+      else if (event === 'reasoning' && typeof data.content === 'string') handlers.onReasoning?.(data.content);
       else if (event === 'delta' && typeof data.content === 'string') handlers.onDelta?.(data.content);
       else if (event === 'error') handlers.onError?.(String(data.message ?? 'AI 分析失败'));
       else if (event === 'done') handlers.onDone?.(data);

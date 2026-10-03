@@ -163,14 +163,15 @@ onMounted(async () => {
 }
 
 .dataset-detail__head h2 {
-  margin: 8px 0 6px;
-  font-size: 1.45rem;
+  margin: 0 0 8px;
+  font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .dataset-detail__meta {
   margin: 0;
-  font-size: 0.88rem;
-  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.95rem;
+  color: rgba(180, 200, 235, 0.55);
 }
 
 .dataset-detail__actions {

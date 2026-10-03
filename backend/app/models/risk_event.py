@@ -50,11 +50,20 @@ class RiskEvent(Base):
     # 航母甲板热点图坐标（V3.0 §7.4.1）：仅航母场景非空，其余场景为 NULL
     fault_position_x: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
     fault_position_y: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
+    # 「隐藏」（软删除，2026-09-27）：需求 5.2 禁止真删（历史事件必须保持可追溯），
+    # 所以列表用可见性开关 —— hidden_at 非空 = 已隐藏。数据、处置记录、统计口径都不受影响。
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("app_user.id"), nullable=True
+    )
 
     inference_record: Mapped["InferenceRecord"] = relationship(
         back_populates="risk_event"
     )
-    creator: Mapped["AppUser"] = relationship(back_populates="risk_events")
+    # 必须显式指定外键：本表有 created_by_user_id / hidden_by_user_id 两条指向 app_user
+    creator: Mapped["AppUser"] = relationship(
+        back_populates="risk_events", foreign_keys=[created_by_user_id]
+    )
     scenario: Mapped["Scenario"] = relationship(back_populates="risk_events")
     dataset: Mapped["Dataset"] = relationship(back_populates="risk_events")
     algorithm: Mapped["Algorithm"] = relationship(back_populates="risk_events")

@@ -1,6 +1,4 @@
 """按账号绑定的风险阈值与变更记录路由。"""
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -28,7 +26,7 @@ def list_risk_thresholds(
 def list_threshold_audit_logs(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None),
+    scenario_id: int | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(200, ge=1, le=200),
 ):

@@ -2,7 +2,7 @@
 /**
  * ScenarioCenter - 场景中心页面
  *
- * 展示全部业务场景卡片：网络安全 / 电力系统 / 舰面调度 / 地质风险
+ * 展示全部业务场景卡片：网络安全 / 电力系统 / 舰面调度态势 / 地质风险
  * 卡片指标为后端真实聚合值（去重口径数据集数、有效样本量、已发布模型数），
  * 数据源 GET /api/v1/scenarios/overview。点击卡片跳转至对应场景大屏。
  */
@@ -52,9 +52,7 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Scenario Center</p>
         <h2>场景中心</h2>
-        <p class="scenario-center__desc">
-          选择业务场景，进入专属态势感知大屏
-        </p>
+        <p class="scenario-center__desc">各业务场景的态势感知入口</p>
       </div>
     </div>
 
@@ -70,7 +68,7 @@ onMounted(() => {
       <button class="ghost-button" @click="loadScenarios">重试</button>
     </section>
 
-    <!-- 空态引导：未分配任何场景（需求 6.5：普通用户仅见被分配场景） -->
+    <!-- 空态引导：未分配任何场景（需求 6.5：场景用户仅见被分配场景） -->
     <section v-else-if="!scenarios.length" class="state-card">
       <p>暂无分配场景，请联系管理员</p>
     </section>
@@ -106,11 +104,12 @@ onMounted(() => {
 .scenario-center__header h2 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .scenario-center__desc {
   margin: 0;
-  color: rgba(220, 234, 255, 0.7);
+  color: rgba(180, 200, 235, 0.55);
   font-size: 0.95rem;
 }
 

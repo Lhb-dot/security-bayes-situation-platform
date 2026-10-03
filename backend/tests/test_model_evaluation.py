@@ -13,9 +13,9 @@ from app.services.model_evaluation_service import (  # noqa: E402
     build_model_evaluation_facts,
     fallback_model_evaluation,
     public_model_attributes,
+    refresh_model_attributes,
 )
 from app.services.model_version_service import ModelVersionService  # noqa: E402
-from app.services.report_service import ReportService  # noqa: E402
 
 
 class EvaluationDb:
@@ -23,6 +23,7 @@ class EvaluationDb:
         self.model = model
         self.setting = setting
         self.commits = 0
+        self.refreshes = 0
 
     def get(self, model_type, identifier):
         name = getattr(model_type, "__name__", "")
@@ -38,6 +39,11 @@ class EvaluationDb:
 
     def commit(self):
         self.commits += 1
+
+    def refresh(self, instance, with_for_update=False):
+        """真实 Session 在这里对模型版本行加锁；假 DB 只需接受这次调用。"""
+        self.refreshes += 1
+        return instance
 
 
 def make_model(status="PUBLISHED"):
@@ -122,7 +128,10 @@ class ModelEvaluationTests(unittest.TestCase):
     def test_cached_stream_does_not_call_ai_again(self):
         model = make_model()
         model.model_attributes = build_model_attributes(model)
-        model.ai_evaluation = {"management": {"markdown": "cached", "source": "ai"}}
+        facts = build_model_evaluation_facts(model.model_attributes, ADMIN_ROLE)
+        model.ai_evaluation = {
+            "management": {"markdown": "cached", "source": "ai", "facts_snapshot": facts}
+        }
         db = EvaluationDb(model)
         user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
         with patch("app.services.model_evaluation_service._openai_stream") as mocked:
@@ -130,19 +139,66 @@ class ModelEvaluationTests(unittest.TestCase):
         mocked.assert_not_called()
         self.assertEqual(events[-1], ("done", {"status": "已读取已保存模型评价", "source": "cached"}))
 
+    def test_algorithm_metadata_is_refreshed_after_snapshot_was_taken(self):
+        model = make_model()
+        model.model_attributes = build_model_attributes(model)
+        self.assertIn("test", model.model_attributes["algorithm"]["description"])
+        # 算法描述在训练后被修正：快照必须跟随实时行，而不是冻结旧文案。
+        model.algorithm.description = "动态交互加权朴素贝叶斯，KNN 生成双视图"
+        refreshed = refresh_model_attributes(model)
+        self.assertEqual(refreshed["algorithm"]["description"], "动态交互加权朴素贝叶斯，KNN 生成双视图")
+        # 模型自身的事实保持训练时快照，不被重建。
+        self.assertEqual(refreshed["training_parameters"], {"k": 5})
+        # 落库后再次读取不再产生新对象，避免每次读都写库。
+        model.model_attributes = refreshed
+        self.assertIs(refresh_model_attributes(model), model.model_attributes)
+
+    def test_stale_evaluation_is_not_served_when_facts_changed(self):
+        model = make_model()
+        model.model_attributes = build_model_attributes(model)
+        stale = build_model_evaluation_facts(model.model_attributes, ADMIN_ROLE)
+        stale["model"]["algorithm"]["description"] = "（占位训练，算法实现待算法组交付）"
+        model.ai_evaluation = {
+            "management": {"markdown": "旧结论", "source": "ai", "facts_snapshot": stale}
+        }
+        db = EvaluationDb(model, setting=SimpleNamespace(enabled=True))
+        user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
+        service = ModelEvaluationService(db)
+        # 读取时不再下发基于旧事实写出的正文。
+        payload = service.get_evaluation(user, 34).data["evaluation"]
+        self.assertFalse(payload["available"])
+        self.assertIsNone(payload["markdown"])
+        # 触发时重新生成，而不是回放缓存。
+        with patch(
+            "app.services.model_evaluation_service._openai_stream",
+            return_value=[("content", "### 模型结论\n新结论")],
+        ):
+            events = list(service.stream(user, 34, False))
+        self.assertEqual(events[-1][1]["source"], "ai")
+        saved = (model.ai_evaluation or {}).get("management") or {}
+        self.assertIn("新结论", saved.get("markdown", ""))
+        self.assertEqual(saved.get("facts_snapshot"), build_model_evaluation_facts(
+            refresh_model_attributes(model), ADMIN_ROLE
+        ))
+
     def test_management_can_prepare_a_sanitized_user_evaluation(self):
         model = make_model()
         db = EvaluationDb(model, setting=SimpleNamespace(enabled=True))
         user = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
         with patch(
             "app.services.model_evaluation_service._openai_stream",
-            return_value=["### 模型能做什么\n场景提示"],
+            return_value=[("reasoning", "先看指标。"), ("content", "### 模型能做什么\n场景提示")],
         ):
             events = list(ModelEvaluationService(db).stream(user, 34, True, "user"))
         self.assertEqual(events[-1][1]["source"], "ai")
         saved = (model.ai_evaluation or {}).get("user") or {}
         self.assertEqual(saved.get("source"), "ai")
         self.assertNotIn("training_parameters", saved.get("facts_snapshot", {}).get("model", {}))
+        # 思维链只透传给前端，不能落进保存的 markdown
+        reasoning = "".join(d["content"] for e, d in events if e == "reasoning")
+        self.assertIn("先看指标", reasoning)
+        self.assertNotIn("先看指标", saved.get("markdown", ""))
+        self.assertIn("模型能做什么", saved.get("markdown", ""))
 
     def test_model_version_serialization_hides_training_parameters_from_users(self):
         model = make_model()
@@ -155,38 +211,6 @@ class ModelEvaluationTests(unittest.TestCase):
             user_data = service._to_dict(model, user)
         self.assertEqual(admin_data["training_parameters"], {"k": 5})
         self.assertEqual(user_data["training_parameters"], {})
-
-    def test_report_reuses_role_scoped_evaluation_text_only(self):
-        model = make_model()
-        model.ai_evaluation = {
-            "management": {
-                "source": "ai",
-                "markdown": "管理员诊断",
-                "generated_at": "2026-09-14T00:00:00+00:00",
-                "facts_snapshot": {"model": {"training_parameters": {"k": 5}}},
-            },
-            "user": {
-                "source": "ai",
-                "markdown": "用户提示",
-                "generated_at": "2026-09-14T00:00:00+00:00",
-                "facts_snapshot": {"model": {"quality_metrics": {"f1": 0.8}}},
-            },
-        }
-        admin = SimpleNamespace(id=1, role="SUPER_ADMIN")
-        user = SimpleNamespace(id=2, role="SCENARIO_USER")
-        admin_result = ReportService._model_evaluations(admin, [(None, model)])
-        user_result = ReportService._model_evaluations(user, [(None, model)])
-        self.assertEqual(admin_result[0]["markdown"], "管理员诊断")
-        self.assertEqual(user_result[0]["markdown"], "用户提示")
-        self.assertNotIn("facts_snapshot", admin_result[0])
-        self.assertNotIn("facts_snapshot", user_result[0])
-
-    def test_user_report_omits_non_published_model_evaluation(self):
-        model = make_model(status="DISABLED")
-        model.ai_evaluation = {"user": {"source": "ai", "markdown": "旧评价"}}
-        user = SimpleNamespace(id=2, role="SCENARIO_USER")
-        self.assertEqual(ReportService._model_evaluations(user, [(None, model)]), [])
-
 
 if __name__ == "__main__":
     unittest.main()

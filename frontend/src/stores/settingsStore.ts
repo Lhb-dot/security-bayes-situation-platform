@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 
 const STORAGE_PREFIX = 'bayes_refresh_settings:';
 const DEFAULT_REFRESH_INTERVAL = 30;
-const ALLOWED_INTERVALS = [10, 30, 60, 120, 300];
+export const ALLOWED_INTERVALS = [10, 30, 60, 120, 300];
 
 interface StoredRefreshSettings {
   autoRefresh: boolean;

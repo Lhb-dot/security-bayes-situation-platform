@@ -22,7 +22,10 @@ from app.db import Base, DATABASE_URL  # noqa: E402
 target_metadata = Base.metadata
 
 # 数据库连接以 app/db.py 的 DATABASE_URL 为准（.env 未配置时回落 docker-compose 默认值）
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# DATABASE_URL 来自环境变量 / .env，可能含 URL 编码字符（如口令里的 %40）。
+# ConfigParser 默认启用 % 插值，直接把裸 % 交给 set_main_option 会抛
+# ValueError: invalid interpolation syntax；转义成 %% 后读回仍是原值。
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

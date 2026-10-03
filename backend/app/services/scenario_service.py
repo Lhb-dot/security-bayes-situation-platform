@@ -19,6 +19,7 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    DATASET_RISK_TYPES,
     DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     MODEL_STATUS_PUBLISHED,
@@ -27,19 +28,15 @@ from app.services.constants import (
     ROLE_SUPER_ADMIN,
     SCENARIO_ACCESS_ACTUAL,
     SCENARIO_ACCESS_STATUSES,
-    SCENARIO_CODE_MAX_LEN,
     SCENARIO_CODES,
     SCENARIO_NAME_MAX_LEN,
 )
 from app.services.scenario_analytics import compute_scenario_insights
 from app.utils.common import (
-    get_logger,
     row_to_dict,
     validate_enum,
     validate_length,
 )
-
-logger = get_logger("scenario")
 
 
 class ScenarioService(ServiceBase):
@@ -96,7 +93,6 @@ class ScenarioService(ServiceBase):
         if scenario is None:
             raise ServiceError(404, "场景不存在")
 
-        from app.services.constants import DATASET_RISK_TYPES
         from app.services.training_executor import resolve_dataset_path
         from app.utils.arff_reader import read_arff
 
@@ -128,7 +124,10 @@ class ScenarioService(ServiceBase):
 
         fields, rows = read_arff(path, max_rows=sample_rows)
         risk_type = DATASET_RISK_TYPES.get(dataset.logical_id)
-        insights = compute_scenario_insights(risk_type or "", fields, rows)
+        # 透传 logical_id：网络场景的异常样本判定必须走 DATASET_POSITIVE_LABELS 显式登记表
+        insights = compute_scenario_insights(
+            risk_type or "", fields, rows, dataset.logical_id
+        )
         return ok(
             data={
                 "scenario_id": scenario_id,

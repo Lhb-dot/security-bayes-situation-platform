@@ -5,14 +5,14 @@
 
 模型：app.models.app_user.AppUser（role 字段即角色，无独立 Role 表）。
 权限要点（需求 6.5.2）：
-- 创建/启用/禁用/重置普通用户账号：仅 ADMIN
+- 创建/启用/禁用/重置场景用户账号：仅 ADMIN
 - 修改本人密码：本人或 ADMIN
-- 用户列表：仅 ADMIN；普通用户仅可查本人信息（get_profile / get）
+- 用户列表：仅 ADMIN；场景用户仅可查本人信息（get_profile / get）
 """
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import joinedload
 
 from app.models.app_user import AppUser
@@ -20,6 +20,7 @@ from app.models.scenario import Scenario
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
+    PASSWORD_MAX_LEN,
     PASSWORD_MIN_LEN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
@@ -31,7 +32,6 @@ from app.services.constants import (
     USERNAME_MAX_LEN,
 )
 from app.utils.common import (
-    get_logger,
     hash_password,
     row_to_dict,
     validate_enum,
@@ -39,8 +39,6 @@ from app.utils.common import (
     validate_required,
     verify_password,
 )
-
-logger = get_logger("user")
 
 
 class UserService(ServiceBase):
@@ -67,19 +65,6 @@ class UserService(ServiceBase):
     # 查询
     # ------------------------------------------------------------------
     @service_call
-    def get(self, current_user: Optional[AppUser], user_id: int):
-        """查看用户详情：SUPER_ADMIN 可查任意；SCENARIO_ADMIN 仅自己场景；其余仅本人。"""
-        self.require_login(current_user)
-        user = self._get(user_id)
-        role = getattr(current_user, "role", None)
-        is_mgmt = role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
-        if not is_mgmt and getattr(current_user, "id", None) != user_id:
-            raise ServiceError(403, "无权限操作")
-        if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        return ok(data=self._safe(user))
-
-    @service_call
     def get_profile(self, current_user: Optional[AppUser]):
         """查看本人信息。"""
         self.require_login(current_user)
@@ -93,6 +78,8 @@ class UserService(ServiceBase):
         page_size: int = 10,
         keyword: Optional[str] = None,
         role: Optional[str] = None,
+        status: Optional[str] = None,
+        scenario_id: Optional[int] = None,
     ):
         """用户列表（管理级角色）。
 
@@ -110,6 +97,13 @@ class UserService(ServiceBase):
             if err:
                 raise ServiceError(400, err)
             filters.append(AppUser.role == role)
+        if status:
+            err = validate_enum(status, USER_STATUSES, "status")
+            if err:
+                raise ServiceError(400, err)
+            filters.append(AppUser.status == status)
+        if scenario_id is not None:
+            filters.append(AppUser.scenario_id == int(scenario_id))
 
         page = max(1, int(page or 1))
         page_size = min(max(1, int(page_size or 10)), 200)
@@ -167,7 +161,7 @@ class UserService(ServiceBase):
         if err:
             raise ServiceError(400, err)
         # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
-        err = validate_length(password, "password", 128, min_len=PASSWORD_MIN_LEN)
+        err = validate_length(password, "password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN)
         if err:
             raise ServiceError(400, err)
         err = validate_enum(role, ROLES, "role")
@@ -220,6 +214,10 @@ class UserService(ServiceBase):
         """分配/修改用户绑定场景（管理级角色）。
 
         SUPER_ADMIN 可改任意场景管理员/场景用户；SCENARIO_ADMIN 只能改自己场景的用户。
+
+        注意：路由层 `PUT /users/{id}/scenario` 已收紧为 `require_admin`（仅平台超管），
+        所以下面这条 SCENARIO_ADMIN 分支在 HTTP 入口上不可达；保留是因为本方法
+        在 service 层仍按「管理级角色」自洽，直接调用（含测试）时行为不变。
         """
         self.require_scenario_admin(current_user)
         user = self._get(user_id)
@@ -262,8 +260,15 @@ class UserService(ServiceBase):
         # 场景管理员只能重置自己场景用户的密码
         if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "无权限操作")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and role != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         err = validate_length(
-            new_password, "new_password", 128, min_len=PASSWORD_MIN_LEN
+            new_password, "new_password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN
         )
         if err:
             raise ServiceError(400, err)
@@ -271,15 +276,17 @@ class UserService(ServiceBase):
         if old_password is not None:
             if not verify_password(old_password, user.password_hash):
                 raise ServiceError(400, "旧密码不正确")
+        now = datetime.now(timezone.utc)
         user.password_hash = hash_password(new_password)
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = now
         # Password changes invalidate every previously issued session for this account.
         from app.models.auth_session import AuthSession
-        now = datetime.now(timezone.utc)
-        self.db.query(AuthSession).filter(
-            AuthSession.user_id == user.id,
-            AuthSession.revoked_at.is_(None),
-        ).update({AuthSession.revoked_at: now}, synchronize_session=False)
+        self.db.execute(
+            update(AuthSession)
+            .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+            .values(revoked_at=now),
+            execution_options={"synchronize_session": False},
+        )
         self.commit()
         return ok(message="密码修改成功")
 
@@ -298,13 +305,20 @@ class UserService(ServiceBase):
         user = self._get(user_id)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "场景管理员只能管理自己场景的用户")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id and status != USER_STATUS_ENABLED:
-            raise ServiceError(400, "不能禁用当前登录账号")
+            raise ServiceError(400, "不能禁用当前登录用户")
         user.status = status
         user.updated_at = datetime.now(timezone.utc)
         self.commit()
         updated = self._get(user.id)
-        return ok(data=self._safe(updated), message="账号状态已更新")
+        return ok(data=self._safe(updated), message="用户状态已更新")
 
     @service_call
     def delete(self, current_user: Optional[AppUser], user_id: int):
@@ -318,8 +332,15 @@ class UserService(ServiceBase):
         user = self._get(user_id)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
             raise ServiceError(403, "场景管理员只能管理自己场景的用户")
+        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
+        if (
+            user.role == ROLE_SCENARIO_ADMIN
+            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
+            and getattr(current_user, "id", None) != user.id
+        ):
+            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         if user.id == current_user.id:
-            raise ServiceError(400, "不能删除当前登录账号")
+            raise ServiceError(400, "不能删除当前登录用户")
 
         # 引用保护：任一关联数据存在即拒绝删除
         from app.models.dataset import Dataset

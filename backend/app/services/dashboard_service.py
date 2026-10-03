@@ -27,12 +27,13 @@ from __future__ import annotations
 
 from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
+import hashlib
 import math
 import os
 import threading
 import time
 from statistics import mean, median, pstdev
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 from sqlalchemy import func, select
 
@@ -48,15 +49,16 @@ from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     ALGORITHM_STATUS_AVAILABLE,
+    DATASET_POSITIVE_LABELS,
     DATASET_RISK_TYPES,
     DATASET_STATUS_ACTIVE,
     DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PERSONAL,
     DATASET_VISIBILITY_PLATFORM,
     dataset_display_name_of,
+    is_risk_label,
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
-    RISK_LEVEL_MEDIUM,
     RISK_EVENT_STATUS_PENDING,
     RISK_EVENT_STATUS_PROCESSING,
     RISK_EVENT_STATUS_RESOLVED,
@@ -106,6 +108,11 @@ CARRIER_LOGICAL_IDS = (
 #: 航母同源组的代表数据集：数值未离散化，可直接做数值统计
 CARRIER_CANONICAL = "carrier_feature2_biaoqian"
 
+#: 显式同源族 key：carrier 三份是**同一批样本的三种编码**（内容 MD5 各不相同），
+#: 以及任何内容与其中一份完全相同的再注册（如 carrier_track_company_v1 = lisan）。
+#: 只按内容指纹分组会把它们拆成 3~4 个组，因此必须保留显式族。
+CARRIER_GROUP_ID = "carrier_shared_source"
+
 #: NF-UNSW 数据集的 PROTOCOL 为协议号，映射为可读名称
 PROTOCOL_NAMES = {"1": "ICMP", "6": "TCP", "17": "UDP", "47": "GRE", "50": "ESP", "89": "OSPF"}
 
@@ -118,11 +125,25 @@ FLOW_BUCKETS = (
     (">1K", "NUM_PKTS_1024_TO_1514_BYTES"),
 )
 
+#: 网络流量「统计维度」覆盖矩阵（D2）：(维度名, 稳定 key, 该维度的候选字段名)。
+#: 数据集只要含该维度任一字段即算覆盖（实测 NF 有端口+包长、无 service；
+#: KDD 有 service+flag、无端口包长 → 矩阵呈对角空白）。
+NET_DIMENSIONS = (
+    ("协议", "PROTOCOL", ("PROTOCOL",)),
+    ("目的端口", "L4_DST_PORT", ("L4_DST_PORT", "L4_SRC_PORT")),
+    ("包长分布", "NUM_PKTS_UP_TO_128_BYTES", ("NUM_PKTS_UP_TO_128_BYTES",)),
+    ("连接状态", "flag", ("flag",)),
+    ("应用服务", "service", ("service",)),
+)
+
 #: 事件状态
 EVENT_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOLVED": "已处置"}
 
 #: 风险分固定分箱（下限由「只在判风险时建事件」决定，恒 ≥0.5）
 SCORE_BINS = (("0.5-0.7", 0.5, 0.7), ("0.7-0.9", 0.7, 0.9), ("0.9-1.0", 0.9, 1.01))
+
+#: 工作台「推理活动趋势」的统计窗口天数（前端标题需同步）
+ACTIVITY_TREND_DAYS = 10
 
 # 注：原 HIGH_CONFIDENCE = 0.8 已删除。它是写死的「高置信告警」线，与账号阈值并存
 # 会导致同一页面上「高风险事件数」和「高置信告警数」用两套口径。
@@ -130,6 +151,18 @@ SCORE_BINS = (("0.5-0.7", 0.5, 0.7), ("0.7-0.9", 0.7, 0.9), ("0.9-1.0", 0.9, 1.0
 
 #: 地质地形因子（DIS_raw_data 真实字段）
 GEO_FACTORS = ("Slope", "TWI", "Elevation", "Relief", "SPI", "Dis2roads", "Dis2fault", "Dis2river")
+
+#: 地质数据集角色分工（D1）：logical_id → 角色名；未登记的角色为「未分类」。
+#: 角色由数据集在场景家族中承担的结构性职责决定，与是否登记风险口径无关。
+GEO_DATASET_ROLES = {
+    "dis_raw_data": "因子表",
+    "dis_landslides": "风险标签表",
+    "dis_causative_factors": "致灾因子表",
+    "dis_global_catalog": "全球编目表",
+    "dis_guaruja_random": "随机基线集",
+}
+#: 未在 GEO_DATASET_ROLES 中登记的数据集统一角色
+GEO_ROLE_UNCLASSIFIED = "未分类"
 
 #: 电力电参量（PowerFrequencyHz 单列，其余做刻度条）
 POWER_PARAMS = {
@@ -153,6 +186,18 @@ _POWER_UNITS = {
     "PowerFrequencyHz": "Hz",
     "Sensor_Packet_Loss_%": "%",
 }
+
+#: 电力数据集准入基线（与 frontend WorkspacePower.vue 的 NORMAL_BAND 一致）：
+#: (字段名, 中文名, 下限, 上限)。下限为 None 表示只校验上限（丢包率 ≤1%）。
+POWER_BASELINE = (
+    ("VoltageLevel_kV", "电压", 300.0, 700.0),
+    ("CurrentAmp", "电流", 400.0, 1600.0),
+    ("Temperature_C", "温度", 30.0, 90.0),
+    ("PowerFrequencyHz", "频率", 49.8, 50.2),
+    ("Sensor_Packet_Loss_%", "遥测丢包率", None, 1.0),
+)
+#: 工频合格区间（PowerFrequencyHz），与 POWER_BASELINE 中的同名字段保持一致
+POWER_FREQUENCY_BAND = (49.8, 50.2)
 
 _QUOTES = "'\" \t\r\n"
 _NUM_MISSING = {"", "?", "nan", "NaN", "none", "None", "null", "NULL"}
@@ -316,9 +361,18 @@ def _grouped_pairs(rows: list[list[str]], left_index: int | None, right_index: i
     return grouped
 
 
-def _label_is_risk(value: Any) -> bool:
-    """标签是否为正类（风险）。数据字典：0/normal/no/false 为负类。"""
-    return _clean(value).lower() not in {"", "?", "0", "normal", "no", "false", "none"}
+def _label_is_risk(logical_id: str | None, value: Any) -> bool:
+    """标签是否为正类（风险）—— 唯一口径来源是 ``constants.DATASET_POSITIVE_LABELS``。
+
+    需求文档 §6.4.1 明令禁止按标签字符串 / 取值大小 / 文件排列顺序自动推断正类，
+    因此这里**不再**使用「非 ``0/normal/no/false/none`` 即风险」的历史兜底规则
+    （该规则对未登记数据集是"猜"，属违规实现），改为把判定完全委托给
+    :func:`constants.is_risk_label`。未登记的数据集一律返回 ``False``（宁少报、不猜）；
+    ``logical_id`` 缺失时同样返回 ``False``。
+    """
+    if not logical_id:
+        return False
+    return is_risk_label(logical_id, _clean(value))
 
 
 def _risk_score(scores: list[float]) -> int:
@@ -327,7 +381,174 @@ def _risk_score(scores: list[float]) -> int:
 
 
 def _percent(part: int, total: int) -> float:
+    """占比（0~1 小数）；分母为 0 记 0.0。
+
+    0/0 在语义上是「无数据」而不是「零占比」，但本函数被**要求数值**的口径复用：
+    ``_risk_level_of_rate`` 判档（前端 risk_level 契约只有 high/medium/low 三档）、
+    平台总览 / 场景卡片的各风险占比（前端类型声明为 ``number``）。这些调用点
+    不能接受 None，故 ``_percent`` 保持返回 0.0；需要区分「无数据 / 零占比」
+    的字段改用 ``_percent_or_none``。
+    """
     return round(part / total, 4) if total else 0.0
+
+
+def _percent_or_none(part: int, total: int) -> float | None:
+    """占比（0~1 小数）；分母为 0 返回 ``None``（下发 null）。
+
+    用于「0/0 是未定义而非 0」的字段：数据集 risk_rate（文件缺失 / 空表）、
+    工频合格率（无 PowerFrequencyHz 数据）、同源冗余率（无文件）。
+
+    注意：前端 ``components/dashboard/dashFormat.ts`` 的 ``fmtPercent`` 用
+    ``Number(value)`` 判有限性，而 ``Number(null) === 0``，**null 仍会渲染成
+    「0.0%」**。要让「—」真正生效，需 F7 侧把 ``fmtPercent`` / ``fmtInt`` 改为
+    ``value === null || value === undefined → '—'``（跨区提案 B1-P1）。
+    本函数先把「未定义」这一事实如实下发，不伪造 0.0。
+    """
+    return round(part / total, 4) if total else None
+
+
+def _label_kind(counts: Counter) -> str:
+    """标签列形态（纯描述性，**不参与正类判定**）。
+
+    - 去重取值集合为空 → ``"unknown"``；
+    - 恰好 2 个取值 → ``"binary"``；
+    - 多于 2 个且全部可转数值 → ``"numeric"``（如 landslides 的 {0..9, 11}）；
+    - 多于 2 个且不可全转数值 → ``"multiclass"``（如 landslide_size 的 6 个规模档）。
+    """
+    values = [value for value in counts if value and value != "?"]
+    if not values:
+        return "unknown"
+    if len(values) == 2:
+        return "binary"
+    if all(_to_float(value) is not None for value in values):
+        return "numeric"
+    return "multiclass" if len(values) > 2 else "unknown"
+
+
+def _head_column_values(path: str, name: str, limit: int = 20) -> list[str]:
+    """只读 ARFF 前 ``limit`` 行、取某列的非空原始值（不做全量解析）。
+
+    供「编码形态」探测使用：只需看前 20 个值是否形如 ``'(a-b]'`` 区间串。
+    """
+    if not name or not os.path.exists(path):
+        return []
+    try:
+        fields, rows = read_arff(path, max_rows=limit)
+    except OSError:
+        return []
+    index = _field_index(fields).get(name)
+    if index is None:
+        return []
+    values: list[str] = []
+    for row in rows:
+        if index >= len(row):
+            continue
+        text = _clean(row[index])
+        if text and text != "?":
+            values.append(text)
+    return values
+
+
+def _flight_encoding(fields: list[dict], path: str, label_field: str) -> str:
+    """舰面数据集的编码形态：``paired`` / ``interval`` / ``numeric`` / ``unknown``。
+
+    判定顺序（同契约 §5.3）：
+    1. 字段名含 ``PlaneID1`` / ``PlaneID2`` → ``paired``（配对轨迹版）；
+    2. ``inter_dist_min`` 的原始取值形如 ``'(a-b]'`` 区间串 → ``interval``（Weka 离散区间版）；
+    3. 除标签列外全部字段类型为 ``numeric`` → ``numeric``（数值连续版）；
+    4. 其余 → ``unknown``。
+
+    注：第 3 条排除标签列。数值连续版（Feature2_Cleaning_biaoqian）除 ``Collision``
+    这个 enum 标签列外全是 numeric，若把标签列也算进去会退化判定为 ``unknown``，
+    与「数值连续 / 离散区间 / 配对轨迹」三形态的治理语义不符。
+    """
+    names = {field.get("name") for field in fields}
+    if "PlaneID1" in names or "PlaneID2" in names:
+        return "paired"
+    if any(
+        "(" in value or "]" in value
+        for value in _head_column_values(path, "inter_dist_min")
+    ):
+        return "interval"
+    feature_types = [
+        str(field.get("type", "")).lower()
+        for field in fields
+        if _clean(field.get("name")) != _clean(label_field)
+    ]
+    if feature_types and all(field_type == "numeric" for field_type in feature_types):
+        return "numeric"
+    return "unknown"
+
+
+def _power_baseline_violated(value: float | None, low: float | None, high: float | None) -> bool:
+    """均值是否越出电力基线区间；无数据（None）不算越界。"""
+    if value is None:
+        return False
+    if low is not None and value < low:
+        return True
+    if high is not None and value > high:
+        return True
+    return False
+
+
+def _component_matrix_rows(
+    buckets: dict[str, dict[str, list[str]]], kind: str
+) -> list[dict[str, Any]]:
+    """设备/系统 × 数据集 覆盖矩阵行（``buckets`` = 值 → {logical_id: 标签取值列表}）。
+
+    只输出实际出现过的数据集（count > 0），按总样本量降序、同量按取值名升序。
+    """
+    rows: list[dict[str, Any]] = []
+    for value, per_dataset in buckets.items():
+        counts = []
+        total = 0
+        for logical_id, values in per_dataset.items():
+            positives = sum(1 for item in values if _label_is_risk(logical_id, item))
+            counts.append(
+                {
+                    "logical_id": logical_id,
+                    "count": len(values),
+                    "risk_rate": _percent(positives, len(values)),
+                }
+            )
+            total += len(values)
+        rows.append({"value": value, "kind": kind, "counts": counts, "_total": total})
+    rows.sort(key=lambda row: (-row["_total"], row["value"]))
+    for row in rows:
+        row.pop("_total")
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 场景风险等级：按「风险样本占比」判档
+# ---------------------------------------------------------------------------
+#
+# 旧口径 `"high" if high_count else ...` 只看**有没有**高危事件：场景里存在 1 条就整体
+# 标高危，与样本量、与风险占比都无关。实测四个场景全部落在高危，标签没有区分度。
+#
+# 现改为按 risk_sample_rate（风险样本量 / 有效样本量）判档。该值由 _effective_counts
+# 全量统计数据集标签列得出，与卡片上「有效样本量」同源，口径自洽。
+#
+# 边界：无样本（分母为 0）时 _percent 返回 0.0 → 落到低危。这与旧口径的兜底一致，
+# 不额外引入「无数据」等级（前端 risk_level 契约只有 high/medium/low 三档）。
+
+#: 风险样本占比 >= 该值判为高危
+SCENARIO_HIGH_RATE = 0.50
+#: 风险样本占比 >= 该值判为中危；低于该值判为低危
+SCENARIO_MEDIUM_RATE = 0.25
+
+
+def _risk_level_of_rate(rate: float) -> str:
+    """按风险样本占比判级（rate 为 0~1 的小数）。
+
+    返回**小写**等级：本接口的对外契约一直是小写（改动前就是字面量 ``"high"``），
+    与 ``risk_view`` 那套大写枚举不同，前端 ``Scenario.risk_level`` 按小写取值。
+    """
+    if rate >= SCENARIO_HIGH_RATE:
+        return "high"
+    if rate >= SCENARIO_MEDIUM_RATE:
+        return "medium"
+    return "low"
 
 
 def _scenario_key(scenario_code: str | None, risk_type: str | None) -> str:
@@ -363,6 +584,12 @@ _HEADER_CACHE: dict[int, tuple[float, int, list[dict]]] = {}
 #: dataset_id -> (mtime, size, label_field, 总行数, 风险行数)
 _LABEL_STATS_CACHE: dict[int, tuple[float, int, str, int, int]] = {}
 
+#: dataset_id -> (mtime, size, 内容指纹)：同源去重的唯一依据，只依赖文件内容
+_FINGERPRINT_CACHE: dict[int, tuple[float, int, str]] = {}
+
+#: dataset_id -> (mtime, size, label_field, 标签列取值计数)：label_values / label_kind 用
+_LABEL_VALUES_CACHE: dict[int, tuple[float, int, str, Counter]] = {}
+
 #: dataset_id -> (mtime, size, 行数)
 _ROW_COUNT_CACHE: dict[int, tuple[float, int, int]] = {}
 
@@ -378,6 +605,45 @@ def _file_signature(path: str) -> tuple[float, int]:
     except OSError:
         return (0.0, -1)
     return (stat.st_mtime, stat.st_size)
+
+
+#: 内容指纹的分块大小：1 MB，避免大文件一次性读入内存
+_FINGERPRINT_CHUNK = 1024 * 1024
+
+
+def content_fingerprint(dataset: Dataset) -> str:
+    """文件内容指纹：``"{size}-{sha1(全文)[:16]}"``；文件缺失返回 ``"missing:{logical_id}"``。
+
+    同源去重的唯一依据。**不能**按 logical_id / 文件名判断同源——生产 seed 用新的
+    logical_id 重新注册了同一批物理文件（net_flow_company_v1 = NF-UNSW-NB15-v2 …），
+    只有内容哈希能识别出来。
+
+    缓存与 ``_HEADER_CACHE`` / ``_LABEL_STATS_CACHE`` 同风格：以 ``_file_signature``
+    的 (mtime, size) 作失效依据，进程级常驻（一份数据集只存一个 16 位摘要）。
+    """
+    path = resolve_dataset_path(dataset.file_path)
+    mtime, size = _file_signature(path)
+    with _CACHE_LOCK:
+        cached = _FINGERPRINT_CACHE.get(dataset.id)
+    if cached is not None and cached[0] == mtime and cached[1] == size:
+        return cached[2]
+
+    if size < 0:
+        fingerprint = f"missing:{dataset.logical_id}"
+    else:
+        digest = hashlib.sha1()
+        try:
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(_FINGERPRINT_CHUNK), b""):
+                    digest.update(chunk)
+        except OSError:
+            fingerprint = f"missing:{dataset.logical_id}"
+        else:
+            fingerprint = f"{size}-{digest.hexdigest()[:16]}"
+
+    with _CACHE_LOCK:
+        _FINGERPRINT_CACHE[dataset.id] = (mtime, size, fingerprint)
+    return fingerprint
 
 
 def _estimate_rows_bytes(rows: list[list[str]]) -> int:
@@ -421,6 +687,8 @@ def warm_dataset_caches(db, max_seconds: float = 10.0) -> dict[str, Any]:
         try:
             reader.fields(dataset)      # 表头：定位标签列
             reader.label_stats(dataset)  # 标签统计：首页 / 场景中心
+            reader.label_value_counts(dataset)  # 标签取值构成：数据画像 describe()
+            content_fingerprint(dataset)  # 内容指纹：同源去重分组
             reader.rows(dataset)         # 全量行：数据画像 / 工作台
             warmed += 1
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，跳过该数据集
@@ -446,6 +714,8 @@ def clear_dataset_caches() -> None:
     with _CACHE_LOCK:
         _HEADER_CACHE.clear()
         _LABEL_STATS_CACHE.clear()
+        _FINGERPRINT_CACHE.clear()
+        _LABEL_VALUES_CACHE.clear()
         _ROW_COUNT_CACHE.clear()
         _ROW_CACHE.clear()
         _ROW_CACHE_BYTES = 0
@@ -575,14 +845,75 @@ class _DatasetReader:
                 tallied = None
             if tallied is not None:
                 rows, counter = tallied
-                risk = sum(count for value, count in counter.items() if _label_is_risk(value))
+                risk = sum(
+                    count
+                    for value, count in counter.items()
+                    if _label_is_risk(dataset.logical_id, value)
+                )
                 return rows, risk
 
         _, rows = self.rows(dataset)
-        return len(rows), sum(1 for value in _raw_values(rows, index) if _label_is_risk(value))
+        return len(rows), sum(
+            1
+            for value in _raw_values(rows, index)
+            if _label_is_risk(dataset.logical_id, value)
+        )
 
-    def describe(self, dataset: Dataset) -> dict[str, Any]:
+    def label_value_counts(self, dataset: Dataset) -> Counter:
+        """标签列取值计数（已去引号、已剔除缺失值）。
+
+        与 ``label_stats`` 同款：命中进程级缓存直接返回；未命中优先走「只读标签列」
+        快速路径（``tally_arff_column``），不可用才回退 ``read_arff`` 全量解析。
+        **不做**正类判定——只描述取值构成（供 ``label_values`` / ``label_kind``）。
+        """
+        path = self._path(dataset)
+        mtime, size = _file_signature(path)
+        label_field = _clean(dataset.label_field)
+        with _CACHE_LOCK:
+            cached = _LABEL_VALUES_CACHE.get(dataset.id)
+        if (
+            cached is not None
+            and cached[0] == mtime
+            and cached[1] == size
+            and cached[2] == label_field
+        ):
+            return cached[3]
+
+        counter: Counter = Counter()
+        fields = self.fields(dataset)
+        if fields:
+            index = _field_index(fields).get(label_field)
+            if index is not None:
+                tallied = None
+                if os.path.exists(path):
+                    try:
+                        tallied = tally_arff_column(path, index, len(fields))
+                    except OSError:
+                        tallied = None
+                if tallied is not None:
+                    for value, count in tallied[1].items():
+                        text = _clean(value)
+                        if text and text != "?":
+                            counter[text] += count
+                else:
+                    _, rows = self.rows(dataset)
+                    counter = Counter(_raw_values(rows, index))
+
+        with _CACHE_LOCK:
+            _LABEL_VALUES_CACHE[dataset.id] = (mtime, size, label_field, counter)
+        return counter
+
+    def describe(self, dataset: Dataset, source_group: str | None = None) -> dict[str, Any]:
+        """数据集资产明细行。
+
+        ``source_group`` 由调用方按同源分组结果传入（``get_profile`` 一次算好，
+        避免逐行重复分组）；缺省时按本数据集自身的同源键推导。
+        """
         total, risk = self.label_stats(dataset)
+        fields = self.fields(dataset)
+        label_values = self.label_value_counts(dataset)
+        uploaded_at = getattr(dataset, "uploaded_at", None)
+        registered = dataset.logical_id in DATASET_RISK_TYPES
         return {
             "dataset_id": dataset.id,
             "logical_id": dataset.logical_id,
@@ -590,22 +921,59 @@ class _DatasetReader:
             "version": dataset.version,
             "label_field": dataset.label_field,
             # 标签字段是否属于风险标签（dis_global_catalog 的 label 是灾害规模，不是风险标签）
-            "is_risk_label": dataset.logical_id in DATASET_RISK_TYPES,
+            "is_risk_label": registered,
             "record_count": total,
             "risk_count": risk,
-            "risk_rate": _percent(risk, total),
+            # 空表 / 文件缺失时 0/0 是未定义，下发 null 而非误导性的 0.0
+            "risk_rate": _percent_or_none(risk, total),
+            # ---- 以下为管理员总览新增字段（只增不改，上方旧字段全部保留）----
+            "attribute_count": len(fields),
+            "field_names": [field.get("name") for field in fields],
+            "visibility": dataset.visibility,
+            "uploader_role": dataset.uploader_role,
+            "uploaded_at": uploaded_at.isoformat() if uploaded_at else None,
+            "source_group": source_group if source_group is not None else _group_key(dataset),
+            "content_fingerprint": content_fingerprint(dataset),
+            "positive_labels": sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
+            "label_values": [value for value, _ in label_values.most_common(12)],
+            "label_kind": _label_kind(label_values),
+            # 口径登记状态：与 is_risk_label 同值，语义更明确（未登记 → 不产风险事件）
+            "caliber_registered": registered,
         }
 
 
 def _group_key(dataset: Dataset) -> str:
-    """同源去重键：carrier 三份文件归为一组。"""
-    return "carrier_shared_source" if dataset.logical_id in CARRIER_LOGICAL_IDS else dataset.logical_id
+    """单文件同源去重键：carrier 白名单归入显式同源族，其余按内容指纹。"""
+    if dataset.logical_id in CARRIER_LOGICAL_IDS:
+        return CARRIER_GROUP_ID
+    return content_fingerprint(dataset)
 
 
 def _effective_groups(datasets: list[Dataset]) -> dict[str, list[Dataset]]:
+    """两遍分组：显式同源族（carrier）∪ 内容指纹。
+
+    - 第一遍先取 carrier 三份的内容指纹集合：任何**内容与其中一份相同**的再注册
+      （如 ``carrier_track_company_v1`` = ``Feature2_Cleaning_lisan``）都并入同一族，
+      不允许单独成组；
+    - 第二遍按「carrier 白名单 or 指纹命中 carrier 集合 → ``CARRIER_GROUP_ID``，
+      否则用自身内容指纹」落组。
+
+    不能只按指纹分组——carrier 三份是同一批样本的三种编码，内容各不相同
+    （MD5 6296CCE2… / 1C95B0A5… / 77CB74B6…），只按指纹会被拆成 3 组。
+    """
+    carrier_fingerprints = {
+        content_fingerprint(dataset)
+        for dataset in datasets
+        if dataset.logical_id in CARRIER_LOGICAL_IDS
+    }
     groups: dict[str, list[Dataset]] = defaultdict(list)
     for dataset in datasets:
-        groups[_group_key(dataset)].append(dataset)
+        fingerprint = content_fingerprint(dataset)
+        # 白名单成员（logical_id ∈ CARRIER_LOGICAL_IDS）的指纹必然已在
+        # carrier_fingerprints 中 —— 第一遍就是用同一批 datasets 算的，
+        # 因此这里只按指纹判族，不必再单独判一次 logical_id（恒真的死分支）。
+        key = CARRIER_GROUP_ID if fingerprint in carrier_fingerprints else fingerprint
+        groups[key].append(dataset)
     return groups
 
 
@@ -690,8 +1058,8 @@ def _daily_trend(events: list[RiskEvent], days: int = 7) -> list[dict[str, Any]]
 def _event_summary(
     events: list[RiskEvent],
     days: int = 7,
-    thresholds: Optional[dict] = None,
-    scenario_id: Optional[int] = None,
+    thresholds: dict | None = None,
+    scenario_id: int | None = None,
 ) -> dict[str, Any]:
     """风险事件汇总。
 
@@ -731,7 +1099,7 @@ def _event_summary(
     }
 
 
-def _recent_event(event: RiskEvent, thresholds: Optional[dict] = None) -> dict[str, Any]:
+def _recent_event(event: RiskEvent, thresholds: dict | None = None) -> dict[str, Any]:
     data = row_to_dict(event)
     # risk_level 按查看者阈值重算（落库值是创建者视角）
     data["risk_level"] = risk_view.level_of(event, thresholds or {})
@@ -940,7 +1308,7 @@ class DashboardService(ServiceBase):
         thresholds = risk_view.load_thresholds(self.db, current_user)
 
         cards: list[dict[str, Any]] = []
-        total_datasets = total_samples = total_models = total_events = total_high = total_medium = 0
+        total_datasets = total_samples = total_models = total_events = total_high = total_risk = 0
         all_scores: list[float] = []
         for scenario in scenarios:
             scene_datasets = [item for item in datasets if item.scenario_id == scenario.id]
@@ -949,18 +1317,17 @@ class DashboardService(ServiceBase):
             high_count = sum(
                 1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_HIGH
             )
-            medium_count = sum(
-                1 for event in scene_events if risk_view.level_of(event, thresholds) == RISK_LEVEL_MEDIUM
-            )
             published = published_by_scenario.get(scenario.id, 0)
             scores = [float(event.risk_score or 0) for event in scene_events]
+            # 场景等级判定依据：风险样本占比（与卡片「有效样本量」同源）
+            risk_rate = _percent(risk_samples, samples)
 
             total_datasets += dataset_count
             total_samples += samples
             total_models += published
             total_events += len(scene_events)
             total_high += high_count
-            total_medium += medium_count
+            total_risk += risk_samples
             all_scores.extend(scores)
 
             cards.append(
@@ -973,13 +1340,13 @@ class DashboardService(ServiceBase):
                     "dataset_count": dataset_count,  # 去重口径
                     "sample_count": samples,  # 去重口径有效样本量
                     "risk_sample_count": risk_samples,
-                    "risk_sample_rate": _percent(risk_samples, samples),
+                    "risk_sample_rate": risk_rate,
                     "published_model_count": published,
                     "event_count": len(scene_events),
                     "high_risk_count": high_count,
                     # 风险分 = 该场景真实风险事件 risk_score 均值 ×100（无事件记 0）
                     "risk_score": _risk_score(scores),
-                    "risk_level": "high" if high_count else ("medium" if medium_count else "low"),
+                    "risk_level": _risk_level_of_rate(risk_rate),
                 }
             )
 
@@ -994,7 +1361,7 @@ class DashboardService(ServiceBase):
                     "event_count": total_events,
                     "high_risk_count": total_high,
                     "risk_score": _risk_score(all_scores),
-                    "risk_level": "high" if total_high else ("medium" if total_medium else "low"),
+                    "risk_level": _risk_level_of_rate(_percent(total_risk, total_samples)),
                 },
             }
         )
@@ -1021,6 +1388,11 @@ class DashboardService(ServiceBase):
 
         reader = _DatasetReader()
         groups = _effective_groups(datasets)
+        # 同源组归属表：一次算好传给 describe，避免逐行重复分组
+        source_group_of = {
+            item.id: group_key for group_key, group in groups.items() for item in group
+        }
+        modeling = self._modeling_stats(datasets)
         samples, risk, dataset_count = _effective_counts(reader, datasets)
         risk_type = DATASET_RISK_TYPES.get(_representative(datasets).logical_id) if datasets else None
         key = _scenario_key(scenario.code, risk_type)
@@ -1037,28 +1409,71 @@ class DashboardService(ServiceBase):
             "sample_count": samples,
             "risk_count": risk,
             "risk_rate": _percent(risk, samples),
-            "datasets": [reader.describe(item) for item in datasets],
+            "datasets": [
+                reader.describe(item, source_group_of.get(item.id)) for item in datasets
+            ],
             "groups": [
                 {
                     "group_id": group_key,
                     "datasets": [item.logical_id for item in group],
                     "record_count": reader.label_stats(_representative(group))[0],
                     "deduplicated": len(group) > 1,
+                    # 同源组内文件数（>1 即存在同源冗余）与组指纹（= 组 key）
+                    "file_count": len(group),
+                    "fingerprint": group_key,
                 }
                 for group_key, group in groups.items()
             ],
+            # 建模覆盖（数据白躺检测）：只统计当前可见数据集，无模型的数据集也出现且计 0
+            "modeling": modeling,
         }
 
         by_logical = {item.logical_id: item for item in datasets}
+        modeling_by_logical = {row["logical_id"]: row for row in modeling}
         if key == "network":
             data.update(self._network_profile(reader, by_logical))
         elif key == "power":
             data.update(self._power_profile(reader, by_logical))
         elif key == "flight_deck":
-            data.update(self._flight_profile(reader, by_logical))
+            data.update(
+                self._flight_profile(reader, by_logical, modeling_by_logical)
+            )
         elif key == "geological":
-            data.update(self._geological_profile(reader, by_logical))
+            data.update(
+                self._geological_profile(reader, by_logical, modeling_by_logical)
+            )
         return ok(data=data)
+
+    def _modeling_stats(self, datasets: list[Dataset]) -> list[dict[str, Any]]:
+        """建模覆盖：一次 group_by 查询拿到每个数据集的（已发布 / 草稿）模型数。
+
+        用单条聚合查询而非逐数据集查询（禁止 N+1）。**只统计传入的可见数据集**；
+        没有任何模型版本的数据集也会出现在结果里并计 0（「数据白躺」正是要看这个）。
+        """
+        if not datasets:
+            return []
+        rows = self.db.execute(
+            select(
+                ModelVersion.dataset_id,
+                func.count(),
+                func.count().filter(ModelVersion.status == MODEL_STATUS_PUBLISHED),
+            )
+            .where(ModelVersion.dataset_id.in_([item.id for item in datasets]))
+            .group_by(ModelVersion.dataset_id)
+        ).all()
+        by_dataset = {dataset_id: (total, published) for dataset_id, total, published in rows}
+        stats: list[dict[str, Any]] = []
+        for item in datasets:
+            total, published = by_dataset.get(item.id, (0, 0))
+            stats.append(
+                {
+                    "logical_id": item.logical_id,
+                    "published": published,
+                    "draft": total - published,
+                    "total": total,
+                }
+            )
+        return stats
 
     @staticmethod
     def _dataset_columns(reader: _DatasetReader, item: Dataset | None) -> tuple[list[dict], list[list[str]]]:
@@ -1109,26 +1524,131 @@ class DashboardService(ServiceBase):
                 "connection": "kdd_train_20_percent",
                 "protocol_note": "PROTOCOL 为协议号，已映射为 TCP/UDP/ICMP 等名称",
             },
+            # ---- D1：数据集风险口径可比性矩阵（每数据集一行，同口径并列）----
+            "caliber_matrix": cls._network_caliber_matrix(reader, by_logical),
+            # ---- D2：统计维度覆盖矩阵（每维度一行，列出覆盖的数据集）----
+            "dimension_coverage": cls._network_dimension_coverage(reader, by_logical),
         }
 
     @classmethod
+    def _network_caliber_matrix(
+        cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
+    ) -> list[dict[str, Any]]:
+        """D1：各数据集「风险口径」横向对比行。
+
+        ``deviation`` = 本数据集风险占比 ÷ 场景合并风险占比（场景占比为 0 时记 None），
+        即该数据集的「风险语言」相对场景合并口径高/低多少倍。
+        """
+        samples, risk, _ = _effective_counts(reader, list(by_logical.values()))
+        scene_rate = _percent(risk, samples)
+        matrix: list[dict[str, Any]] = []
+        for item in by_logical.values():
+            info = reader.describe(item)
+            rate = info["risk_rate"]
+            matrix.append(
+                {
+                    "logical_id": info["logical_id"],
+                    "name": info["name"],
+                    "label_field": info["label_field"],
+                    "positive_labels": info["positive_labels"],
+                    "label_values": info["label_values"],
+                    "label_kind": info["label_kind"],
+                    "record_count": info["record_count"],
+                    "risk_count": info["risk_count"],
+                    "risk_rate": rate,
+                    # rate 为 None（该数据集空表 / 文件缺失）时偏离度无法计算
+                    "deviation": round(rate / scene_rate, 4) if rate is not None and scene_rate else None,
+                    "registered": info["caliber_registered"],
+                }
+            )
+        return matrix
+
+    @classmethod
+    def _network_dimension_coverage(
+        cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
+    ) -> list[dict[str, Any]]:
+        """D2：统计维度 → 覆盖数据集列表（矩阵里成对角空白的正是覆盖缺口）。"""
+        indexes = {
+            item.logical_id: _field_index(reader.fields(item))
+            for item in by_logical.values()
+        }
+        coverage: list[dict[str, Any]] = []
+        for dimension, dimension_key, names in NET_DIMENSIONS:
+            coverage.append(
+                {
+                    "dimension": dimension,
+                    "key": dimension_key,
+                    "datasets": [
+                        logical_id
+                        for logical_id, cmap in indexes.items()
+                        if any(name in cmap for name in names)
+                    ],
+                }
+            )
+        return coverage
+
+    @classmethod
     def _power_profile(cls, reader: _DatasetReader, by_logical: dict[str, Dataset]) -> dict[str, Any]:
-        """电力系统数据画像：全量监测样本的电参量、设备/系统/问题分布与设备故障率。"""
-        item = by_logical.get("powergrid_knowledgebase")
-        fields, rows = cls._dataset_columns(reader, item)
-        cmap = _field_index(fields)
+        """电力系统数据画像：电参量、设备/系统/问题分布、设备故障率、遥测基线与覆盖矩阵。
+
+        - **旧字段**（``params``/``fault_count``/``device_fault_rates`` …）改为在
+          ``by_logical`` 上按「同源去重后的代表数据集」合并统计：不再硬编码单个
+          ``logical_id``，同时避免把同源副本重复求和（power 场景两份文件内容相同）。
+        - **新字段** ``telemetry_by_dataset`` / ``component_matrix`` 按数据集逐个展开，
+          用于横向对比各注册数据是否同质。
+        """
+        groups = _effective_groups(list(by_logical.values()))
+        representatives = [_representative(group) for group in groups.values()]
+        rep_columns = [
+            (item, *cls._dataset_columns(reader, item)) for item in representatives
+        ]
 
         params: list[dict[str, Any]] = []
         for column, label in POWER_PARAMS.items():
-            index = _resolve_index(cmap, POWER_PARAM_ALIASES.get(column, (column,)))
-            stats = _stats(_nums(rows, index))
-            params.append({"name": label, "key": column, "unit": _POWER_UNITS.get(column, ""), "stats": stats})
+            values: list[float] = []
+            for _item, fields, rows in rep_columns:
+                cmap = _field_index(fields)
+                index = _resolve_index(cmap, POWER_PARAM_ALIASES.get(column, (column,)))
+                values.extend(_nums(rows, index))
+            params.append(
+                {
+                    "name": label,
+                    "key": column,
+                    "unit": _POWER_UNITS.get(column, ""),
+                    "stats": _stats(values),
+                }
+            )
 
-        component_index = cmap.get("Component")
-        target_index = cmap.get("Target_Event")
+        device_buckets: dict[str, list[str]] = defaultdict(list)
+        # 每个设备/系统的正类计数：按**该数据集自己的**显式登记表判定（§6.4.1）
+        device_risk: dict[str, int] = defaultdict(int)
+        issue_values: list[str] = []
+        component_values: list[str] = []
+        system_values: list[str] = []
+        target_values: list[str] = []
+        fault_count = 0
+        for _item, fields, rows in rep_columns:
+            cmap = _field_index(fields)
+            component_index = cmap.get("Component")
+            target_index = cmap.get("Target_Event")
+            for component, values in _grouped_pairs(rows, component_index, target_index).items():
+                device_buckets[component].extend(values)
+                device_risk[component] += sum(
+                    1 for value in values if _label_is_risk(_item.logical_id, value)
+                )
+            issue_values.extend(_raw_values(rows, cmap.get("IssueType")))
+            component_values.extend(_raw_values(rows, component_index))
+            system_values.extend(_raw_values(rows, cmap.get("SystemName")))
+            target_values.extend(_raw_values(rows, target_index))
+            fault_count += sum(
+                1
+                for value in _raw_values(rows, target_index)
+                if _label_is_risk(_item.logical_id, value)
+            )
+
         device_rates = []
-        for component, values in _grouped_pairs(rows, component_index, target_index).items():
-            positives = sum(1 for value in values if _label_is_risk(value))
+        for component, values in device_buckets.items():
+            positives = device_risk[component]
             device_rates.append(
                 {
                     "value": component,
@@ -1138,21 +1658,109 @@ class DashboardService(ServiceBase):
                 }
             )
 
-        target_values = _raw_values(rows, target_index)
-        fault_count = sum(1 for value in target_values if _label_is_risk(value))
         return {
             "params": params,
             "fault_count": fault_count,
             "fault_rate": _percent(fault_count, len(target_values)),
-            "issues": _top(_raw_values(rows, cmap.get("IssueType")), 8),
-            "components": _top(_raw_values(rows, component_index), 8),
-            "systems": _top(_raw_values(rows, cmap.get("SystemName")), 8),
+            "issues": _top(issue_values, 8),
+            "components": _top(component_values, 8),
+            "systems": _top(system_values, 8),
             "device_fault_rates": sorted(device_rates, key=lambda item: item["risk_rate"], reverse=True),
             "sources": {"dataset": "powergrid_knowledgebase"},
+            # ---- D1：逐数据集遥测画像 + 准入基线校验 ----
+            "telemetry_by_dataset": cls._power_telemetry_by_dataset(reader, by_logical),
+            # ---- D2：设备/系统 × 数据集 覆盖矩阵 ----
+            "component_matrix": cls._power_component_matrix(reader, by_logical),
         }
 
     @classmethod
-    def _flight_profile(cls, reader: _DatasetReader, by_logical: dict[str, Dataset]) -> dict[str, Any]:
+    def _power_telemetry_by_dataset(
+        cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
+    ) -> list[dict[str, Any]]:
+        """D1：每个可见数据集一行遥测画像。
+
+        ``params`` 只给均值（刻度条用），``frequency_pass_rate`` 是工频落在
+        ``POWER_FREQUENCY_BAND`` 内的样本比例，``baseline_ok`` / ``violations``
+        按 ``POWER_BASELINE`` 逐项校验均值是否越界（无数据的项不算越界）。
+        """
+        rows_out: list[dict[str, Any]] = []
+        for item in by_logical.values():
+            fields, rows = cls._dataset_columns(reader, item)
+            cmap = _field_index(fields)
+            total, _risk = reader.label_stats(item)
+
+            row_params: list[dict[str, Any]] = []
+            means: dict[str, float | None] = {}
+            for column, label in POWER_PARAMS.items():
+                index = _resolve_index(cmap, POWER_PARAM_ALIASES.get(column, (column,)))
+                value = _mean(_nums(rows, index))
+                means[column] = value
+                row_params.append(
+                    {
+                        "key": column,
+                        "name": label,
+                        "unit": _POWER_UNITS.get(column, ""),
+                        "mean": value,
+                    }
+                )
+
+            frequency_index = _resolve_index(
+                cmap, POWER_PARAM_ALIASES.get("PowerFrequencyHz", ("PowerFrequencyHz",))
+            )
+            frequency_values = _nums(rows, frequency_index)
+            low, high = POWER_FREQUENCY_BAND
+            passed = sum(1 for value in frequency_values if low <= value <= high)
+            violations = [
+                label
+                for column, label, base_low, base_high in POWER_BASELINE
+                if _power_baseline_violated(means.get(column), base_low, base_high)
+            ]
+
+            rows_out.append(
+                {
+                    "logical_id": item.logical_id,
+                    "name": dataset_display_name_of(item),
+                    "record_count": total,
+                    "params": row_params,
+                    # 无 PowerFrequencyHz 数据时合格率未定义 → null
+                    "frequency_pass_rate": _percent_or_none(passed, len(frequency_values)),
+                    "packet_loss_mean": means.get("Sensor_Packet_Loss_%"),
+                    "baseline_ok": not violations,
+                    "violations": violations,
+                }
+            )
+        return rows_out
+
+    @classmethod
+    def _power_component_matrix(
+        cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
+    ) -> list[dict[str, Any]]:
+        """D2：设备 / 系统 × 数据集 的样本量与风险占比矩阵。
+
+        先输出 ``kind="component"`` 的设备行，再输出 ``kind="system"`` 的系统行；
+        每行只列实际覆盖到该设备/系统的数据集（count > 0）。
+        """
+        by_component: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        by_system: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        for item in by_logical.values():
+            fields, rows = cls._dataset_columns(reader, item)
+            cmap = _field_index(fields)
+            target_index = cmap.get("Target_Event")
+            for component, values in _grouped_pairs(rows, cmap.get("Component"), target_index).items():
+                by_component[component][item.logical_id].extend(values)
+            for system, values in _grouped_pairs(rows, cmap.get("SystemName"), target_index).items():
+                by_system[system][item.logical_id].extend(values)
+        return _component_matrix_rows(by_component, "component") + _component_matrix_rows(
+            by_system, "system"
+        )
+
+    @classmethod
+    def _flight_profile(
+        cls,
+        reader: _DatasetReader,
+        by_logical: dict[str, Dataset],
+        modeling_by_logical: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """舰面调度数据画像：以去重后的载体数据集为准（同源三份只算一份）。"""
         item = by_logical.get(CARRIER_CANONICAL) or next(iter(by_logical.values()), None)
         fields, rows = cls._dataset_columns(reader, item)
@@ -1161,7 +1769,9 @@ class DashboardService(ServiceBase):
         collision_index = cmap.get("Collision")
         distance_index = cmap.get("inter_dist_min")
         collision_values = _raw_values(rows, collision_index)
-        collision_count = sum(1 for value in collision_values if _label_is_risk(value))
+        collision_count = sum(
+            1 for value in collision_values if _label_is_risk(item.logical_id, value)
+        )
 
         distance_curve = []
         for step in range(1, 51):
@@ -1176,7 +1786,9 @@ class DashboardService(ServiceBase):
                     continue
                 value = _num(row[distance_index])
                 if value is not None:
-                    paired.append((_label_is_risk(row[collision_index]), value))
+                    paired.append(
+                        (_label_is_risk(item.logical_id, row[collision_index]), value)
+                    )
 
         comparison = {}
         for label, want_risk in (("collision", True), ("normal", False)):
@@ -1224,11 +1836,96 @@ class DashboardService(ServiceBase):
                 "dataset": item.logical_id if item is not None else None,
                 "note": "carrier 三份为同源衍生，本页只按其中一份统计，避免 3 倍重复计数",
             },
+            # ---- D1：同源编码族（每份文件一行，标注编码形态与一致性）----
+            "encoding_family": cls._flight_encoding_family(
+                reader, by_logical, modeling_by_logical
+            ),
+            # ---- D2：冗余度（文件数 vs 有效组数）----
+            "redundancy": cls._flight_redundancy(reader, by_logical),
         }
 
     @classmethod
-    def _geological_profile(cls, reader: _DatasetReader, by_logical: dict[str, Dataset]) -> dict[str, Any]:
-        """地质风险数据画像：主集地形因子 + 各数据集标签 + 全球灾害目录分类。"""
+    def _flight_encoding_family(
+        cls,
+        reader: _DatasetReader,
+        by_logical: dict[str, Dataset],
+        modeling_by_logical: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """D1：同源编码族的逐文件画像。
+
+        ``encoding`` 由字段结构判定（paired / interval / numeric / unknown），
+        ``collision_consistent`` = 本文件风险样本数与同源组代表文件是否一致
+        （不一致说明「同一批样本的另一种编码」标签对不上，需要治理）。
+        """
+        modeling_by_logical = modeling_by_logical or {}
+        groups = _effective_groups(list(by_logical.values()))
+        source_group_of = {
+            entry.id: group_key for group_key, group in groups.items() for entry in group
+        }
+        representative_risk = {
+            group_key: reader.label_stats(_representative(group))[1]
+            for group_key, group in groups.items()
+        }
+        family: list[dict[str, Any]] = []
+        for entry in by_logical.values():
+            entry_fields = reader.fields(entry)
+            total, risk = reader.label_stats(entry)
+            group_key = source_group_of.get(entry.id) or _group_key(entry)
+            modeling = modeling_by_logical.get(entry.logical_id) or {}
+            family.append(
+                {
+                    "logical_id": entry.logical_id,
+                    "name": dataset_display_name_of(entry),
+                    "source_group": group_key,
+                    "encoding": _flight_encoding(
+                        entry_fields,
+                        resolve_dataset_path(entry.file_path),
+                        entry.label_field,
+                    ),
+                    "attribute_count": len(entry_fields),
+                    "record_count": total,
+                    "risk_count": risk,
+                    "collision_consistent": risk == representative_risk.get(group_key),
+                    "published_model_count": modeling.get("published", 0),
+                }
+            )
+        return family
+
+    @classmethod
+    def _flight_redundancy(
+        cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
+    ) -> dict[str, Any]:
+        """D2：冗余度 = 1 - 有效同源组数 / 文件数；同时给出原始与去重后样本量。"""
+        groups = _effective_groups(list(by_logical.values()))
+        file_count = len(by_logical)
+        effective_group_count = len(groups)
+        raw_samples = sum(reader.label_stats(entry)[0] for entry in by_logical.values())
+        deduped_samples = sum(
+            reader.label_stats(_representative(group))[0] for group in groups.values()
+        )
+        return {
+            "file_count": file_count,
+            "effective_group_count": effective_group_count,
+            # 无文件时冗余率未定义 → null，避免与真实的「零冗余」混淆
+            "redundancy_rate": (
+                round(1 - effective_group_count / file_count, 4) if file_count else None
+            ),
+            "raw_samples": raw_samples,
+            "deduped_samples": deduped_samples,
+        }
+
+    @classmethod
+    def _geological_profile(
+        cls,
+        reader: _DatasetReader,
+        by_logical: dict[str, Dataset],
+        modeling_by_logical: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """地质风险数据画像：主集地形因子 + 各数据集标签 + 全球灾害目录分类。
+
+        另输出「数据集角色分工」（roles）与「因子覆盖/分箱一致性」（factor_coverage），
+        用于回答「这一族异构数据集各自承担什么职责、哪些因子能横向对齐」。
+        """
         main = by_logical.get("dis_raw_data")
         main_fields, main_rows = cls._dataset_columns(reader, main)
         cmap = _field_index(main_fields)
@@ -1248,6 +1945,47 @@ class DashboardService(ServiceBase):
             "country": _top(_raw_values(catalog_rows, catalog.get("country_name")), 8),
         }
 
+        modeling_by_logical = modeling_by_logical or {}
+        roles: list[dict[str, Any]] = []
+        for entry in by_logical.values():
+            info = reader.describe(entry)
+            modeling = modeling_by_logical.get(entry.logical_id) or {}
+            roles.append(
+                {
+                    "logical_id": entry.logical_id,
+                    "name": info["name"],
+                    "role": GEO_DATASET_ROLES.get(entry.logical_id, GEO_ROLE_UNCLASSIFIED),
+                    "attribute_count": info["attribute_count"],
+                    "label_field": info["label_field"],
+                    "label_kind": info["label_kind"],
+                    # 是否有任何模型版本引用（含草稿）——「数据白躺」判定
+                    "participates_in_training": modeling.get("total", 0) > 0,
+                    # 是否登记为风险口径（未登记 → 不产风险事件，如 dis_global_catalog）
+                    "produces_risk_events": info["caliber_registered"],
+                    "record_count": info["record_count"],
+                    "risk_rate": info["risk_rate"],
+                }
+            )
+
+        factor_coverage: list[dict[str, Any]] = []
+        for factor in GEO_FACTORS:
+            covered: list[str] = []
+            definitions: list[tuple] = []
+            for entry in by_logical.values():
+                for field in reader.fields(entry):
+                    if _clean(field.get("name")) == factor:
+                        covered.append(entry.logical_id)
+                        definitions.append(tuple(field.get("enum_values") or ()))
+                        break
+            factor_coverage.append(
+                {
+                    "factor": factor,
+                    "datasets": covered,
+                    # 只有 0/1 个数据集含该因子时视为一致（无可比对象）
+                    "consistent_binning": len(set(definitions)) <= 1,
+                }
+            )
+
         return {
             "factors": factors,
             "factor_count": sum(1 for item in factors if item["stats"]),
@@ -1257,6 +1995,10 @@ class DashboardService(ServiceBase):
                 "catalog": "dis_global_catalog",
                 "note": "数据集无「区域」字段，坡度相关口径一律按真实字段 Slope 分档",
             },
+            # ---- D1：数据集角色分工 ----
+            "roles": roles,
+            # ---- D2：因子覆盖与分箱一致性 ----
+            "factor_coverage": factor_coverage,
         }
 
     # ------------------------------------------------------------------
@@ -1277,7 +2019,10 @@ class DashboardService(ServiceBase):
         thresholds = risk_view.load_thresholds(self.db, current_user)
         summary = _event_summary(events, thresholds=thresholds, scenario_id=scenario_id)
 
-        dataset = self.db.scalar(
+        # 一次取回该场景「当前账号可见」的数据集列表：既取首个作为代表数据集，也作为
+        # 地质工作台的同源兄弟集合。不用 dataset.scenario.datasets —— 那条 relationship
+        # 绕过可见性收窄，会把他人 personal 数据集元信息泄漏进 dataset_prior。
+        visible_datasets = self.db.scalars(
             select(Dataset)
             .where(
                 Dataset.scenario_id == scenario_id,
@@ -1285,7 +2030,8 @@ class DashboardService(ServiceBase):
                 Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
             )
             .order_by(Dataset.id)
-        )
+        ).all()
+        dataset = visible_datasets[0] if visible_datasets else None
         risk_type = events[0].risk_type if events else (DATASET_RISK_TYPES.get(dataset.logical_id) if dataset else None)
         key = _scenario_key(scenario.code, risk_type)
 
@@ -1311,13 +2057,14 @@ class DashboardService(ServiceBase):
         elif key == "flight_deck":
             data.update(self._flight_workspace(events))
         elif key == "geological":
-            data.update(self._geological_workspace(events, dataset))
+            data.update(self._geological_workspace(events, dataset, visible_datasets))
         return ok(data=data)
 
     def _activity_trend(self, current_user, dataset: Dataset | None) -> list[dict[str, Any]]:
-        """近 7 天推理活动趋势（occurred_at = 推理时间，代表使用量）。"""
+        """近 ACTIVITY_TREND_DAYS 天推理活动趋势（occurred_at = 推理时间，代表使用量）。"""
+        days = ACTIVITY_TREND_DAYS
         today = datetime.now(timezone.utc).date()
-        start = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc)
+        start = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(), tzinfo=timezone.utc)
         stmt = select(InferenceRecord).where(InferenceRecord.executed_at >= start)
         if getattr(current_user, "role", None) == ROLE_SCENARIO_USER:
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
@@ -1328,7 +2075,7 @@ class DashboardService(ServiceBase):
         records = self.db.scalars(stmt).all()
         buckets = {
             (today - timedelta(days=offset)).isoformat(): {"total": 0, "risk": 0}
-            for offset in range(6, -1, -1)
+            for offset in range(days - 1, -1, -1)
         }
         for record in records:
             if not record.executed_at:
@@ -1432,7 +2179,9 @@ class DashboardService(ServiceBase):
         }
 
     @classmethod
-    def _geological_workspace(cls, events: list[RiskEvent], dataset: Dataset | None) -> dict[str, Any]:
+    def _geological_workspace(
+        cls, events: list[RiskEvent], dataset: Dataset | None, siblings: list[Dataset]
+    ) -> dict[str, Any]:
         """地质工作台：因子贡献、触发因素、坡度档位风险排行、静态先验画像。"""
         # 因子贡献：告警样本的因子均值做 0-100 归一
         factor_means: list[dict[str, Any]] = []
@@ -1472,15 +2221,8 @@ class DashboardService(ServiceBase):
         prior = []
         if dataset is not None:
             reader = _DatasetReader()
-            siblings = (
-                [
-                    item
-                    for item in dataset.scenario.datasets
-                    if item.status == DATASET_STATUS_ACTIVE
-                ]
-                if getattr(dataset, "scenario", None) is not None
-                else []
-            )
+            # siblings 由调用方传入，已按 status + visibility 收窄（与代表数据集同口径）；
+            # 不要改用 dataset.scenario.datasets，那条 relationship 会绕过可见性过滤。
             # 只保留「标签字段为风险标签」的数据集：dis_global_catalog 的标签是 landslide_size（灾害规模），
             # 若计入会让「先验风险占比」出现恒 100% 的无意义值。
             prior = [

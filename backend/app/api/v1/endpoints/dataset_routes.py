@@ -5,12 +5,10 @@
 上传新数据集 → 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）；
 修改版本/停用/删除 → 仅 ADMIN。
 """
-from typing import Any, Dict, List, Optional
-
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin, require_scenario_admin
+from app.api.deps import get_current_user, require_scenario_admin
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -29,7 +27,7 @@ router = APIRouter(prefix="/datasets", tags=["数据集管理"])
 def list_datasets(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
-    scenario_id: Optional[int] = Query(None, description="按场景过滤"),
+    scenario_id: int | None = Query(None, description="按场景过滤"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
 ):
@@ -129,8 +127,8 @@ async def upload_dataset(
     logical_id: str = Form(..., description="数据集逻辑 ID"),
     scenario_id: int = Form(..., description="所属场景 ID"),
     label_field: str = Form(..., description="标签字段名"),
-    name: Optional[str] = Form(None, description="数据集展示名（面向用户的中文名，可缺省）"),
-    visibility: Optional[str] = Form(None, description="可见性 platform/company/personal"),
+    name: str | None = Form(None, description="数据集展示名（面向用户的中文名，可缺省）"),
+    visibility: str | None = Form(None, description="可见性 platform/company/personal"),
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):

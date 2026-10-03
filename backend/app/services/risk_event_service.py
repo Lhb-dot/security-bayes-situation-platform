@@ -15,7 +15,6 @@
 5. 历史风险事件不得被无痕删除或自动改写（需求 5.2 访问控制第 4 条）→ 不提供删除。
 """
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
 
 from sqlalchemy import select
 
@@ -30,14 +29,17 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services import risk_view
 from app.services.constants import (
     DATASET_RISK_TYPES,
+    DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     RISK_EVENT_STATUS_PENDING,
+    RISK_LEVEL_HIGH,
+    RISK_LEVEL_LOW,
+    RISK_LEVEL_MEDIUM,
     RISK_EVENT_STATUS_TRANSITIONS,
     RISK_TYPE_FLIGHT_DECK,
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
-    ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
 )
@@ -74,7 +76,8 @@ class RiskEventService(ServiceBase):
             if (
                 event.scenario_id != getattr(current_user, "scenario_id", None)
                 or dataset is None
-                or dataset.visibility not in ("platform", "company")
+                or dataset.visibility
+                not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
             ):
                 raise ServiceError(403, "无权限操作")
             return
@@ -111,7 +114,7 @@ class RiskEventService(ServiceBase):
 
     @staticmethod
     def _calc_fault_position(
-        dataset_logical_id: str, input_features: Optional[Dict]
+        dataset_logical_id: str, input_features: dict | None
     ) -> tuple:
         """计算航母甲板故障点坐标（需求 V3.0 §7.4.1）。
 
@@ -144,38 +147,50 @@ class RiskEventService(ServiceBase):
     def _build_description(
         dataset_logical_id: str,
         prediction_label: str,
-        input_features: Dict,
+        input_features: dict,
         risk_score: float,
     ) -> str:
         """生成风险事件解释文本（需求 V3.0 §5.7.2：结合场景特征生成有信息量的说明）。
 
-        模板按场景差异化（含风险评分、风险等级与关键特征值），面向业务人员，
+        模板按场景差异化（含风险评分与关键特征值），面向业务人员，
         不使用 softmax/对数似然等算法术语（§5.7.3）；解释文本随事件持久化保存。
         特征值只读取输入特征中存在且非空的键，缺失时跳过该句，不虚构数据。
         """
         feats = input_features if isinstance(input_features, dict) else {}
         risk_type = DATASET_RISK_TYPES.get(dataset_logical_id)
 
-        def _f(name: str):
-            v = feats.get(name)
-            return None if v in (None, "", "?") else v
+        def _pick(*names: str):
+            """按候选键名取第一个存在且非空的值（不同数据集的同义字段名不同，需要别名回退）。
+
+            不能用 `a or b` 回退：0 是有效值（如流入字节数 0），会被 or 当成缺失吞掉，
+            于是同一数据集里字符串 "0" 会输出、数字 0 不输出。
+            """
+            for name in names:
+                v = feats.get(name)
+                if v not in (None, "", "?"):
+                    return v
+            return None
 
         # 只记分数，不记等级：等级是**视角相关**的（按查看者阈值重算），
         # 写进历史正文会与查看者当前看到的等级自相矛盾。
-        head = f"（风险评分：{risk_score}）"
+        # 分数按百分比格式化 —— 裸插 float 会把 0.9999999999998914 这类浮点误差写进正文；
+        # 该文本固化入库、事后改不了，历史数据由前端 utils/explanationText.ts 兜底清洗。
+        head = f"（风险评分：{risk_score:.1%}）"
 
         if risk_type == RISK_TYPE_POWER:
             # §5.7.2 电力：受影响设备/所属系统/问题现象(IssueType)/当前电压
             bits = [f"该样本被判定为形成电力系统风险{head}"]
-            component, system = _f("Component"), _f("SystemName")
-            issue, voltage = _f("IssueType"), _f("VoltageLevel_kV")
-            if component:
+            component = _pick("Component")
+            system = _pick("SystemName")
+            issue = _pick("IssueType")
+            voltage = _pick("VoltageLevel_kV")
+            if component is not None:
                 bits.append(f"受影响设备：{component}")
-            if system:
+            if system is not None:
                 bits.append(f"所属系统：{system}")
-            if issue:
+            if issue is not None:
                 bits.append(f"问题现象：{issue}")
-            if voltage:
+            if voltage is not None:
                 bits.append(f"当前电压 {voltage} kV")
             bits.append("建议核实相关设备是否存在越限或异常，并检查关联监测数据")
             return "，".join(bits) + "。"
@@ -183,35 +198,38 @@ class RiskEventService(ServiceBase):
         if risk_type == RISK_TYPE_NETWORK:
             # §5.7.2 网络：目标端口/协议/字节数/重传等明显异常特征
             bits = [f"该网络流量样本被判定为网络安全风险{head}"]
-            dport = _f("L4_DST_PORT") or _f("dst_port")
-            proto = _f("PROTOCOL") or _f("protocol_type")
-            in_bytes = _f("IN_BYTES") or _f("src_bytes")
-            retrans = _f("RETRANSMITTED_IN_BYTES") or _f("dst_bytes")
-            if dport:
+            dport = _pick("L4_DST_PORT", "dst_port")
+            proto = _pick("PROTOCOL", "protocol_type")
+            in_bytes = _pick("IN_BYTES", "src_bytes")
+            # 只认真正的重传字段。KDD 系的 dst_bytes 是「目标→源」反向流量、不是重传，
+            # 拿它冒充会写出「流入方向重传 0 字节，重传率偏高」这种自相矛盾的话；
+            # 而「偏高」本身也无从判断（没有重传率字段），所以只陈述字节数、不下结论。
+            retrans = _pick("RETRANSMITTED_IN_BYTES")
+            if dport is not None:
                 bits.append(f"目标端口 {dport} 收到异常流量")
-            if proto:
+            if proto is not None:
                 bits.append(f"协议类型为 {proto}")
-            if in_bytes:
+            if in_bytes is not None:
                 bits.append(f"流入字节数 {in_bytes}")
-            if retrans:
-                bits.append(f"流入方向重传 {retrans} 字节，重传率偏高")
+            if retrans is not None:
+                bits.append(f"流入方向重传 {retrans} 字节")
             bits.append("建议重点关注该连接是否存在扫描或攻击行为")
             return "，".join(bits) + "。"
 
         if risk_type == RISK_TYPE_GEOLOGICAL:
             # §5.7.2 地质：坡度/TWI/距断层距离/岩性等关键因子
             bits = [f"该区域被判定为存在滑坡风险{head}"]
-            slope = _f("Slope") or _f("slope")
-            twi = _f("TWI") or _f("twi")
-            dist_fault = _f("Dis2fault") or _f("DR")
-            lith = _f("Lithology") or _f("lithology")
-            if slope:
+            slope = _pick("Slope", "slope")
+            twi = _pick("TWI", "twi")
+            dist_fault = _pick("Dis2fault", "DR")
+            lith = _pick("Lithology", "lithology")
+            if slope is not None:
                 bits.append(f"坡度 {slope}°")
-            if twi:
+            if twi is not None:
                 bits.append(f"TWI（地形湿度指数）{twi}")
-            if dist_fault:
+            if dist_fault is not None:
                 bits.append(f"距断层距离 {dist_fault}")
-            if lith:
+            if lith is not None:
                 bits.append(f"岩性为 {lith}")
             bits.append("建议对该区域进行现场核查，并关注近期降雨情况")
             return "，".join(bits) + "。"
@@ -219,15 +237,19 @@ class RiskEventService(ServiceBase):
         if risk_type == RISK_TYPE_FLIGHT_DECK:
             # §5.7.2 航母：最小间距/接近率/航向角偏差等关键轨迹特征
             bits = [f"该双机协同作业样本被判定为存在碰撞风险{head}"]
-            min_dist = _f("inter_dist_min")
-            dist_change = _f("dist_change_mean") or _f("dist_change")
-            plane1 = _f("Plane1_dir_mean_deg")
-            plane2 = _f("Plane2_dir_mean_deg")
-            if min_dist:
+            min_dist = _pick("inter_dist_min")
+            dist_change = _pick("dist_change_mean", "dist_change")
+            plane1 = _pick("Plane1_dir_mean_deg")
+            plane2 = _pick("Plane2_dir_mean_deg")
+            if min_dist is not None:
                 bits.append(f"最小间距 {min_dist}m")
-            if dist_change:
-                bits.append(f"接近率 {abs(float(dist_change))} m/s")
-            if plane1 and plane2:
+            if dist_change is not None:
+                # 原来这里没有 try：接近率取到非数值字符串时 float() 会直接抛异常
+                try:
+                    bits.append(f"接近率 {abs(float(dist_change))} m/s")
+                except (TypeError, ValueError):
+                    bits.append(f"接近率 {dist_change} m/s")
+            if plane1 is not None and plane2 is not None:
                 try:
                     diff = abs(float(plane1) - float(plane2))
                     bits.append(f"两机航向角偏差 {round(diff, 1)}°")
@@ -247,7 +269,7 @@ class RiskEventService(ServiceBase):
         record: InferenceRecord,
         model: ModelVersion,
         dataset: Dataset,
-        risk_score: Optional[float],
+        risk_score: float | None,
     ) -> RiskEvent:
         """公开入口：根据推理结果生成风险事件（由 InferenceRecordService 调用）。
 
@@ -329,18 +351,35 @@ class RiskEventService(ServiceBase):
     def get_list(
         self,
         current_user,
-        scenario_id: Optional[int] = None,
-        status: Optional[str] = None,
+        scenario_id: int | None = None,
+        status: str | None = None,
+        risk_level: str | None = None,
+        include_hidden: bool = False,
         page: int = 1,
         page_size: int = 10,
     ):
         """风险事件列表。
 
-        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态过滤）；
+        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态/等级过滤）；
         - SCENARIO_ADMIN：自己场景内全部事件；
         - SCENARIO_USER：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
+
+        已隐藏（`hidden_at` 非空）的事件默认不出现在列表里，`include_hidden=True` 才带上
+        —— 隐藏是可见性开关，不是删除（见 :meth:`set_hidden`）。
+
+        risk_level 过滤按**查看者**阈值判级（见 risk_view），等价条件随账号阈值变化，
+        无法写进 SQL，因此传了该参数时先取轻量投影在 Python 侧判级，再对命中的 id
+        切片分页；未传时仍走常规 SQL 分页，行为与之前完全一致。
         """
         self.require_login(current_user)
+        if risk_level is not None and risk_level not in (
+            RISK_LEVEL_HIGH,
+            RISK_LEVEL_MEDIUM,
+            RISK_LEVEL_LOW,
+        ):
+            raise ServiceError(400, "风险等级取值无效")
+        page = max(1, int(page or 1))
+        page_size = min(max(1, int(page_size or 10)), 200)
         role = getattr(current_user, "role", None)
         stmt = select(RiskEvent)
         if role == ROLE_SUPER_ADMIN:
@@ -355,7 +394,9 @@ class RiskEventService(ServiceBase):
                 raise ServiceError(403, "无权限操作")
             stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
                 RiskEvent.scenario_id == bound,
-                Dataset.visibility.in_(("platform", "company")),
+                Dataset.visibility.in_(
+                    (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
+                ),
             )
         else:
             stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
@@ -364,10 +405,44 @@ class RiskEventService(ServiceBase):
                 stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         if status is not None:
             stmt = stmt.where(RiskEvent.status == status)
-        stmt = stmt.order_by(RiskEvent.occurred_at.desc())
-        result = paginate(self.db, stmt, page, page_size)
+        # 已隐藏的默认不查（隐藏是可见性开关，不是删除）
+        if not include_hidden:
+            stmt = stmt.where(RiskEvent.hidden_at.is_(None))
         # risk_level 按**查看者**的阈值重算：落库值是创建者视角，不能直接透传。
         thresholds = risk_view.load_thresholds(self.db, current_user)
+        if risk_level is not None:
+            rows = self.db.execute(
+                stmt.order_by(RiskEvent.occurred_at.desc()).with_only_columns(
+                    RiskEvent.id,
+                    RiskEvent.risk_score,
+                    RiskEvent.risk_level,
+                    RiskEvent.scenario_id,
+                )
+            ).all()
+            matched_ids = [
+                row.id
+                for row in rows
+                if risk_view.level_of(row, thresholds) == risk_level
+            ]
+            page_ids = matched_ids[(page - 1) * page_size : page * page_size]
+            events = (
+                list(self.db.scalars(select(RiskEvent).where(RiskEvent.id.in_(page_ids))).all())
+                if page_ids
+                else []
+            )
+            # in_() 不保证顺序，按 occurred_at desc 的切片顺序还原
+            rank = {rid: index for index, rid in enumerate(page_ids)}
+            events.sort(key=lambda event: rank.get(event.id, 0))
+            return ok(
+                data={
+                    "items": risk_view.view_events(events, thresholds),
+                    "total": len(matched_ids),
+                    "page": page,
+                    "page_size": page_size,
+                }
+            )
+        stmt = stmt.order_by(RiskEvent.occurred_at.desc())
+        result = paginate(self.db, stmt, page, page_size)
         result["items"] = risk_view.view_events(result["items"], thresholds)
         return ok(data=result)
 
@@ -391,12 +466,13 @@ class RiskEventService(ServiceBase):
         current_user,
         event_id: int,
         new_status: str,
-        comment: Optional[str] = None,
+        comment: str | None = None,
     ):
         """更新风险事件处置状态，并写入处置记录（handling_record）。
 
-        状态流转：PENDING → PROCESSING → RESOLVED（由 RISK_EVENT_STATUS_TRANSITIONS 约束）。
-        USER 仅能处置本人事件；ADMIN 可处置全部。
+        状态流转由 RISK_EVENT_STATUS_TRANSITIONS 约束（需求 5.2）：PENDING 可直达
+        PROCESSING 或 RESOLVED，PROCESSING → RESOLVED，RESOLVED 为终态。
+        USER 仅能处置本人事件；ADMIN 可处置其数据边界内的事件。
         """
         self.require_login(current_user)
         event = self._get(event_id)
@@ -454,3 +530,34 @@ class RiskEventService(ServiceBase):
         self.require_login(current_user)
         self._get(event_id)
         raise ServiceError(400, "历史风险事件不允许删除，需保持可追溯")
+
+    # ------------------------------------------------------------------
+    # 隐藏 / 取消隐藏：可见性开关（需求 5.2 禁止真删，所以给一个可逆的收起来动作）
+    # ------------------------------------------------------------------
+    @service_call
+    def set_hidden(self, current_user, event_id: int, hidden: bool):
+        """隐藏或取消隐藏风险事件（软删除，数据一行不动）。
+
+        为什么不是删除：需求 5.2 访问控制第 4 条要求历史事件不得被无痕删除或自动改写，
+        :meth:`delete` 因此永远返回 400。列表需要一个「把不要的行收起来」的动作，
+        于是改成可见性开关 —— ``hidden_at`` 非空即隐藏，置回 NULL 即恢复，
+        处置记录（handling_record）与统计口径全程不受影响。
+
+        权限与「处置」一致（:meth:`_require_event_access`）：能处置才谈得上隐藏。
+        统计口径**不跟着隐藏走** —— 仪表盘/报告仍把已隐藏事件算进去，
+        改口径属于另一件事（会影响历史报告数字），不在这里顺手做。
+        """
+        self.require_login(current_user)
+        event = self._get(event_id)
+        self._require_event_access(current_user, event)
+        if hidden:
+            event.hidden_at = datetime.now(timezone.utc)
+            event.hidden_by_user_id = getattr(current_user, "id", None)
+        else:
+            event.hidden_at = None
+            event.hidden_by_user_id = None
+        self.commit()
+        return ok(
+            data={"id": event.id, "hidden": hidden},
+            message="风险事件已隐藏" if hidden else "风险事件已取消隐藏",
+        )

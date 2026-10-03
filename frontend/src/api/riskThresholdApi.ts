@@ -5,7 +5,14 @@
  * 阈值按登录账号绑定；系统管理员可配置全部场景，其余账号仅配置绑定场景。
  */
 import request, { unwrapData } from '@/utils/request';
-import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/security';
+import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
+import type {
+  ApiThresholdChangeLog,
+  ApiThresholdConfig,
+  ScenarioId,
+  ThresholdChangeLog,
+  ThresholdConfig,
+} from '@/types/security';
 
 /**
  * 账号未配置该场景阈值时的兜底值（0~1）。
@@ -15,25 +22,17 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig } from '@/types/se
 export const DEFAULT_MEDIUM_THRESHOLD = 0.5;
 export const DEFAULT_HIGH_THRESHOLD = 0.8;
 
-const SCENARIO_ID_TO_CODE: Record<number, ScenarioId> = {
-  1: 'network_security',
-  2: 'power_system',
-  3: 'flightdeck_operation',
-  4: 'geological_risk',
-};
-const SCENARIO_CODE_TO_ID: Record<ScenarioId, number> = {
-  network_security: 1,
-  power_system: 2,
-  flightdeck_operation: 3,
-  geological_risk: 4,
-};
+/** 场景种子映射取逆：编码 → 数字 ID（后端 /scenarios 不可达时的兜底；种子表来自 scenarioApi） */
+const SCENARIO_CODE_TO_ID = Object.fromEntries(
+  Object.entries(SCENARIO_CODE_BY_ID).map(([id, code]) => [code, Number(id)])
+) as Record<ScenarioId, number>;
 interface ApiScenario {
   id: number;
   code: string;
 }
 
 let scenarioIdByCode: Partial<Record<ScenarioId, number>> | null = null;
-let scenarioCodeById: Record<number, ScenarioId> = { ...SCENARIO_ID_TO_CODE };
+let scenarioCodeById: Record<number, ScenarioId> = { ...SCENARIO_CODE_BY_ID };
 
 /** Resolve database scenario IDs instead of assuming sequence values. */
 const ensureScenarioMaps = async (): Promise<void> => {
@@ -52,12 +51,10 @@ const ensureScenarioMaps = async (): Promise<void> => {
   scenarioIdByCode = byCode;
 };
 
-type BackendThreshold = Omit<ThresholdConfig, 'scenario_id'> & { scenario_id: number | ScenarioId };
-const normalizeThreshold = (item: BackendThreshold): ThresholdConfig => ({
+/** 数字主键 → 场景编码；后端下发的 `scenario_id` 恒为数字，转换点只在此处。 */
+const normalizeThreshold = (item: ApiThresholdConfig): ThresholdConfig => ({
   ...item,
-  scenario_id: typeof item.scenario_id === 'number'
-    ? scenarioCodeById[item.scenario_id] ?? SCENARIO_ID_TO_CODE[item.scenario_id]
-    : item.scenario_id,
+  scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id],
 });
 const backendScenarioId = async (scenarioId: ScenarioId | number): Promise<number> => {
   await ensureScenarioMaps();
@@ -71,23 +68,15 @@ export const getRiskThresholds = async (): Promise<ThresholdConfig[]> => {
   return (Array.isArray(data) ? data : []).map(normalizeThreshold);
 };
 
-/** 按场景查询当前账号风险阈值（未配置时 data 为 null） */
-export const getRiskThreshold = async (scenarioId: ScenarioId): Promise<ThresholdConfig | null> =>
-  (async () => {
-    const data = await unwrapData(await request.get(`/api/v1/risk-thresholds/${await backendScenarioId(scenarioId)}`));
-    return data ? normalizeThreshold(data) : null;
-  })();
-
 /** 查询当前账号全部阈值修改记录 */
 export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]> => {
   await ensureScenarioMaps();
   const data = await unwrapData(
     await request.get('/api/v1/risk-thresholds/audit-logs', { params: { page: 1, page_size: 200 } }),
   );
-  type BackendAuditLog = Omit<ThresholdChangeLog, 'scenario_id'> & { scenario_id: number };
-  return (data.items ?? []).map((item: BackendAuditLog) => ({
+  return (data.items ?? []).map((item: ApiThresholdChangeLog) => ({
     ...item,
-    scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_ID_TO_CODE[item.scenario_id] ?? item.scenario_id,
+    scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id] ?? item.scenario_id,
   }));
 };
 

@@ -39,6 +39,7 @@ def _request_train(
         resp = requests.post(
             f"{url}/train",
             json={
+                "algorithm_code": algorithm_code,
                 "dataset_path": dataset_path,
                 "model_save_path": model_save_path,
                 "training_parameters": training_parameters or {},
@@ -48,11 +49,14 @@ def _request_train(
         )
         resp.raise_for_status()
         result = resp.json()
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as exc:
         raise RuntimeError(
             f"无法连接到 {algorithm_code} 算法服务（{url}），"
             "请先运行 start_all.ps1 启动 Java 算法服务"
-        )
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        # 超时 / HTTP 错误状态码原先以原始异常逃逸，最终只剩无信息的 500
+        raise RuntimeError(f"{algorithm_code} 算法服务请求失败（{url}）：{exc}") from exc
     if not result.get("success"):
         raise RuntimeError(result.get("error", f"{algorithm_code} 训练失败"))
     metrics = result["metrics"]
@@ -102,11 +106,10 @@ def execute_pmwnb_training(
     training_parameters: dict | None = None,
     risk_labels: list[str] | None = None,
 ) -> dict:
-    result = _request_train(
+    # _request_train 已按 algorithm_code 生成 source="java_pmwnb"，此处无需再覆盖。
+    return _request_train(
         PMWNB_SERVICE_URL, "PMWNB", dataset_path, model_save_path, training_parameters, risk_labels
     )
-    result["source"] = "java_pmwnb"
-    return result
 
 
 def build_model_save_path(model_id: int, algorithm_code: str = "PMWNB") -> str:
@@ -116,6 +119,7 @@ def build_model_save_path(model_id: int, algorithm_code: str = "PMWNB") -> str:
 
 def _request_predict(
     url: str,
+    algorithm_code: str,
     model_path: str,
     arff_path: str,
     features: dict,
@@ -129,6 +133,7 @@ def _request_predict(
         resp = requests.post(
             f"{url}/predict",
             json={
+                "algorithm_code": algorithm_code,
                 "model_path": model_path,
                 "arff_path": arff_path,
                 "features": features,
@@ -138,8 +143,11 @@ def _request_predict(
         )
         resp.raise_for_status()
         result = resp.json()
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(f"无法连接到 Java 预测服务（{url}）")
+    except requests.exceptions.ConnectionError as exc:
+        raise RuntimeError(f"无法连接到 Java 预测服务（{url}）") from exc
+    except requests.exceptions.RequestException as exc:
+        # 同上：超时 / HTTP 错误原先逃逸成无信息的 500
+        raise RuntimeError(f"Java 预测服务请求失败（{url}）：{exc}") from exc
     if not result.get("success"):
         raise RuntimeError(result.get("error", "Java 预测失败"))
     return result["data"]
@@ -156,13 +164,4 @@ def execute_algorithm_predict(
     url = PREDICT_SERVICE_URL if code == "PMWNB" else ALGORITHM_SERVICE_URLS.get(code)
     if not url:
         raise RuntimeError(f"未配置 {code} 算法服务")
-    return _request_predict(url, model_path, arff_path, features, risk_labels)
-
-
-def execute_pmwnb_predict(
-    model_path: str,
-    arff_path: str,
-    features: dict,
-    risk_labels: list[str] | None = None,
-) -> dict:
-    return execute_algorithm_predict("PMWNB", model_path, arff_path, features, risk_labels)
+    return _request_predict(url, code, model_path, arff_path, features, risk_labels)

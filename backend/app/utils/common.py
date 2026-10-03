@@ -12,11 +12,14 @@
 import hashlib
 import hmac
 import logging
+import os
 import secrets
+import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -29,6 +32,28 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(f"app.services.{name}")
 
 
+def running_under_test_runner() -> bool:
+    """当前进程是否由测试框架启动（``python -m unittest`` / ``python -m pytest``）。
+
+    后台守护线程（调度器 / 执行器）在测试里不该起来：它们会连数据库、可能改数据。
+    判定**不能**只看 ``sys.modules`` 里有没有 ``unittest`` —— ``sklearn`` 会把它
+    import 进来，生产环境同样命中，那样执行器会被静默关掉。所以认 ``__main__`` 的 spec。
+    """
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    if getattr(spec, "name", None) in ("unittest.__main__", "pytest", "pytest.__main__"):
+        return True
+    # pytest 以 console script（``pytest.exe``）启动时 ``__main__.__spec__`` 为 None、
+    # ``argv[0]`` 基名是 ``pytest.exe``，上面两条判定都会漏 ⇒ 5 个后台 runner 会真启动
+    # 并连真实数据库（``training_runner.reap_stale()`` 会把真实库超时的 TRAINING 行改成
+    # FAILED）。生产进程不 import pytest，故该兜底不影响线上行为。
+    # 与 ``main.py`` 中「是否测试环境」的口径保持一致。
+    if "pytest" in sys.modules:
+        return True
+    # 直接执行 tests/test_xxx.py 时 __spec__ 为 None，按文件名兜底
+    argv0 = os.path.basename(sys.argv[0] or "")
+    return argv0.startswith("test_") and argv0.endswith(".py")
+
+
 # ---------------------------------------------------------------------------
 # 分页（SQLAlchemy 2.0 风格）
 # ---------------------------------------------------------------------------
@@ -38,7 +63,7 @@ def paginate(
     stmt,
     page: int = 1,
     page_size: int = 10,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """对 select() 语句执行分页，返回 {"items", "total", "page", "page_size"}。
 
     - 强制 page >= 1、1 <= page_size <= 200，防止非法参数。
@@ -84,7 +109,7 @@ def beijing_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     return to_beijing(datetime.now(timezone.utc)).strftime(fmt)
 
 
-def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
+def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
     - DateTime → YYYY-MM-DD HH:MM:SS（北京时间 UTC+8）
@@ -92,7 +117,7 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
     - JSONB / dict / list 原样保留
     - exclude 用于隐藏敏感字段（如 password_hash）
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for column in obj.__table__.columns:
         name = column.name
         if name in exclude:
@@ -114,7 +139,7 @@ def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> Dict[str, Any]:
 # 字段校验辅助
 # ---------------------------------------------------------------------------
 
-def validate_required(data: Dict[str, Any], fields: Sequence[str]) -> Optional[str]:
+def validate_required(data: dict[str, Any], fields: Sequence[str]) -> str | None:
     """校验必填字段：缺失 / None / 空字符串视为非法，返回错误文案或 None。"""
     for field in fields:
         value = data.get(field)
@@ -123,7 +148,7 @@ def validate_required(data: Dict[str, Any], fields: Sequence[str]) -> Optional[s
     return None
 
 
-def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> Optional[str]:
+def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> str | None:
     """校验枚举值域，非法时返回错误文案。"""
     if value not in allowed:
         return f"{field_name} 取值非法: {value}，允许值: {sorted(allowed)}"
@@ -132,7 +157,7 @@ def validate_enum(value: Any, allowed: Sequence[str], field_name: str) -> Option
 
 def validate_length(
     value: str, field_name: str, max_len: int, min_len: int = 1
-) -> Optional[str]:
+) -> str | None:
     """校验字符串长度（按字符数）。"""
     length = len(value or "")
     if length < min_len or length > max_len:
@@ -146,7 +171,7 @@ def validate_length(
 
 def validate_fields_schema(
     fields_schema: Any, label_field: str
-) -> Optional[str]:
+) -> str | None:
     """校验 fields_schema 结构（需求 3.1.2 / 3.1.5）。
 
     规则：必须是列表；label_field 必须存在且 role == "label"；至少含一个
@@ -156,7 +181,7 @@ def validate_fields_schema(
         return "fields_schema 必须是非空字段列表"
     feature_count = 0
     label_found = False
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for idx, field in enumerate(fields_schema):
         if not isinstance(field, dict) or not field.get("name"):
             return f"fields_schema 第 {idx + 1} 项缺少 name"
@@ -180,7 +205,7 @@ def validate_fields_schema(
     return None
 
 
-def validate_input_features(fields_schema: List[Dict], input_features: Any) -> Optional[str]:
+def validate_input_features(fields_schema: list[dict], input_features: Any) -> str | None:
     """校验单条推理输入（需求 3.1.3 / 3.1.5）。
 
     - 所有 role=feature 的字段必填；
@@ -205,8 +230,8 @@ def validate_input_features(fields_schema: List[Dict], input_features: Any) -> O
 
 
 def validate_params_schema(
-    param_schema: Any, params: Any
-) -> Optional[str]:
+    param_schema: Any, params: Any, dataset_has_numeric: bool = True
+) -> str | None:
     """校验训练参数（需求 6.6.3：参数必须提供默认值，管理员修改须通过类型和范围校验）。
 
     参数项结构（与算法注册的 param_schema 对齐）：
@@ -216,6 +241,9 @@ def validate_params_schema(
     - enum 按 enum_values 值域校验；
     - int/float 做类型转换与 min/max 范围校验；
     - bool 校验类型；str 仅做非空。
+
+    `dataset_has_numeric=False` 时，声明了 requires_numeric_features 的参数整项跳过 ——
+    它们对纯离散数据集不起作用，既不该必填，传了也不生效。
     """
     if not isinstance(params, dict):
         return "training_parameters 必须是 JSON 对象"
@@ -224,6 +252,8 @@ def validate_params_schema(
         return "param_schema 配置非法（必须是列表）"
     for item in schema:
         if not isinstance(item, dict) or not item.get("name"):
+            continue
+        if item.get("requires_numeric_features") and not dataset_has_numeric:
             continue
         name = item["name"]
         required = bool(item.get("required", False))
@@ -251,6 +281,42 @@ def validate_params_schema(
             if not isinstance(value, bool):
                 return f"训练参数 {name} 必须是布尔值"
     return None
+
+
+# 数据集字段结构里代表数值型的 type 取值（fields_schema 由 ARFF 解析产生）。
+NUMERIC_FIELD_TYPES = frozenset({"numeric", "real", "float", "double", "int", "integer", "number"})
+
+
+def dataset_has_numeric_features(fields_schema: Any) -> bool:
+    """数据集是否存在数值型输入特征。
+
+    原始研究算法按离散属性工作，平台用 Weka Discretize 把数值特征分箱后再喂给它们；
+    数据集若本身不含数值特征，分箱过滤器无从下手，相关的离散化参数不会产生任何效果。
+    """
+    for field in fields_schema or []:
+        if not isinstance(field, dict) or field.get("role") != "feature":
+            continue
+        if str(field.get("type", "")).lower() in NUMERIC_FIELD_TYPES:
+            return True
+    return False
+
+
+def strip_inapplicable_params(param_schema: Any, params: Any, dataset_has_numeric: bool) -> Any:
+    """剔除对当前数据集无作用的训练参数。
+
+    param_schema 中声明 `requires_numeric_features: true` 的参数只在数据集含数值特征
+    时才生效。剔除后既不会让填写者以为参数起了作用，模型记录的也是真实生效的参数集合。
+    """
+    if not isinstance(params, dict) or dataset_has_numeric:
+        return params
+    inapplicable = {
+        item.get("name")
+        for item in (param_schema or [])
+        if isinstance(item, dict) and item.get("requires_numeric_features")
+    }
+    if not inapplicable:
+        return params
+    return {key: value for key, value in params.items() if key not in inapplicable}
 
 
 # ---------------------------------------------------------------------------

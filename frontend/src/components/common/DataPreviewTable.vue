@@ -11,6 +11,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { attachOuterFirstWheel } from '@/utils/scrollChain';
+import { keepScroll } from '@/utils/scrollAnchor';
 
 const props = withDefaults(
   defineProps<{
@@ -79,6 +80,9 @@ watch(tableWrapRef, (el) => {
   if (el) detachWheel = attachOuterFirstWheel(el);
 });
 
+/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+const changePage = (target: number) => keepScroll(() => loadPage(target), tableWrapRef.value);
+
 onBeforeUnmount(() => {
   detachWheel?.();
   detachWheel = null;
@@ -87,8 +91,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="data-preview">
-    <!-- 加载状态 -->
-    <div v-if="loading" class="data-preview__state">
+    <!-- 加载状态：只有还没有数据时才用整块状态卡。
+         翻页时保留表格、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <div v-if="loading && !rows.length" class="data-preview__state">
       <div class="loader"></div>
       <p>正在加载数据内容...</p>
     </div>
@@ -102,6 +107,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <p class="data-preview__tip">只读数据预览：每页最多 {{ pageSize }} 条，标签列已高亮。</p>
       <div ref="tableWrapRef" class="data-preview__table-wrap">
+        <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
         <el-table
           :data="rows"
           stripe
@@ -125,13 +131,14 @@ onBeforeUnmount(() => {
         </el-table>
       </div>
       <div class="data-preview__pager">
+        <span class="data-preview__pager-total">共 {{ total }} 条</span>
         <el-pagination
           v-model:current-page="currentPage"
-          layout="total, prev, pager, next"
+          layout="prev, pager, next"
           :page-size="pageSize"
           :total="total"
           background
-          @current-change="loadPage"
+          @current-change="changePage"
         />
       </div>
     </template>
@@ -167,6 +174,7 @@ onBeforeUnmount(() => {
 }
 
 .data-preview__table-wrap {
+  position: relative; /* 翻页遮罩（.pane-loading）的定位上下文 */
   border: 1px solid rgba(125, 201, 255, 0.1);
   border-radius: 12px;
   overflow: hidden;
@@ -175,7 +183,16 @@ onBeforeUnmount(() => {
 
 .data-preview__pager {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
+}
+
+/* el-pagination 默认 locale 是英文（layout 里带 total 会渲染成 "Total N"），
+   项目界面要求全中文，所以总数文案自己写。 */
+.data-preview__pager-total {
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 0.85rem;
 }
 </style>
 
@@ -196,9 +213,8 @@ onBeforeUnmount(() => {
 }
 
 .data-preview .el-table td.el-table__cell {
-  /* 使用不透明底色，避免横向滚动时内容从冻结列下方透出 */
+  /* 使用不透明底色：整表横向滚动，半透明底会让滚过的列互相透出 */
   background: #06101c !important;
-  background-color: #06101c !important;
   color: rgba(175, 198, 230, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
@@ -209,41 +225,6 @@ onBeforeUnmount(() => {
 }
 
 .data-preview .el-table__body tr:hover > td.el-table__cell {
-  background-color: #142c48 !important;
-}
-
-/* 固定列必须盖住滚动内容，避免横向滚动时发生视觉穿透 */
-.data-preview .el-table {
-  position: relative;
-}
-
-.data-preview .el-table__fixed,
-.data-preview .el-table__fixed-right {
-  z-index: 20 !important;
-  background: #06101c !important;
-}
-
-.data-preview .el-table__fixed::before,
-.data-preview .el-table__fixed-right::before {
-  background-color: #06101c !important;
-}
-
-.data-preview .el-table__fixed td.el-table__cell,
-.data-preview .el-table__fixed th.el-table__cell,
-.data-preview .el-table__fixed-right td.el-table__cell,
-.data-preview .el-table__fixed-right th.el-table__cell {
-  background: #06101c !important;
-  background-color: #06101c !important;
-}
-
-/* 固定列内部不依赖 .el-table--striped 祖先，确保 Element Plus 克隆表格也能匹配 */
-.data-preview .el-table__fixed tr.el-table__row--striped td.el-table__cell,
-.data-preview .el-table__fixed-right tr.el-table__row--striped td.el-table__cell {
-  background-color: #0a182c !important;
-}
-
-.data-preview .el-table__fixed .el-table__body tr:hover > td.el-table__cell,
-.data-preview .el-table__fixed-right .el-table__body tr:hover > td.el-table__cell {
   background-color: #142c48 !important;
 }
 
@@ -262,12 +243,6 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 冻结首列加一道阴影，避免和后续列糊在一起 */
-.data-preview .el-table__fixed,
-.data-preview .el-table__fixed-right {
-  box-shadow: 6px 0 12px rgba(0, 0, 0, 0.35);
-}
-
 .data-preview .el-table__empty-text {
   color: rgba(180, 200, 235, 0.3) !important;
 }
@@ -284,18 +259,11 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-/* 冻结列是覆盖在滚动内容之上的独立图层，标签单元格也必须使用不透明底色 */
-.data-preview .el-table__fixed .preview-label-cell,
-.data-preview .el-table__fixed-right .preview-label-cell {
-  background-color: #3a321b !important;
-  color: #ffd166 !important;
-}
-
 /* ---------------- 分页器（暗色） ----------------
    background 模式下页码按钮的底色来自 --el-pagination-button-bg-color（EP 默认 #f0f2f5）、
    禁用态来自 --el-pagination-button-disabled-bg-color（EP 默认 #fff），而页码文字用的是
-   我们覆盖过的浅色 —— 浅底浅字所以「看不清」；Total 文案走的是 --el-text-color-regular(#606266)，
-   深灰同样看不清。下面补齐这两组变量，并对文案/按钮做定点覆盖。 */
+   我们覆盖过的浅色 —— 浅底浅字所以「看不清」。下面补齐这组变量，并对按钮做定点覆盖。
+   （总数文案已改为自绘的「共 N 条」，见上方 .data-preview__pager-total，不再走 EP 的 total。） */
 .data-preview .el-pagination {
   --el-pagination-bg-color: rgba(8, 17, 31, 0.8);
   --el-pagination-button-bg-color: rgba(12, 26, 46, 0.9);
@@ -304,11 +272,6 @@ onBeforeUnmount(() => {
   --el-pagination-button-color: rgba(220, 234, 255, 0.75);
   --el-pagination-button-disabled-color: rgba(180, 200, 235, 0.28);
   --el-pagination-hover-color: #5ba6ff;
-}
-
-.data-preview .el-pagination__total,
-.data-preview .el-pagination__jump {
-  color: rgba(220, 234, 255, 0.6) !important;
 }
 
 .data-preview .el-pagination.is-background .el-pager li,

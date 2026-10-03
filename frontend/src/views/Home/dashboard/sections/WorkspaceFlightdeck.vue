@@ -41,12 +41,15 @@ const radarSeries = () => [
 </script>
 
 <template>
+  <!-- KPI：后两项的值已是 fmtNum 格式化结果，必须带 raw —— 否则 DashKpis 会再过一遍
+       fmtInt（fmtInt("0.87") → Number("0.87") → Math.round → "1"，小数被吞掉，
+       0.87 的风险分会显示成 100%）。 -->
   <DashKpis
     :items="[
       { label: '我的待处置告警', value: data.summary.pending, unit: '条', tone: 'danger', sub: '待处置' },
       { label: '今日新增', value: data.summary.today, unit: '条', tone: 'warning', sub: '今日新增' },
-      { label: '最小间距', value: data.min_inter_distance === null ? '—' : fmtNum(data.min_inter_distance, 1), unit: 'm', tone: 'primary', sub: '低于 100 m 需关注' },
-      { label: '最高模型风险分', value: fmtNum(data.summary.max_risk_score, 2), tone: 'purple', sub: '模型输出风险概率' },
+      { label: '最小间距', value: data.min_inter_distance === null ? '—' : fmtNum(data.min_inter_distance, 1), unit: 'm', tone: 'primary', sub: '低于 100 m 需关注', raw: true },
+      { label: '最高模型风险分', value: fmtNum(data.summary.max_risk_score, 2), tone: 'purple', sub: '模型输出风险概率', raw: true },
     ]"
   />
 
@@ -72,7 +75,7 @@ const radarSeries = () => [
     <DashCard title="最小间距分布" source="按最小间距分箱统计">
       <DashColumns :items="data.distance_distribution" :height="190" axis-unit="单位：条" />
     </DashCard>
-    <DashCard title="近 7 天推理活动趋势（条）" source="近 7 天按日聚合">
+    <DashCard title="近 10 天推理活动趋势（条）" source="近 10 天按日聚合">
       <DashLine
         :points="data.activity_trend.map((item) => ({ label: fmtDate(item.date), value: item.total, value2: item.risk }))"
         name="推理总数"

@@ -2,8 +2,8 @@
 /**
  * RiskEventDetailView.vue — 风险事件详情页（Task 012 / 需求 5.7）
  *
- * 五组信息：基本信息 / 模型溯源 / 推理详情 / 输入特征 / 可解释性文本。
- * 处置状态流转：待处置 → 处理中 → 已处置（已处置为终态禁用）。
+ * 三组信息：判定说明 / 基本信息 / 输入特征 —— 按「结论 → 属性与出处 → 原始数据」排列。
+ * 处置状态流转：待处置 → 处理中 → 已处置（已处置为终态禁用），入口在页头。
  * 解释文本为事件生成时固化存储，前端不拼接、不重算（需求 5.7.3.1/5.7.3.4）。
  */
 import { computed, onMounted, ref } from 'vue';
@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useRiskEventStore } from '@/stores/riskEventStore';
 import { useUserStore } from '@/stores/userStore';
+import { formatExplanation } from '@/utils/explanationText';
 import type { RiskEvent, RiskLevelUpper } from '@/types/security';
 import RiskLevelTag from '@/components/common/RiskLevelTag.vue';
 
@@ -33,13 +34,15 @@ const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
   geological_risk: '地质风险',
-  flightdeck_operation: '航母甲板',
+  flightdeck_operation: '舰面调度态势',
 };
 
-const riskLevelLabel: Record<RiskEvent['risk_level'], string> = {
-  HIGH: '高危',
-  MEDIUM: '中危',
-  LOW: '低危',
+/** 原始标签中文化（模型输出的原始类标；未收录的原样显示） */
+const ORIGINAL_LABEL: Record<string, string> = {
+  anomaly: '异常',
+  normal: '正常',
+  '1': '风险',
+  '0': '正常',
 };
 
 /** RiskLevelTag 需要小写等级，做显式映射（大写 → 小写） */
@@ -52,6 +55,21 @@ const tagLevel = computed<'critical' | 'high' | 'medium' | 'low'>(() =>
   event.value ? TAG_LEVEL[event.value.risk_level] : 'low'
 );
 
+/** 处置状态 → 徽章色调类名（避免把中文写进 class） */
+const STATUS_TONE: Record<string, string> = {
+  '待处置': 'pending',
+  '处理中': 'processing',
+  '已处置': 'resolved',
+};
+
+const scoreText = computed(() =>
+  event.value ? `${(event.value.risk_score * 100).toFixed(1)}%` : '--'
+);
+
+const originalLabelText = computed(() =>
+  event.value ? (ORIGINAL_LABEL[event.value.original_label] ?? event.value.original_label) : '--'
+);
+
 /** 创建者：优先经 userStore.users 映射用户名，未加载则显示 user_id */
 const creatorName = computed(() =>
   event.value
@@ -59,6 +77,15 @@ const creatorName = computed(() =>
         ?? event.value.created_by_user_id)
     : '--'
 );
+
+/**
+ * 后端文案常量（utils/request.js 把响应体 detail 原样塞进 Error.message）：
+ * 404 = risk_event_service._get「风险事件不存在」；403 = _require_event_access「无权限操作」。
+ * 旧代码比对的是「无权查看该事件 / 无权访问该场景」——后端从不产生这两条，
+ * 于是 denied 分支永远进不去，403 落到通用错误卡 + 一个必然失败的重试按钮。
+ */
+const NOT_FOUND_MESSAGE = '风险事件不存在';
+const DENIED_MESSAGE = '无权限操作';
 
 const loadData = async () => {
   loading.value = true;
@@ -69,8 +96,8 @@ const loadData = async () => {
     await riskEventStore.fetchDetail(eventId.value);
   } catch (err) {
     const msg = err instanceof Error ? err.message : '事件加载失败';
-    if (msg === '风险事件不存在') notFound.value = true;
-    else if (msg === '无权查看该事件' || msg === '无权访问该场景') denied.value = true;
+    if (msg === NOT_FOUND_MESSAGE) notFound.value = true;
+    else if (msg === DENIED_MESSAGE) denied.value = true;
     else error.value = msg;
   } finally {
     loading.value = false;
@@ -86,14 +113,20 @@ const nextStatus = computed<RiskEvent['status'] | null>(() => {
 });
 
 const handleStatusChange = async () => {
-  if (!event.value || !nextStatus.value) return;
+  // 先把目标状态取出来再 await：流转成功后 event.status 立刻变成新值，
+  // nextStatus 随之重算为 null，事后再拼进提示语就成了「已更新处置状态为「null」」。
+  const target = nextStatus.value;
+  if (!event.value || !target) return;
   try {
-    await riskEventStore.updateStatus(event.value.event_id, nextStatus.value);
-    ElMessage.success(`已更新处置状态为「${nextStatus.value}」`);
+    await riskEventStore.updateStatus(event.value.event_id, target);
+    ElMessage.success(`已更新处置状态为「${target}」`);
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '状态更新失败');
   }
 };
+
+/** 折叠状态下最多先展示多少条输入特征（超出部分点「展开全部」） */
+const FEATURE_PREVIEW_LIMIT = 50;
 
 /** 输入特征键值对（只读；超宽特征折叠滚动） */
 const featureEntries = computed<Array<{ key: string; value: string }>>(() =>
@@ -103,7 +136,7 @@ const featureEntries = computed<Array<{ key: string; value: string }>>(() =>
   }))
 );
 const visibleFeatureEntries = computed(() =>
-  featuresExpanded.value ? featureEntries.value : featureEntries.value.slice(0, 50)
+  featuresExpanded.value ? featureEntries.value : featureEntries.value.slice(0, FEATURE_PREVIEW_LIMIT)
 );
 
 onMounted(loadData);
@@ -136,7 +169,7 @@ onMounted(loadData);
     </section>
 
     <template v-else-if="event">
-      <!-- 头部 -->
+      <!-- 头部：身份 + 等级 + 状态 + 处置入口 -->
       <section class="card event-detail__head">
         <div>
           <p class="eyebrow">Risk Event Detail</p>
@@ -145,50 +178,41 @@ onMounted(loadData);
         </div>
         <div class="event-detail__head-actions">
           <RiskLevelTag :level="tagLevel" size="large" />
+          <span
+            class="event-detail__status"
+            :class="`event-detail__status--${STATUS_TONE[event.status] ?? 'pending'}`"
+          >
+            {{ event.status }}
+          </span>
+          <el-button v-if="nextStatus" type="primary" @click="handleStatusChange">
+            流转至「{{ nextStatus }}」
+          </el-button>
           <el-button plain @click="router.back()">返回</el-button>
         </div>
       </section>
 
-      <!-- 1 基本信息 -->
+      <!-- 1 判定说明 -->
+      <section class="card event-detail__card">
+        <h3 class="event-detail__card-title">判定说明</h3>
+        <p class="event-detail__explain">{{ formatExplanation(event.description) }}</p>
+      </section>
+
+      <!-- 2 基本信息：判定属性在前，数据出处在后 -->
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">基本信息</h3>
         <div class="event-detail__grid">
-          <div class="event-detail__item"><span>事件 ID</span><strong>{{ event.event_id }}</strong></div>
           <div class="event-detail__item"><span>所属场景</span><strong>{{ SCENARIO_LABEL[event.scenario_id] ?? event.scenario_id }}</strong></div>
-          <div class="event-detail__item"><span>数据集</span><strong>{{ event.dataset_id }}</strong></div>
-          <div class="event-detail__item"><span>风险类型</span><strong>{{ event.risk_type || '—' }}</strong></div>
-          <div class="event-detail__item"><span>风险等级</span><strong class="level-text">{{ riskLevelLabel[event.risk_level] }}</strong></div>
-          <div class="event-detail__item"><span>风险评分</span><strong>{{ Math.round(event.risk_score * 100) }}%</strong></div>
-          <div class="event-detail__item"><span>原始标签</span><strong>{{ event.original_label }}</strong></div>
+          <div class="event-detail__item"><span>风险评分</span><strong class="level-text">{{ scoreText }}</strong></div>
+          <div class="event-detail__item"><span>原始标签</span><strong>{{ originalLabelText }}</strong></div>
           <div class="event-detail__item"><span>发生时间</span><strong>{{ event.occurred_at }}</strong></div>
-          <div class="event-detail__item"><span>处置状态</span><strong :class="event.status === '已处置' ? 'status-done' : ''">{{ event.status }}</strong></div>
           <div v-if="event.fault_position_x != null" class="event-detail__item"><span>故障位置 X</span><strong>{{ event.fault_position_x }}</strong></div>
           <div v-if="event.fault_position_y != null" class="event-detail__item"><span>故障位置 Y</span><strong>{{ event.fault_position_y }}</strong></div>
-        </div>
-      </section>
-
-      <!-- 2 模型溯源 -->
-      <section class="card event-detail__card">
-        <h3 class="event-detail__card-title">模型溯源</h3>
-        <div class="event-detail__grid">
+          <div class="event-detail__item"><span>数据集</span><strong>{{ event.dataset_id }}</strong></div>
+          <div class="event-detail__item"><span>数据集版本</span><strong>{{ event.dataset_version }}</strong></div>
           <div class="event-detail__item"><span>模型版本</span><strong>{{ event.model_version_id }}</strong></div>
           <div class="event-detail__item"><span>算法</span><strong>{{ event.algorithm_id }}</strong></div>
-          <div class="event-detail__item"><span>数据集版本</span><strong>{{ event.dataset_version }}</strong></div>
-          <div class="event-detail__item"><span>创建者</span><strong>{{ creatorName }}</strong></div>
-        </div>
-      </section>
-
-      <!-- 3 推理详情 -->
-      <section class="card event-detail__card">
-        <h3 class="event-detail__card-title">推理详情</h3>
-        <div class="event-detail__grid">
           <div class="event-detail__item"><span>推理记录</span><strong>{{ event.inference_record_id }}</strong></div>
-          <div class="event-detail__item"><span>风险概率</span><strong>{{ Math.round(event.risk_score * 100) }}%</strong></div>
-          <div class="event-detail__item"><span>原始标签</span><strong>{{ event.original_label }}</strong></div>
-          <div class="event-detail__item">
-            <span>标签 vs 风险对照</span>
-            <strong>{{ event.original_label }} ↔ {{ riskLevelLabel[event.risk_level] }}（{{ Math.round(event.risk_score * 100) }}%）</strong>
-          </div>
+          <div class="event-detail__item"><span>创建者</span><strong>{{ creatorName }}</strong></div>
         </div>
       </section>
 
@@ -205,7 +229,7 @@ onMounted(loadData);
           </div>
         </div>
         <el-button
-          v-if="featureEntries.length > 50"
+          v-if="featureEntries.length > FEATURE_PREVIEW_LIMIT"
           size="small"
           plain
           class="event-detail__expand"
@@ -213,25 +237,6 @@ onMounted(loadData);
         >
           {{ featuresExpanded ? '收起' : `展开全部（${featureEntries.length} 项）` }}
         </el-button>
-      </section>
-
-      <!-- 5 可解释性文本 -->
-      <section class="card event-detail__card">
-        <h3 class="event-detail__card-title">可解释性文本</h3>
-        <p class="event-detail__explain">{{ event.description }}</p>
-        <p class="event-detail__hint">解释文本在事件生成时固化存储，不随阈值修改重算。</p>
-      </section>
-
-      <!-- 处置操作 -->
-      <section class="card event-detail__card">
-        <h3 class="event-detail__card-title">处置操作</h3>
-        <div class="event-detail__ops">
-          <span class="event-detail__ops-status">当前状态：{{ event.status }}</span>
-          <el-button v-if="nextStatus" type="primary" @click="handleStatusChange">
-            流转至「{{ nextStatus }}」
-          </el-button>
-          <el-tag v-else type="success" effect="dark">已处置</el-tag>
-        </div>
       </section>
     </template>
   </div>
@@ -254,22 +259,65 @@ onMounted(loadData);
 }
 
 .event-detail__head h2 {
-  margin: 8px 0 4px;
-  font-size: 1.45rem;
+  margin: 0 0 8px;
+  font-size: 1.6rem;
+  color: #c8deff;
 }
 
 .event-detail__id {
   margin: 0;
-  font-size: 0.85rem;
-  color: rgba(220, 234, 255, 0.55);
+  font-size: 0.95rem;
+  color: rgba(180, 200, 235, 0.55);
   font-variant-numeric: tabular-nums;
 }
 
 .event-detail__head-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 14px;
   flex-shrink: 0;
+}
+
+/* 尺寸与 RiskLevelTag 的 large 变体、以及同排按钮三者对齐：
+   min-width 80 / height 32 / padding 0 16 / 字号 0.85rem。
+   两个状态徽章等宽，换行时也不会参差。 */
+.event-detail__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 80px;
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 页头按钮与两个徽章统一为胶囊，尺寸同上 —— 这一行是「状态 + 动作」，
+   尺寸和形状不齐会显得散。 */
+.event-detail__head-actions :deep(.el-button) {
+  height: 32px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.event-detail__status--pending {
+  background: rgba(255, 177, 107, 0.12);
+  color: rgba(230, 180, 110, 0.9);
+}
+
+.event-detail__status--processing {
+  background: rgba(91, 166, 255, 0.12);
+  color: rgba(155, 195, 240, 0.9);
+}
+
+.event-detail__status--resolved {
+  background: rgba(83, 229, 200, 0.12);
+  color: rgba(83, 229, 200, 0.85);
 }
 
 .event-detail__card {
@@ -320,10 +368,6 @@ onMounted(loadData);
   color: #ffd166;
 }
 
-.event-detail__item .status-done {
-  color: #53e5c8;
-}
-
 /* 输入特征（超宽特征折叠滚动，避免卡顿） */
 .event-detail__features {
   display: grid;
@@ -372,28 +416,13 @@ onMounted(loadData);
   line-height: 1.7;
 }
 
-.event-detail__hint {
-  margin: 10px 0 0;
-  font-size: 0.78rem;
-  color: rgba(220, 234, 255, 0.45);
-}
-
-.event-detail__ops {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.event-detail__ops-status {
-  font-size: 0.9rem;
-  color: rgba(220, 234, 255, 0.75);
-}
-
 @media (max-width: 768px) {
   .event-detail__head {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .event-detail__head-actions {
+    justify-content: flex-start;
   }
   .event-detail__feature-row {
     grid-template-columns: 1fr;

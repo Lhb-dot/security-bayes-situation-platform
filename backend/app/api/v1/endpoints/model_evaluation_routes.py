@@ -3,6 +3,7 @@ import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.utils import unwrap
@@ -25,13 +26,15 @@ def get_model_evaluation(
     model_id: int,
     audience: str = "current",
     current_user: AppUser = Depends(get_current_user),
-    db=Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     """audience: current（当前角色）/ management（管理员视角）/ user（用户视角）。
 
     管理员可用 audience 切换查看另一视角；普通用户请求 management 会被拒绝。
     """
-    return unwrap(ModelEvaluationService(db).get_evaluation(current_user, model_id, audience))
+    return unwrap(
+        ModelEvaluationService(db).get_evaluation(current_user, model_id, audience)
+    )
 
 
 @router.post("/{model_id}/evaluation/stream", summary="流式生成模型版本的角色化 AI 评价")
@@ -39,7 +42,7 @@ def stream_model_evaluation(
     model_id: int,
     payload: ModelEvaluationRequest,
     current_user: AppUser = Depends(get_current_user),
-    db=Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     service = ModelEvaluationService(db)
     access = service.get_evaluation(current_user, model_id)
@@ -48,7 +51,11 @@ def stream_model_evaluation(
     try:
         evaluation_role = service.requested_role(current_user, payload.audience)
         if evaluation_role == "user" and access.data.get("status") != "PUBLISHED":
-            return unwrap(ResponseModel(code=403, data=None, message="未发布模型不能生成普通用户评价"))
+            return unwrap(
+                ResponseModel(
+                    code=403, data=None, message="未发布模型不能生成普通用户评价"
+                )
+            )
     except ServiceError as exc:
         return unwrap(ResponseModel(code=exc.code, data=None, message=exc.message))
 

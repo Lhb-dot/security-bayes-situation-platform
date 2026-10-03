@@ -1,10 +1,8 @@
 """用户管理路由（/api/v1/users）。
 
 对应 Service：UserService（backend/app/services/user_service.py）。
-权限（需求 6.5.2）：账号管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
+权限（需求 6.5.2）：用户管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
 """
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -35,11 +33,16 @@ def list_users(
     current_user: AppUser = Depends(require_scenario_admin),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=200, description="每页条数"),
-    keyword: Optional[str] = Query(None, description="用户名模糊搜索"),
-    role: Optional[str] = Query(
+    keyword: str | None = Query(None, description="用户名模糊搜索"),
+    role: str | None = Query(
         None,
         description="按角色筛选：SUPER_ADMIN / SCENARIO_ADMIN / SCENARIO_USER",
     ),
+    status: str | None = Query(
+        None,
+        description="按启用状态筛选：ENABLED / DISABLED",
+    ),
+    scenario_id: int | None = Query(None, description="按绑定场景筛选"),
 ):
     return unwrap(
         UserService(db).get_list(
@@ -48,6 +51,8 @@ def list_users(
             page_size=page_size,
             keyword=keyword,
             role=role,
+            status=status,
+            scenario_id=scenario_id,
         )
     )
 
@@ -60,19 +65,6 @@ def get_my_profile(
     current_user: AppUser = Depends(get_current_user),
 ):
     return unwrap(UserService(db).get_profile(current_user=current_user))
-
-
-@router.get(
-    "/{user_id}",
-    response_model=ResponseModel,
-    summary="查看用户详情（ADMIN 任意用户；USER 仅本人）",
-)
-def get_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: AppUser = Depends(get_current_user),
-):
-    return unwrap(UserService(db).get(current_user=current_user, user_id=user_id))
 
 
 @router.post(
@@ -97,13 +89,13 @@ def create_user(
 @router.put(
     "/{user_id}/scenario",
     response_model=ResponseModel,
-    summary="分配/修改用户绑定场景（仅管理员，V3.0 §1.1.6；普通用户登录后自动确定场景）",
+    summary="分配/修改用户绑定场景（仅平台超管 SUPER_ADMIN，V3.0 §1.1.6；场景用户登录后自动确定场景）",
 )
 def update_user_scenario(
     user_id: int,
     payload: UserUpdateScenario,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
+    current_user: AppUser = Depends(require_admin),
 ):
     return unwrap(
         UserService(db).update_scenario(

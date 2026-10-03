@@ -12,8 +12,12 @@
 
 兜底：账号在某场景没有配置阈值时，用 ``DEFAULT_MEDIUM/HIGH_THRESHOLD``（0.5 / 0.8），
 与 ``risk_event_service`` 原有的兜底保持一致。
+
+阈值层级：``risk_threshold`` 以 (user_id, scenario_id) 为业务主键，**只有账号级一层**，
+不存在场景级 / 平台级默认阈值行；未配置的 (账号, 场景) 一律走上面两个兜底常量。
+因此这里的"合并"只有两步：先取账号在该场景的行，取不到再用常量。
 """
-from typing import Dict, Iterable, Optional, Tuple
+from collections.abc import Iterable
 
 from sqlalchemy import select
 
@@ -21,13 +25,17 @@ from app.models.risk_threshold import RiskThreshold
 from app.services.constants import (
     DEFAULT_HIGH_THRESHOLD,
     DEFAULT_MEDIUM_THRESHOLD,
+    RISK_EVENT_STATUS_PENDING,
+    RISK_EVENT_STATUS_PROCESSING,
+    RISK_EVENT_STATUS_RESOLVED,
     RISK_LEVEL_HIGH,
     RISK_LEVEL_LOW,
     RISK_LEVEL_MEDIUM,
 )
+from app.utils.common import row_to_dict
 
 #: (medium, high)，均为 0~1
-ThresholdPair = Tuple[float, float]
+ThresholdPair = tuple[float, float]
 
 
 def classify(risk_score: float, medium: float, high: float) -> str:
@@ -43,7 +51,7 @@ def classify(risk_score: float, medium: float, high: float) -> str:
     return RISK_LEVEL_LOW
 
 
-def load_thresholds(db, user) -> Dict[int, ThresholdPair]:
+def load_thresholds(db, user) -> dict[int, ThresholdPair]:
     """一次查出该账号在**全部场景**的阈值：``{scenario_id: (medium, high)}``。
 
     只返回已配置的场景；未配置的由 :func:`thresholds_for` 兜底，避免在此处写死默认值
@@ -61,7 +69,7 @@ def load_thresholds(db, user) -> Dict[int, ThresholdPair]:
 
 
 def thresholds_for(
-    thresholds: Dict[int, ThresholdPair], scenario_id: Optional[int]
+    thresholds: dict[int, ThresholdPair], scenario_id: int | None
 ) -> ThresholdPair:
     """取该账号在某场景的阈值；未配置则用兜底常量。"""
     if scenario_id is not None:
@@ -71,7 +79,7 @@ def thresholds_for(
     return (float(DEFAULT_MEDIUM_THRESHOLD), float(DEFAULT_HIGH_THRESHOLD))
 
 
-def level_of(event, thresholds: Dict[int, ThresholdPair]) -> str:
+def level_of(event, thresholds: dict[int, ThresholdPair]) -> str:
     """按当前账号阈值算出该事件的等级。
 
     ``risk_score`` 缺失时（历史脏数据）退回落库的 ``risk_level``，不再凭空造数。
@@ -79,37 +87,31 @@ def level_of(event, thresholds: Dict[int, ThresholdPair]) -> str:
     score = getattr(event, "risk_score", None)
     stored = getattr(event, "risk_level", None)
     if score is None:
-        return stored if stored in (RISK_LEVEL_HIGH, RISK_LEVEL_MEDIUM, RISK_LEVEL_LOW) else RISK_LEVEL_LOW
+        if stored in (RISK_LEVEL_HIGH, RISK_LEVEL_MEDIUM, RISK_LEVEL_LOW):
+            return stored
+        return RISK_LEVEL_LOW
     medium, high = thresholds_for(thresholds, getattr(event, "scenario_id", None))
     return classify(score, medium, high)
 
 
-def view_of(event, thresholds: Dict[int, ThresholdPair]) -> dict:
+def view_of(event, thresholds: dict[int, ThresholdPair]) -> dict:
     """把事件序列化成**当前账号视角**的 dict（risk_level 已按本人阈值重算）。"""
-    from app.utils.common import row_to_dict
-
     data = row_to_dict(event)
     data["risk_level"] = level_of(event, thresholds)
     return data
 
 
-def view_events(events: Iterable, thresholds: Dict[int, ThresholdPair]) -> list:
+def view_events(events: Iterable, thresholds: dict[int, ThresholdPair]) -> list:
     """批量序列化为当前账号视角。"""
     return [view_of(e, thresholds) for e in events]
 
 
-def aggregate(events: Iterable, thresholds: Dict[int, ThresholdPair]) -> dict:
+def aggregate(events: Iterable, thresholds: dict[int, ThresholdPair]) -> dict:
     """按**当前账号**阈值聚合风险等级计数，处置状态计数不受阈值影响。
 
     这是替代 ``SituationSnapshotService._aggregate`` 的口径：等级计数一律重算，
     状态计数沿用落库值。
     """
-    from app.services.constants import (
-        RISK_EVENT_STATUS_PENDING,
-        RISK_EVENT_STATUS_PROCESSING,
-        RISK_EVENT_STATUS_RESOLVED,
-    )
-
     events = list(events)
     levels = [level_of(e, thresholds) for e in events]
     return {

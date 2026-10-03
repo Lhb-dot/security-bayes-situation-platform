@@ -21,25 +21,27 @@
 security-bayes-platform/
 ├── frontend/                   # Vue 3 + Vite + Element Plus 前端
 │   └── src/views/
-│       ├── Dashboard/          # 仪表盘总览
+│       ├── Home/               # 首页看板（dashboard/ 总览 + 四场景分区）
+│       ├── Model/              # 模型中心、训练、推理、报告、设置、用户管理
 │       ├── Dataset/            # 数据集上传与管理
-│       ├── Model/              # 模型训练、阈值配置
-│       ├── Inference/          # 单条流量风险预测推理
-│       ├── Alert/              # 安全告警列表与详情
-│       └── Report/             # 训练历史实验记录报表
+│       ├── Alert/              # 安全告警列表
+│       ├── Event/              # 风险事件详情
+│       ├── Login.vue           # 登录页
+│       └── NotFoundView.vue    # 404 兜底页
 ├── backend/                    # Python FastAPI 后端
 │   ├── app/
-│   │   ├── main.py             # 启动入口（14 条活跃路由）
-│   │   ├── api/                # 接口路由层
+│   │   ├── main.py             # 启动入口（挂载 2 个 router：/api/v1 下 15 个路由模块共 103 个端点 + legacy /api/model 8 个端点）
+│   │   ├── api/                # 接口路由层（v1/endpoints/ 15 个模块 + legacy_model_routes）
 │   │   ├── services/           # 业务逻辑层
 │   │   ├── algorithms/         # 贝叶斯算法核心（PMWNB）
 │   │   ├── schemas/            # Pydantic 数据校验模型
-│   │   └── models/             # 数据库 ORM 模型
-│   ├── deprecated/             # 二期归档（舆情爬虫、Dify 等拓展模块）
+│   │   └── models/             # 数据库 ORM 模型（14 张表）
+│   ├── alembic/                # 数据库迁移（Alembic）
+│   ├── lib/                    # Java 服务 jar（pmwnb / predict / nb-algorithm）
 │   └── storage/                # 运行时持久化
 │       ├── models/             # 训练产物：.pkl / .model 文件
 │       └── output/             # 运行时生成的 JSON 数据
-├── data/                       # 训练数据集（CSV）
+├── data/                       # 训练数据集（ARFF）
 ├── scripts/                    # 核心测试与工具脚本
 ├── logs/                       # 运行日志
 └── docs/                       # 项目文档
@@ -67,7 +69,13 @@ cd frontend/ && npm install && npm run dev
 # 2. Java PMWNB 推理服务（端口 12313）
 java -jar backend/lib/pmwnb-service.jar 12313
 
-# 3. Python FastAPI 后端（端口 12312）
+# 3. Java 通用预测服务（端口 12314）
+java -jar backend/lib/predict-service.jar 12314
+
+# 4. Java NB 算法服务（端口 12315，A2WNB / CAVWNB / EMAWNB / MAWNB / DIWNB 共用同一进程）
+java -jar backend/lib/nb-algorithm-service.jar 12315
+
+# 5. Python FastAPI 后端（端口 12312）
 cd backend/ && python -m app.main
 ```
 

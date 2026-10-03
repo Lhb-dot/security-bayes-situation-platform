@@ -15,8 +15,17 @@
  *   onBeforeUnmount(detach);
  */
 
-/** 只有这几个 overflow 值才算「可滚动容器」，hidden 不算（隐藏溢出但不可滚动） */
-const SCROLLABLE_OVERFLOW = /^(auto|scroll|overlay)$/;
+/**
+ * 只有这几个 overflow 值才算「可滚动容器」，hidden 不算（隐藏溢出但不可滚动）。
+ * 导出给 scrollAnchor.ts 复用，避免两处各写一份正则后悄悄漂移。
+ */
+export const SCROLLABLE_OVERFLOW = /^(auto|scroll|overlay)$/;
+
+/** 可滚动判定的容差（px）：亚像素误差与 1px 边框会造成「其实没溢出」的假溢出 */
+const SCROLL_EPSILON_PX = 1;
+
+/** 一次滚轮「行」的像素估算（deltaMode = DOM_DELTA_LINE 时浏览器只给行数） */
+const LINE_HEIGHT_PX = 16;
 
 /** 内层滚动容器的候选选择器：Element Plus 表格真正的滚动体在 el-scrollbar 的 wrap 上 */
 const INNER_SCROLLER_SELECTOR = '.el-scrollbar__wrap, .el-table__body-wrapper';
@@ -24,12 +33,12 @@ const INNER_SCROLLER_SELECTOR = '.el-scrollbar__wrap, .el-table__body-wrapper';
 /** 元素自身是否是可纵向滚动的容器（overflow 允许滚动，且内容确实溢出） */
 const isScrollableY = (el: HTMLElement): boolean => {
   if (!SCROLLABLE_OVERFLOW.test(getComputedStyle(el).overflowY)) return false;
-  return el.scrollHeight - el.clientHeight > 1;
+  return el.scrollHeight - el.clientHeight > SCROLL_EPSILON_PX;
 };
 
 /** 归一化滚轮位移为像素：行模式/页模式的浏览器给出的不是像素值 */
 const normalizeDelta = (event: WheelEvent, pageSize: number): number => {
-  if (event.deltaMode === 1) return event.deltaY * 16;
+  if (event.deltaMode === 1) return event.deltaY * LINE_HEIGHT_PX;
   if (event.deltaMode === 2) return event.deltaY * pageSize;
   return event.deltaY;
 };
@@ -53,7 +62,7 @@ const consumeOuterScroll = (start: HTMLElement, delta: number): number => {
   for (const el of chain) {
     if (rest === 0) break;
     const max = el.scrollHeight - el.clientHeight;
-    if (max <= 1) continue;
+    if (max <= SCROLL_EPSILON_PX) continue;
     const target = Math.min(Math.max(el.scrollTop + rest, 0), max);
     const applied = target - el.scrollTop;
     if (applied === 0) continue; // 这一层已经到顶/底，继续往外
@@ -99,7 +108,7 @@ export const attachOuterFirstWheel = (wrap: HTMLElement): (() => void) => {
     const inner = findInnerScroller(wrap, event);
     if (!inner) return;
     const innerMax = inner.scrollHeight - inner.clientHeight;
-    if (innerMax <= 1) return;
+    if (innerMax <= SCROLL_EPSILON_PX) return;
 
     const delta = normalizeDelta(event, inner.clientHeight);
     if (delta === 0) return;

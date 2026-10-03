@@ -22,16 +22,19 @@ from openai import OpenAI
 from app.data.scenario_feature_catalog import expand_scenario_feature_catalog
 from app.models.user_ai_setting import UserAISetting
 from app.services.base import ServiceError, ServiceBase, service_call
+from app.services.constants import EVALUATION_AUDIENCE_MANAGEMENT, evaluation_audience
 from app.schemas.explanation_contract import (
     EXPLANATION_CONTRACT_VERSION,
+    EXPLANATION_SOURCES,
+    PUBLIC_TOP_FEATURE_LIMIT,
     availability,
-    explanation_for_role,
+    finite_number,
     normalize_explanation,
     unavailable,
 )
 from app.schemas.scenario_config import validate_scenario_config, validate_scenario_configs
 from app.schemas.common import ok
-from app.utils.common import get_logger, row_to_dict
+from app.utils.common import get_logger
 
 logger = get_logger("explanation")
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "scenario_configs.json"
@@ -55,8 +58,49 @@ AI_REQUEST_TIMEOUT_SECONDS = _env_float("AI_EXPLANATION_TIMEOUT_SECONDS", 60.0, 
 # Some OpenAI-compatible gateways need several seconds to warm up a model.
 # Keep connectivity checks strict, but allow a normal remote first response.
 AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 30.0, 3.0)
-AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 1200, 64)
-AI_MAX_OUTPUT_CHARS = _env_int("AI_EXPLANATION_MAX_CHARS", 12000, 512)
+# 默认不下发 max_tokens，由服务端按模型自身上限决定，即不设人为上限。
+# 推理型模型（如 deepseek-v4.1-flash）的思维链与正文共享同一个输出预算，
+# 任何人为上限都可能把正文挤掉：实测 1200 时正文为空、676 字时被截断在句子中间。
+# 个别网关强制要求该字段时，用 AI_EXPLANATION_MAX_TOKENS 显式给一个正值。
+AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 0, 0)
+
+#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+EXPLANATION_PROMPT_VERSION = "1.0"
+
+#: done 事件的 source 取值域（权威定义见 schemas/explanation_contract.EXPLANATION_SOURCES）。
+SOURCE_AI, SOURCE_FALLBACK = EXPLANATION_SOURCES
+
+#: 喂给 AI 的 top_features 条数上限。
+TOP_FEATURE_LIMIT = 10
+#: 风险概率缺失时用于估置信度的中性取值。
+DEFAULT_RISK_THRESHOLD = 0.5
+#: 置信度分档阈值：|风险概率 − 风险阈值| 越大越可信。
+CONFIDENCE_HIGH_GAP = 0.25
+CONFIDENCE_MEDIUM_GAP = 0.1
+#: SSE 正文切片大小（字符数）。
+STREAM_CHUNK_SIZE = 24
+
+_EXPLANATION_SYSTEM_BASE = (
+    "你是模型结果表达助手。只能使用用户消息中的事实数据和场景配置，输出 Markdown。"
+    "不得重新计算或改变 prediction、risk_probability、risk_threshold、confidence。"
+    "所有数字必须直接来自输入；不得编造字段、因果关系或处置措施。信息不足时明确写出。"
+    "固定输出：### 研判结论、### 主要依据、### 场景分析、### 风险规避建议、### 注意事项。"
+    "风险规避建议只能引用 recommended_actions；统计关联不得写成确定因果。"
+)
+
+#: 普通用户版追加约束。事实本身已按受众裁剪（algorithm_details / model_quality
+#: 不会下发），这里再约束措辞，避免模型用「模型内部权重显示」这类表述凭空指代。
+_EXPLANATION_SYSTEM_USER_SUFFIX = (
+    "面向场景普通用户：不得提及算法内部实现细节（视图权重、子模型明细、"
+    "特征加权条件概率、交叉验证指标），不得引用原始输入快照。"
+)
+
+
+class AIOutputTruncated(RuntimeError):
+    """模型在自身长度上限处停下，正文并未写完。
+
+    这类输出不能当成完整结果保存或展示——半截评价既没有结论也不可复核。
+    """
 
 
 def _configs() -> dict[str, dict[str, Any]]:
@@ -77,6 +121,9 @@ def get_scenario_config(code: str | None) -> dict[str, Any]:
     code = str(code or "").strip()
     config = _configs().get(code)
     if config is None:
+        # 未登记场景，或 scenario_configs.json 缺失/损坏（_configs 此时返回 {}）。
+        # 两种情况都拿不到任何场景事实，必须显式声明配置不可用 —— 否则下游
+        # 会把「没有配置」当成「配置齐全」，把空的风险类型与建议当成事实喂给 AI。
         return {
             "scenario_code": code,
             "scenario_name": code or "未指定场景",
@@ -85,6 +132,8 @@ def get_scenario_config(code: str | None) -> dict[str, Any]:
             "recommended_actions": [],
             "manual_review_advice": "信息不足时请结合原始数据进行人工复核。",
             "feature_dictionary": {},
+            "configuration_available": False,
+            "configuration_errors": [f"场景 {code or '未指定场景'} 未登记或解释配置加载失败"],
         }
     errors = validate_scenario_config(code, config)
     if errors:
@@ -104,34 +153,13 @@ def get_scenario_config(code: str | None) -> dict[str, Any]:
     return {**config, "scenario_code": code, "configuration_available": True}
 
 
-def _finite_number(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number == number and abs(number) != float("inf") else None
-
-
-def _availability(reason: str) -> dict[str, Any]:
-    return unavailable(reason)
-
-
-def _raw_value(sample: dict[str, Any], name: str) -> Any:
-    return sample.get(name)
-
-
-def _top_features(
+def _normalize_feature_items(
+    source: list[Any],
     sample: dict[str, Any],
-    result: dict[str, Any],
     is_prediction_risk: bool,
     scenario_config: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    source = result.get("top_features") or result.get("feature_attribution") or []
-    if not source:
-        source = result.get("feature_evidence") or []
-    if not isinstance(source, list):
-        return []
-
+    """把一路特征解释归一化成统一的 top_features 结构。"""
     normalized: list[dict[str, Any]] = []
     for item in source:
         if not isinstance(item, dict):
@@ -139,15 +167,15 @@ def _top_features(
         name = item.get("feature_name") or item.get("attribute") or item.get("feature")
         if not name:
             continue
-        value = item.get("raw_value", _raw_value(sample, str(name)))
+        value = item.get("raw_value", sample.get(str(name)))
         processed = item.get("processed_value", item.get("value", value))
-        contribution = _finite_number(
+        contribution = finite_number(
             item.get("contribution", item.get("salience", item.get("importance")))
         )
         if contribution is None and isinstance(item.get("class_contributions"), list):
             contributions = item["class_contributions"]
             values = [
-                _finite_number(c.get("contribution"))
+                finite_number(c.get("contribution"))
                 for c in contributions
                 if isinstance(c, dict)
             ]
@@ -157,7 +185,7 @@ def _top_features(
             continue
         supports_predicted = item.get("supports_predicted")
         if supports_predicted is None:
-            signed = _finite_number(item.get("signed_contribution"))
+            signed = finite_number(item.get("signed_contribution"))
             supports_predicted = signed is None or signed >= 0
         direction = "支持风险" if bool(supports_predicted) == is_prediction_risk else "支持正常"
         feature_name = str(name)
@@ -177,12 +205,99 @@ def _top_features(
     normalized.sort(key=lambda x: x["contribution"], reverse=True)
     for rank, item in enumerate(normalized, start=1):
         item["rank"] = rank
-    return normalized[:10]
+    return normalized
+
+
+def _top_features(
+    sample: dict[str, Any],
+    result: dict[str, Any],
+    is_prediction_risk: bool,
+    scenario_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """挑一路特征解释并归一化。
+
+    优先级：算法原生的 top_features → 算法原生的 feature_evidence → 平台算的
+    feature_attribution。后者是单特征屏蔽敏感性，模型高置信时概率饱和
+    （实测 P = 1 − 2e-9），屏蔽任一特征只改变约 1e-7，Java 侧 round(…,4) 后整列塌成 0。
+    这种「非空但全 0」的列表没有信息量，必须继续往后找，否则喂给 AI 的是一列 0。
+    """
+    for key in ("top_features", "feature_evidence", "feature_attribution"):
+        source = result.get(key)
+        if not isinstance(source, list) or not source:
+            continue
+        normalized = _normalize_feature_items(
+            source, sample, is_prediction_risk, scenario_config
+        )
+        if any(item["contribution"] > 0 for item in normalized):
+            return normalized[:TOP_FEATURE_LIMIT]
+    return []
 
 
 def _views(result: dict[str, Any]) -> list[dict[str, Any]]:
     views = result.get("views")
     return views if isinstance(views, list) else []
+
+
+def _resolve_risk_probability(
+    result: dict[str, Any], prediction: str, is_prediction_risk: bool
+) -> float | None:
+    """取风险类概率。
+
+    优先用 Java 显式给出的 ``risk_probability``；缺失时只在「预测为风险类」的
+    前提下退回 ``probability`` / ``class_distribution`` 里该类的概率 —— 预测为
+    正常类时不能把 normal 的概率当成风险概率。历史口径以 class_distribution
+    为准，所以它最后覆盖 ``probability``。
+    """
+    probability = finite_number(result.get("risk_probability"))
+    if probability is not None:
+        return probability
+    if not is_prediction_risk:
+        return None
+    probability = finite_number(result.get("probability"))
+    distribution = result.get("class_distribution")
+    if not isinstance(distribution, list):
+        return probability
+    return next(
+        (
+            finite_number(row.get("probability"))
+            for row in distribution
+            if isinstance(row, dict) and str(row.get("class", "")).strip() == prediction
+        ),
+        probability,
+    )
+
+
+def _algorithm_specific(
+    algorithm_code: str, result: dict[str, Any], views: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """按算法给出专属解释明细；没有数据就用 unavailable(...) 标记，绝不伪造。"""
+    view_weights = result.get("view_weights") or []
+    feature_evidence = result.get("feature_evidence") or []
+    if algorithm_code == "MAWNB":
+        return {"views": views} if views else unavailable("MAWNB 未提供视图明细")
+    if algorithm_code == "EMAWNB":
+        return (
+            {"views": views, "dynamic_view_weights": view_weights}
+            if views or view_weights
+            else unavailable("EMAWNB 未提供动态视图权重")
+        )
+    if algorithm_code == "CAVWNB":
+        return (
+            {"feature_evidence": feature_evidence}
+            if feature_evidence
+            else unavailable("CAVWNB 未提供条件概率或特征权重明细")
+        )
+    if algorithm_code == "PMWNB":
+        return {"views": views} if views else unavailable("PMWNB 未提供 10 个子模型明细")
+    if algorithm_code == "DIWNB":
+        return (
+            {"views": views, "view_weights": view_weights}
+            if views or view_weights
+            else unavailable("DIWNB 未提供 KNN/K 值明细")
+        )
+    if algorithm_code == "A2WNB":
+        return unavailable("A2WNB 未提供原始属性、增强属性和概率变化明细")
+    return unavailable("当前算法未提供专属解释数据")
 
 
 def build_unified_explanation(
@@ -193,29 +308,16 @@ def build_unified_explanation(
     algorithm_code: str,
     is_prediction_risk: bool,
     model_metrics: dict[str, Any] | None = None,
-    risk_threshold: float = 0.5,
+    risk_threshold: float = DEFAULT_RISK_THRESHOLD,
 ) -> dict[str, Any]:
     """Normalize Java output without changing the model's prediction."""
     result = model_result or {}
     prediction = str(result.get("prediction_label", "")).strip()
     class_distribution = result.get("class_distribution") or []
-    risk_probability = _finite_number(result.get("risk_probability"))
-    if risk_probability is None:
-        risk_probability = _finite_number(result.get("probability")) if is_prediction_risk else None
-        if isinstance(class_distribution, list):
-            risk_probability = next(
-                (
-                    _finite_number(row.get("probability"))
-                    for row in class_distribution
-                    if isinstance(row, dict)
-                    and str(row.get("class", "")).strip() == prediction
-                    and is_prediction_risk
-                ),
-                risk_probability,
-            )
+    risk_probability = _resolve_risk_probability(result, prediction, is_prediction_risk)
     quality = model_metrics or {}
-    cv_mean = _finite_number(quality.get("cv_mean"))
-    cv_std = _finite_number(quality.get("cv_std"))
+    cv_mean = finite_number(quality.get("cv_mean"))
+    cv_std = finite_number(quality.get("cv_std"))
     views = _views(result)
     conflict_labels = {
         str(view.get("predicted_label"))
@@ -235,8 +337,16 @@ def build_unified_explanation(
         "risk_expression_template": config.get("risk_expression_template"),
         "configuration_available": config.get("configuration_available", True),
     }
-    confidence_gap = abs((risk_probability if risk_probability is not None else 0.5) - risk_threshold)
-    confidence = "高" if confidence_gap >= 0.25 else "中" if confidence_gap >= 0.1 else "低"
+    confidence_gap = abs(
+        (risk_probability if risk_probability is not None else DEFAULT_RISK_THRESHOLD)
+        - risk_threshold
+    )
+    if confidence_gap >= CONFIDENCE_HIGH_GAP:
+        confidence = "高"
+    elif confidence_gap >= CONFIDENCE_MEDIUM_GAP:
+        confidence = "中"
+    else:
+        confidence = "低"
     raw_algorithm_details = result.get("algorithm_details")
     specific = (
         raw_algorithm_details.get("specific")
@@ -244,20 +354,7 @@ def build_unified_explanation(
         else raw_algorithm_details
     )
     if not specific:
-        specific = {
-            "MAWNB": {"views": views} if algorithm_code == "MAWNB" and views else _availability("MAWNB 未提供视图明细"),
-            "EMAWNB": {"views": views, "dynamic_view_weights": result.get("view_weights") or []}
-            if algorithm_code == "EMAWNB" and (views or result.get("view_weights"))
-            else _availability("EMAWNB 未提供动态视图权重"),
-            "CAVWNB": {"feature_evidence": result.get("feature_evidence") or []}
-            if algorithm_code == "CAVWNB" and result.get("feature_evidence")
-            else _availability("CAVWNB 未提供条件概率或特征权重明细"),
-            "PMWNB": {"views": views} if algorithm_code == "PMWNB" and views else _availability("PMWNB 未提供 10 个子模型明细"),
-            "DIWNB": {"views": views, "view_weights": result.get("view_weights") or []}
-            if algorithm_code == "DIWNB" and (views or result.get("view_weights"))
-            else _availability("DIWNB 未提供 KNN/K 值明细"),
-            "A2WNB": _availability("A2WNB 未提供原始属性、增强属性和概率变化明细"),
-        }.get(algorithm_code, _availability("当前算法未提供专属解释数据"))
+        specific = _algorithm_specific(algorithm_code, result, views)
     algorithm_details = {
         "algorithm_code": algorithm_code,
         "class_distribution": class_distribution,
@@ -268,7 +365,7 @@ def build_unified_explanation(
         "specific": specific,
     }
     if not views and not result.get("feature_evidence") and not result.get("feature_attribution"):
-        algorithm_details["availability"] = _availability("当前算法未提供视图或特征解释数据")
+        algorithm_details["availability"] = unavailable("当前算法未提供视图或特征解释数据")
     return normalize_explanation({
         "contract_version": EXPLANATION_CONTRACT_VERSION,
         "prediction": prediction,
@@ -278,8 +375,8 @@ def build_unified_explanation(
         "confidence": confidence,
         "top_features": _top_features(sample, result, is_prediction_risk, config),
         "model_quality": {
-            "risk_recall": _finite_number(quality.get("risk_recall", quality.get("recall"))),
-            "risk_f1": _finite_number(quality.get("risk_f1", quality.get("f1"))),
+            "risk_recall": finite_number(quality.get("risk_recall", quality.get("recall"))),
+            "risk_f1": finite_number(quality.get("risk_f1", quality.get("f1"))),
             "cv_mean": cv_mean,
             "cv_std": cv_std,
             "availability": {
@@ -298,17 +395,15 @@ def build_unified_explanation(
     })
 
 
-def public_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
-    """Return the ordinary-user view while retaining the common contract."""
-    return explanation_for_role(explanation, "SCENARIO_USER")
-
-
 def fallback_markdown(explanation: dict[str, Any]) -> str:
-    prediction = explanation.get("prediction") or "未知"
-    probability = explanation.get("risk_probability")
-    probability_text = "信息不足"
-    if probability is not None:
-        probability_text = f"{float(probability) * 100:.1f}%"
+    """规则模板正文（AI 不可用时的兜底，必须永远能出结果）。
+
+    注意入参可能**未经契约归一化**：没有 inference_record_id 时，facts 直接来自
+    请求体的 model_result。所以每个字段都要先判型再取值 —— 这里抛异常会让 SSE
+    流在没有 done 事件的情况下中断，前端会永远停在「正在生成」且拿不到兜底正文。
+    """
+    probability = finite_number(explanation.get("risk_probability"))
+    probability_text = "信息不足" if probability is None else f"{probability * 100:.1f}%"
     conclusion = "风险" if explanation.get("prediction_is_risk") else "正常"
     lines = [
         "### 研判结论",
@@ -316,23 +411,31 @@ def fallback_markdown(explanation: dict[str, Any]) -> str:
         "",
         "### 主要依据",
     ]
-    features = explanation.get("top_features") or []
+    raw_features = explanation.get("top_features")
+    features = (
+        [item for item in raw_features if isinstance(item, dict)]
+        if isinstance(raw_features, list)
+        else []
+    )
     if features:
-        for idx, item in enumerate(features[:3], start=1):
+        for idx, item in enumerate(features[:PUBLIC_TOP_FEATURE_LIMIT], start=1):
             name = item.get("display_name") or item.get("feature_name")
-            sentence = f"{idx}. {name} 当前值为 `{item.get('raw_value')}`，{item['direction']}。"
+            sentence = f"{idx}. {name} 当前值为 `{item.get('raw_value')}`，{item.get('direction')}。"
             if item.get("risk_description"):
                 sentence += f"场景配置说明：{item['risk_description']}。"
             lines.append(sentence)
     else:
         lines.append("暂未获得可用的特征贡献数据。")
-    if explanation.get("conflict", {}).get("has_conflict"):
+    conflict = explanation.get("conflict")
+    if isinstance(conflict, dict) and conflict.get("has_conflict"):
         lines.append("多视图或子模型存在差异，建议人工复核。")
     else:
         lines.append("各分析模块对当前结果基本一致。")
     lines.extend(["", "### 场景分析"])
-    scenario = explanation.get("scenario") or {}
-    risk_types = scenario.get("risk_types") or []
+    scenario = explanation.get("scenario")
+    scenario = scenario if isinstance(scenario, dict) else {}
+    risk_types = scenario.get("risk_types")
+    risk_types = risk_types if isinstance(risk_types, list) else []
     if risk_types:
         lines.append(
             f"当前场景为{scenario.get('scenario_name') or '未指定场景'}，关注的风险类型包括：{'、'.join(map(str, risk_types))}。"
@@ -340,12 +443,12 @@ def fallback_markdown(explanation: dict[str, Any]) -> str:
     else:
         lines.append("当前场景暂未配置风险类型，无法进一步展开场景分析。")
     lines.extend(["", "### 风险规避建议"])
-    actions = explanation.get("recommended_actions") or []
+    actions = explanation.get("recommended_actions")
+    actions = actions if isinstance(actions, list) else []
     lines.extend(f"{idx}. {action}" for idx, action in enumerate(actions, start=1))
     if not actions:
         lines.append("当前场景未配置具体处置措施，请结合原始数据人工复核。")
-    manual = ((explanation.get("scenario") or {}).get("manual_review_advice")
-              or "建议结合原始数据和人工经验进行复核。")
+    manual = scenario.get("manual_review_advice") or "建议结合原始数据和人工经验进行复核。"
     lines.extend(["", "### 注意事项", manual, "该结果为模型辅助研判，建议结合原始日志和人工经验确认。"])
     return "\n".join(lines)
 
@@ -474,33 +577,51 @@ class AISettingService(ServiceBase):
             })
 
 
-def _openai_stream(setting: UserAISetting, messages: list[dict[str, str]]) -> Iterable[str]:
+def _openai_stream(
+    setting: UserAISetting, messages: list[dict[str, str]]
+) -> Iterable[tuple[str, str]]:
+    """逐块产出 ``("reasoning" | "content", 文本)``。
+
+    推理型模型把思维链放在 ``delta.reasoning_content``。思维链只用来让用户看到
+    「确实在生成」，必须与正文分开返回 —— 调用方只把 ``content`` 落库。
+    """
     key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
     client = OpenAI(api_key=key, base_url=setting.base_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
-    stream = client.chat.completions.create(
-        model=setting.model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=AI_MAX_OUTPUT_TOKENS,
-        stream=True,
-    )
-    emitted = 0
-    for chunk in stream:
-        choices = getattr(chunk, "choices", None) or []
-        if choices:
-            content = getattr(getattr(choices[0], "delta", None), "content", None)
+    request: dict[str, Any] = {
+        "model": setting.model,
+        "messages": messages,
+        "temperature": 0.1,
+        "stream": True,
+    }
+    # 不设上限时不带 max_tokens 字段，避免把预算从服务端手里抢过来。
+    if AI_MAX_OUTPUT_TOKENS > 0:
+        request["max_tokens"] = AI_MAX_OUTPUT_TOKENS
+    # 用 with 确保确定性关闭底层 HTTP 流：客户端断连时本生成器会被
+    # GeneratorExit 终止，没有 with 就只能等 GC 回收才断开与网关的连接。
+    with client.chat.completions.create(**request) as stream:
+        finish_reason: str | None = None
+        for chunk in stream:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            if getattr(choices[0], "finish_reason", None):
+                finish_reason = choices[0].finish_reason
+            delta = getattr(choices[0], "delta", None)
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                yield "reasoning", str(reasoning)
+            content = getattr(delta, "content", None)
             if content:
-                remaining = AI_MAX_OUTPUT_CHARS - emitted
-                if remaining <= 0:
-                    break
-                content = str(content)[:remaining]
-                emitted += len(content)
-                if content:
-                    yield content
+                yield "content", str(content)
+    # 服务端自己截断时仍然要拦下：半截正文不能当完整结果存库或展示。
+    if finish_reason == "length":
+        raise AIOutputTruncated(f"AI 输出在模型长度上限处中断（finish_reason={finish_reason}）")
 
 
 def _classify_ai_error(exc: Exception) -> tuple[str, str]:
     """Map provider failures to stable, non-sensitive API messages."""
+    if isinstance(exc, AIOutputTruncated):
+        return "output_truncated", "AI 输出未写完，请重试"
     if isinstance(exc, openai.APITimeoutError):
         return "timeout", "AI 服务请求超时"
     if isinstance(exc, openai.RateLimitError):
@@ -514,14 +635,12 @@ def _classify_ai_error(exc: Exception) -> tuple[str, str]:
     return "provider_error", "AI 服务暂时不可用"
 
 
-def build_prompt(explanation: dict[str, Any]) -> list[dict[str, str]]:
-    system = (
-        "你是模型结果表达助手。只能使用用户消息中的事实数据和场景配置，输出 Markdown。"
-        "不得重新计算或改变 prediction、risk_probability、risk_threshold、confidence。"
-        "所有数字必须直接来自输入；不得编造字段、因果关系或处置措施。信息不足时明确写出。"
-        "固定输出：### 研判结论、### 主要依据、### 场景分析、### 风险规避建议、### 注意事项。"
-        "风险规避建议只能引用 recommended_actions；统计关联不得写成确定因果。"
-    )
+def build_prompt(
+    explanation: dict[str, Any], audience: str = EVALUATION_AUDIENCE_MANAGEMENT
+) -> list[dict[str, str]]:
+    system = _EXPLANATION_SYSTEM_BASE
+    if audience != EVALUATION_AUDIENCE_MANAGEMENT:
+        system += _EXPLANATION_SYSTEM_USER_SUFFIX
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(explanation, ensure_ascii=False, sort_keys=True)},
@@ -539,15 +658,30 @@ def build_explanation_facts(explanation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
+def _fallback_events(facts: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
+    """规则模板降级：逐块下发正文，再给出本次流唯一的终态 done。"""
+    for chunk in _chunk_text(fallback_markdown(facts)):
+        yield "delta", {"content": chunk}
+    yield "done", {"status": "已使用规则模板完成", "source": SOURCE_FALLBACK}
+
+
+def stream_explanation(
+    db, current_user, explanation: dict[str, Any]
+) -> Iterable[tuple[str, dict[str, Any]]]:
+    """产出 SSE 事件序列：start → (reasoning | delta)* → done。
+
+    终态一律是 done，``source`` ∈ {ai, fallback}（见 EXPLANATION_SOURCES）。
+    error 只表示「AI 未配置或失败，已降级」，后面一定还会跟规则模板正文和
+    done —— 客户端不能把 error 当成流结束，否则永远等不到兜底正文。
+    """
     facts = build_explanation_facts(explanation)
+    # 受众从调用者角色推导，不接收前端入参 —— 否则普通用户可以要一份管理员版正文。
+    audience = evaluation_audience(getattr(current_user, "role", None))
     setting = db.get(UserAISetting, current_user.id)
     yield "start", {"status": "开始分析"}
     if setting is None or not setting.enabled:
         yield "error", {"message": "当前账号未配置可用的 AI 服务"}
-        for chunk in _chunk_text(fallback_markdown(facts)):
-            yield "delta", {"content": chunk}
-        yield "done", {"status": "已使用规则模板完成", "source": "fallback"}
+        yield from _fallback_events(facts)
         return
     try:
         logger.info(
@@ -556,26 +690,32 @@ def stream_explanation(db, current_user, explanation: dict[str, Any]) -> Iterabl
             setting.model,
         )
         emitted = False
-        for chunk in _openai_stream(setting, build_prompt(facts)):
+        for kind, text in _openai_stream(setting, build_prompt(facts, audience)):
+            if kind == "reasoning":
+                # 思维链只透传给前端做「正在生成」的反馈，不进 markdown_parts、不落库。
+                yield "reasoning", {"content": text}
+                continue
             emitted = True
-            yield "delta", {"content": chunk}
+            yield "delta", {"content": text}
         if not emitted:
             raise RuntimeError("empty AI response")
-        yield "done", {"status": "完成", "source": "ai"}
+        yield "done", {"status": "完成", "source": SOURCE_AI}
     except Exception as exc:  # noqa: BLE001
         reason_code, _ = _classify_ai_error(exc)
         logger.warning(
-            "AI explanation failed user_id=%s model=%s reason=%s",
+            "AI explanation failed user_id=%s model=%s reason=%s error=%s",
             current_user.id,
             setting.model,
             reason_code,
+            type(exc).__name__,
+            # 只有归不了类的错误才可能是代码缺陷，需要完整堆栈；已知 provider
+            # 故障（超时/限流/断连）打堆栈只会淹没日志。
+            exc_info=(reason_code == "provider_error"),
         )
         yield "error", {"message": "AI 服务不可用，已回退规则模板", "reason_code": reason_code}
-        for chunk in _chunk_text(fallback_markdown(facts)):
-            yield "delta", {"content": chunk}
-        yield "done", {"status": "已使用规则模板完成", "source": "fallback"}
+        yield from _fallback_events(facts)
 
 
-def _chunk_text(value: str, size: int = 24) -> Iterable[str]:
+def _chunk_text(value: str, size: int = STREAM_CHUNK_SIZE) -> Iterable[str]:
     for index in range(0, len(value), size):
         yield value[index:index + size]

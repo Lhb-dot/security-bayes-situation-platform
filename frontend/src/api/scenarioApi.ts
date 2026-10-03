@@ -7,6 +7,21 @@
 import request, { unwrapData } from '@/utils/request';
 import type { Scenario, ScenarioId } from '@/types/security';
 
+/**
+ * 场景种子映射：后端数字 ID → 前端场景编码。
+ *
+ * 后端 risk_event / report / dataset 等接口下发的是数字 scenario_id，而前端路由与类型用编码，
+ * 各 api 模块都需要这张兜底表（后端 /scenarios 不可达、或返回列表里没有该 id 时使用）。
+ * **只在这里声明一份**：原先 datasetApi / reportApi / riskThresholdApi / situationApi 各写了一遍，
+ * 种子顺序一旦调整就会出现「有的模块认 3=地质、有的认 3=甲板」的口径分叉。
+ */
+export const SCENARIO_CODE_BY_ID: Record<number, ScenarioId> = {
+  1: 'network_security',
+  2: 'power_system',
+  3: 'flightdeck_operation',
+  4: 'geological_risk',
+};
+
 /** 后端 scenario 行 */
 export interface ApiScenario {
   id: number;
@@ -33,7 +48,7 @@ export interface ApiScenarioOverviewCard {
   sample_count: number;
   /** 标签判定为风险的样本数 */
   risk_sample_count: number;
-  /** 风险样本占比（百分数，如 14.2） */
+  /** 风险样本占比（0~1 的小数，如 0.142 即 14.2%） */
   risk_sample_rate: number;
   /** 已发布（PUBLISHED）模型版本数 */
   published_model_count: number;
@@ -41,6 +56,7 @@ export interface ApiScenarioOverviewCard {
   high_risk_count: number;
   /** 风险分 0-100（所辖事件 risk_score 均值 ×100，无事件记 0） */
   risk_score: number;
+  /** 场景等级：由 risk_sample_rate 分档（>=0.50 high / >=0.25 medium / 其余 low），小写 */
   risk_level: 'high' | 'medium' | 'low';
 }
 

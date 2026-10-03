@@ -15,6 +15,8 @@ export interface ModelEvaluationResponse {
 
 export interface ModelEvaluationStreamHandlers {
   onStart?: (data: Record<string, any>) => void;
+  /** 推理型模型的思维链，只用于展示「确实在生成」，不落库 */
+  onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (data: Record<string, any>) => void;
   onDone?: (data: Record<string, any>) => void;
@@ -69,6 +71,7 @@ export const streamModelEvaluation = async (
       let data: Record<string, any> = {};
       try { data = JSON.parse(dataText); } catch { continue; }
       if (event === 'start') handlers.onStart?.(data);
+      else if (event === 'reasoning' && typeof data.content === 'string') handlers.onReasoning?.(data.content);
       else if (event === 'delta' && typeof data.content === 'string') handlers.onDelta?.(data.content);
       else if (event === 'error') handlers.onError?.(data);
       else if (event === 'done') handlers.onDone?.(data);

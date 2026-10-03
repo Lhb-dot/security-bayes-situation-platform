@@ -19,10 +19,27 @@
   box-sizing: border-box;
 }
 
+/* 滚动条占位恒定。
+   页面滚动条挂在 viewport 上，内容高度跨过视口高度时它会从无到有，可用宽度瞬间少 15px，
+   整页内容左右各缩 7.5px —— 看起来就是「跳一下」。典型触发点：用户管理列表加载完成
+   （空表 660px → 10 行 1120px，1080 高的视口刚好越线）。
+   预留 gutter 后所有页面的可用宽度一致，切换和加载都不再跳。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+}
+
+/* Element Plus 打开弹窗时给 body 内联了 width: calc(100% - 15px) —— 它假设滚动条会消失、
+   用这 15px 把背景宽度补回来。但上面已用 scrollbar-gutter 预留了 gutter，包含块宽度本来就
+   恒定，这个补偿就成了「双重扣减」，背景会右缩 15px。覆盖掉，让宽度始终跟随包含块。
+   注意：这条与上面的 scrollbar-gutter 是一对，别单独删其中一个。 */
+body.el-popup-parent--hidden {
+  width: 100% !important;
 }
 
 button,
@@ -58,7 +75,6 @@ button {
 }
 
 .topbar,
-.page-container,
 .state-card {
   position: relative;
   z-index: 1;
@@ -71,13 +87,11 @@ button {
   justify-content: space-between;
   gap: 16px 20px;
   margin-bottom: 24px;
-  z-index: 10; /* 高于页面内容，让用户悬停弹层不被盖住；低于弹窗层 20/25 */
+  z-index: 10; /* 高于页面内容，让用户悬停弹层不被盖住 */
 }
 
-.hero-panel h2,
 .section-heading h2,
-.section-heading h3,
-.detail-hero h2 {
+.section-heading h3 {
   margin: 0;
 }
 
@@ -111,6 +125,8 @@ button {
   overflow-x: auto; /* 极端窄屏时内部横向滚动，不挤压标题 */
   scrollbar-width: none;
   white-space: nowrap;
+  /* 顶栏铃铛的悬停走廊会横跨导航区域，抬一层保证导航的 hover / 点击永远优先 */
+  z-index: 1;
 }
 
 .nav-tabs::-webkit-scrollbar {
@@ -146,25 +162,6 @@ button {
   background: rgba(8, 17, 31, 0.72);
 }
 
-.dashboard-grid,
-.detail-grid {
-  display: grid;
-  gap: 18px;
-}
-
-.dashboard-grid > *,
-.detail-grid > * {
-  min-width: 0;
-}
-
-.dashboard-grid {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-}
-
-.detail-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .card,
 .state-card {
   border: 1px solid rgba(125, 201, 255, 0.16);
@@ -178,164 +175,6 @@ button {
   padding: 22px;
 }
 
-.hero-panel,
-.metrics-row,
-.alert-feed {
-  grid-column: span 12;
-}
-
-.hero-panel__content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.hero-panel__desc {
-  max-width: 720px;
-  margin: 14px 0 0;
-  color: rgba(220, 234, 255, 0.78);
-}
-
-.hero-panel__actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 22px;
-  flex-wrap: wrap;
-}
-
-.hero-button {
-  border: 0;
-  padding: 12px 18px;
-  border-radius: 14px;
-  color: #03101e;
-  font-weight: 700;
-  background: linear-gradient(135deg, #53e5c8, #7dc9ff);
-  box-shadow: 0 12px 30px rgba(83, 229, 200, 0.25);
-}
-
-.hero-chip {
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(220, 234, 255, 0.72);
-  font-size: 0.88rem;
-}
-
-.hero-panel__pulse {
-  position: relative;
-  width: 220px;
-  height: 220px;
-  flex: 0 0 auto;
-}
-
-.pulse-core,
-.pulse-ring {
-  position: absolute;
-  inset: 50%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-}
-
-.pulse-core {
-  width: 84px;
-  height: 84px;
-  background: radial-gradient(circle, #53e5c8 0%, #5ba6ff 70%, rgba(91, 166, 255, 0.06) 100%);
-  box-shadow: 0 0 40px rgba(83, 229, 200, 0.5);
-}
-
-.pulse-ring {
-  width: 120px;
-  height: 120px;
-  border: 1px solid rgba(83, 229, 200, 0.5);
-  animation: pulse 3s infinite;
-}
-
-.pulse-ring--delay {
-  animation-delay: 1.2s;
-}
-
-.metrics-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.metric-card {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-}
-
-.metric-card--button {
-  width: 100%;
-  border: 1px solid rgba(125, 201, 255, 0.16);
-  color: inherit;
-  text-align: left;
-  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
-}
-
-.metric-card--button:hover {
-  transform: translateY(-4px);
-  border-color: rgba(125, 201, 255, 0.34);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.36);
-}
-
-.metric-card__icon {
-  width: 52px;
-  height: 52px;
-  display: grid;
-  place-items: center;
-  border-radius: 18px;
-  color: #03101e;
-  font-weight: 800;
-  background: linear-gradient(135deg, #53e5c8, #7dc9ff);
-  box-shadow: 0 0 24px rgba(91, 166, 255, 0.22);
-}
-
-.metric-card__label {
-  margin: 0 0 6px;
-  color: rgba(220, 234, 255, 0.7);
-}
-
-.metric-card h3 {
-  margin: 0;
-  font-size: 2rem;
-}
-
-.metric-card__delta {
-  margin: 8px 0 0;
-  font-size: 0.92rem;
-}
-
-.metric-card__delta.safe {
-  color: #53e5c8;
-}
-
-.metric-card__delta.danger {
-  color: #ff8f83;
-}
-
-.metric-card__hint {
-  display: inline-block;
-  margin-top: 10px;
-  color: rgba(125, 201, 255, 0.84);
-  font-size: 0.82rem;
-}
-
-.chart-card {
-  min-height: 350px;
-}
-
-.chart-card--wide {
-  grid-column: span 8;
-}
-
-.dashboard-span-4 {
-  grid-column: span 4;
-}
-
 .section-heading {
   display: flex;
   align-items: center;
@@ -344,8 +183,7 @@ button {
   margin-bottom: 18px;
 }
 
-.section-tag,
-.detail-chip {
+.section-tag {
   display: inline-flex;
   align-items: center;
   padding: 7px 12px;
@@ -355,364 +193,16 @@ button {
   font-size: 0.82rem;
 }
 
-.line-chart {
-  position: relative;
-  height: 280px;
-}
-
-.line-chart svg {
-  width: 100%;
-  height: 240px;
-}
-
-.line-chart__grid line {
-  stroke: rgba(125, 201, 255, 0.12);
-  stroke-dasharray: 6 8;
-}
-
-.line-chart__point circle {
-  fill: #d9f6ff;
-  stroke: #5ba6ff;
-  stroke-width: 3;
-  transition: r 0.2s ease;
-}
-
-.line-chart__focus-line {
-  stroke: rgba(125, 201, 255, 0.35);
-  stroke-dasharray: 6 6;
-}
-
-.line-chart__tooltip {
-  position: absolute;
-  min-width: 148px;
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid rgba(125, 201, 255, 0.22);
-  border-radius: 16px;
-  background: rgba(6, 14, 24, 0.92);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
-  transform: translate(-50%, calc(-100% - 18px));
-  pointer-events: none;
-}
-
-.line-chart__tooltip strong {
-  margin-bottom: 3px;
-}
-
-.line-chart__labels {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 8px;
-  color: rgba(220, 234, 255, 0.62);
-  font-size: 0.84rem;
-}
-
-.line-chart__labels span {
-  transition: color 0.2s ease, transform 0.2s ease;
-}
-
-.line-chart__labels span.is-active {
-  color: #fff;
-  transform: translateY(-2px);
-}
-
-.donut-layout {
-  display: grid;
-  gap: 22px;
-}
-
-.donut-chart {
-  width: 220px;
-  height: 220px;
-  margin: 6px auto 0;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  box-shadow: inset 0 0 50px rgba(255, 255, 255, 0.04), 0 0 32px rgba(91, 166, 255, 0.16);
-}
-
-.donut-chart__inner {
-  width: 132px;
-  height: 132px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: #091421;
-  text-align: center;
-}
-
-.donut-chart__inner strong {
-  font-size: 2rem;
-}
-
-.donut-chart__inner span {
-  color: rgba(220, 234, 255, 0.64);
-  font-size: 0.88rem;
-}
-
-.donut-legend,
-.ranking-list,
-.alert-feed__list,
-.detail-list,
-.timeline,
 .detail-info {
   display: grid;
   gap: 12px;
 }
 
-.donut-legend__item,
-.ranking-list__item,
-.alert-feed__item,
 .detail-info > div {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.donut-legend__item i {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 12px;
-  display: inline-block;
-}
-
-.threat-map {
-  display: grid;
-  gap: 14px;
-}
-
-.threat-map--large .threat-map__board {
-  height: 66vh;
-}
-
-.threat-map__toolbar,
-.scope-switch,
-.threat-map__detail-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.threat-map__toolbar p {
-  margin: 4px 0 0;
-  color: rgba(220, 234, 255, 0.65);
-}
-
-.scope-switch {
-  padding: 4px;
-  border: 1px solid rgba(125, 201, 255, 0.18);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.scope-switch__item {
-  border: 0;
-  padding: 8px 14px;
-  border-radius: 999px;
-  color: rgba(220, 234, 255, 0.72);
-  background: transparent;
-}
-
-.scope-switch__item.is-active {
-  color: #fff;
-  background: rgba(91, 166, 255, 0.18);
-}
-
-.threat-map__board {
-  position: relative;
-  height: 280px;
-  overflow: hidden;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at center, rgba(91, 166, 255, 0.14), transparent 42%),
-    linear-gradient(180deg, rgba(12, 24, 42, 0.82), rgba(5, 12, 22, 0.4));
-}
-
-.threat-map__canvas {
-  position: absolute;
-  inset: 6% 5%;
-}
-
-.threat-map__board::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(125, 201, 255, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125, 201, 255, 0.08) 1px, transparent 1px);
-  background-size: 36px 36px;
-}
-
-.threat-map__background {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  opacity: 0.34;
-  filter: hue-rotate(178deg) saturate(0.7) brightness(1.2);
-}
-
-.threat-map__svg,
-.threat-map__labels {
-  position: absolute;
-  inset: 0;
-}
-
-.threat-map__svg {
-  width: 100%;
-  height: 100%;
-}
-
-.threat-map__arc {
-  fill: none;
-  stroke: url(#flow-gradient);
-  stroke-width: 0.6;
-  stroke-linecap: round;
-  opacity: 0.48;
-  stroke-dasharray: 2.2 1.5;
-}
-
-.threat-map__arc.is-active {
-  opacity: 0.95;
-  stroke-width: 0.9;
-}
-
-.threat-map__arc.is-critical,
-.threat-map__missile.is-critical {
-  filter: drop-shadow(0 0 6px rgba(255, 123, 114, 0.8));
-}
-
-.threat-map__arc.is-high,
-.threat-map__missile.is-high {
-  filter: drop-shadow(0 0 6px rgba(255, 177, 107, 0.7));
-}
-
-.threat-map__arc.is-medium,
-.threat-map__missile.is-medium {
-  filter: drop-shadow(0 0 6px rgba(91, 166, 255, 0.75));
-}
-
-.threat-map__missile {
-  fill: #fff;
-}
-
-.threat-map__point-core {
-  fill: #53e5c8;
-}
-
-.threat-map__point-wave {
-  stroke: rgba(83, 229, 200, 0.5);
-  fill: none;
-}
-
-.threat-map__focus circle {
-  fill: #5ba6ff;
-}
-
-.threat-map__focus-ring {
-  fill: none;
-  stroke: rgba(91, 166, 255, 0.55);
-  stroke-width: 0.8;
-}
-
-.threat-map__label,
-.threat-map__focus-label {
-  position: absolute;
-  transform: translate(14px, -8px);
-  display: grid;
-  gap: 2px;
-  pointer-events: none;
-}
-
-.threat-map__focus-label {
-  transform: translate(16px, -50%);
-}
-
-.threat-map__label strong,
-.threat-map__focus-label strong {
-  font-size: 0.86rem;
-}
-
-.threat-map__label small,
-.threat-map__focus-label small {
-  color: rgba(220, 234, 255, 0.64);
-}
-
-.threat-map__detail {
-  display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.ranking-list__label {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  flex: 1;
-}
-
-.ranking-list__index {
-  color: rgba(125, 201, 255, 0.7);
-  font-variant-numeric: tabular-nums;
-}
-
-.ranking-list__bar {
-  flex: 1;
-  height: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.ranking-list__fill {
-  height: 100%;
-  border-radius: inherit;
-}
-
-.ranking-list__fill.danger {
-  background: linear-gradient(90deg, #ff7b72, #ffb26b);
-}
-
-.ranking-list__fill.safe {
-  background: linear-gradient(90deg, #53e5c8, #5ba6ff);
-}
-
-.alert-feed__item,
-.alerts-table__row {
-  width: 100%;
-  text-align: left;
-  border: 1px solid rgba(125, 201, 255, 0.1);
-  border-radius: 18px;
-  padding: 16px;
-  color: inherit;
-  background: rgba(255, 255, 255, 0.02);
-  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-}
-
-.alert-feed__item:hover,
-.alerts-table__row:hover {
-  transform: translateY(-2px);
-  border-color: rgba(125, 201, 255, 0.3);
-  background: rgba(91, 166, 255, 0.08);
-}
-
-.alert-feed__item p,
-.detail-hero__sub {
-  margin: 6px 0 0;
-  color: rgba(220, 234, 255, 0.66);
-}
-
-.alert-feed__meta {
-  text-align: right;
 }
 
 .risk-badge {
@@ -726,237 +216,6 @@ button {
   font-size: 0.78rem;
 }
 
-.risk-critical {
-  background: rgba(255, 123, 114, 0.18);
-  color: #ff8c84;
-}
-
-.risk-high {
-  background: rgba(255, 177, 107, 0.18);
-  color: #ffc37d;
-}
-
-.risk-medium {
-  background: rgba(91, 166, 255, 0.18);
-  color: #9ad6ff;
-}
-
-.alerts-page {
-  min-height: 70vh;
-}
-
-.alerts-table {
-  display: grid;
-  gap: 12px;
-}
-
-.alerts-table__head,
-.alerts-table__row {
-  display: grid;
-  grid-template-columns: 2fr 1.2fr 1.3fr 1.2fr 0.8fr 1.2fr;
-  gap: 12px;
-  align-items: center;
-}
-
-.alerts-table__head {
-  padding: 0 16px;
-  color: rgba(220, 234, 255, 0.52);
-  font-size: 0.9rem;
-}
-
-.detail-layout {
-  display: grid;
-  gap: 18px;
-}
-
-.war-room {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  padding: 22px;
-  color: #e8f1ff;
-  background: #040b14;
-}
-
-.overlay-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 25;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.overlay-modal__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(2, 5, 12, 0.7);
-  backdrop-filter: blur(12px);
-}
-
-.overlay-modal__panel {
-  position: relative;
-  z-index: 1;
-  width: min(1080px, 100%);
-  max-height: min(86vh, 900px);
-  overflow: auto;
-}
-
-.metric-modal__summary {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 18px;
-  margin-bottom: 18px;
-}
-
-.metric-modal__summary div {
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.metric-modal__summary span {
-  display: block;
-  color: rgba(220, 234, 255, 0.66);
-}
-
-.metric-modal__summary strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 2rem;
-}
-
-.metric-modal__summary p {
-  margin: 0;
-  align-self: center;
-  color: rgba(220, 234, 255, 0.78);
-}
-
-.war-room__backdrop {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at top, rgba(91, 166, 255, 0.18), transparent 32%),
-    radial-gradient(circle at 80% 20%, rgba(83, 229, 200, 0.14), transparent 24%),
-    linear-gradient(180deg, #030813, #02050c);
-}
-
-.war-room__topbar,
-.war-room__metrics,
-.war-room__main {
-  position: relative;
-  z-index: 1;
-}
-
-.war-room__topbar,
-.war-room__actions,
-.war-room__metrics,
-.war-room__feed,
-.war-room__playbook {
-  display: flex;
-  gap: 12px;
-}
-
-.war-room__topbar,
-.war-room__main {
-  justify-content: space-between;
-}
-
-.war-room__topbar {
-  align-items: flex-start;
-  margin-bottom: 18px;
-}
-
-.war-room__actions,
-.war-room__metrics,
-.war-room__feed,
-.war-room__playbook {
-  flex-wrap: wrap;
-}
-
-.war-room__metrics {
-  margin-bottom: 18px;
-}
-
-.war-room__metric {
-  min-width: 160px;
-  padding: 14px 16px;
-  border: 1px solid rgba(125, 201, 255, 0.16);
-  border-radius: 18px;
-  background: rgba(9, 17, 29, 0.88);
-}
-
-.war-room__metric span,
-.war-room__feed-item span,
-.war-room__feed-item em {
-  display: block;
-  color: rgba(220, 234, 255, 0.68);
-  font-style: normal;
-}
-
-.war-room__metric strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 1.5rem;
-}
-
-.war-room__main {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.8fr);
-  gap: 18px;
-  align-items: start;
-}
-
-.war-room__map {
-  min-height: 72vh;
-}
-
-.war-room__side {
-  display: grid;
-  gap: 18px;
-  min-width: 0;
-  align-content: start;
-}
-
-.war-room__side > .card,
-.war-room__map {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.war-room__feed,
-.war-room__playbook {
-  flex-direction: column;
-}
-
-.war-room__feed-item,
-.war-room__playbook-item {
-  width: 100%;
-  padding: 14px 16px;
-  border: 1px solid rgba(125, 201, 255, 0.14);
-  border-radius: 16px;
-  color: inherit;
-  text-align: left;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.war-room__feed-item:hover,
-.war-room__playbook-item:hover {
-  background: rgba(91, 166, 255, 0.1);
-}
-
-.detail-hero__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  margin-top: 18px;
-}
-
-.detail-block--wide {
-  grid-column: span 2;
-}
-
 /* 仅「行首标签」用弱化色。
    原写法 `.detail-info span` 会命中值里的裸 span（如设置页「绑定场景」→ 全部场景），
    把值也染成标签灰，看起来像换了一套字体；限定为行的直接 span 子元素后，
@@ -967,67 +226,6 @@ button {
 
 .detail-info strong {
   text-align: right;
-}
-
-.detail-paragraph,
-.timeline__content p {
-  margin: 0;
-  color: rgba(220, 234, 255, 0.78);
-}
-
-.detail-list {
-  margin: 0;
-  padding-left: 18px;
-  color: rgba(220, 234, 255, 0.78);
-}
-
-.log-panel {
-  margin: 0;
-  padding: 18px;
-  border-radius: 18px;
-  background: #06101d;
-  overflow: auto;
-  color: #9ad6ff;
-  font-family: 'Consolas', 'Courier New', monospace;
-}
-
-.timeline__item {
-  display: grid;
-  grid-template-columns: 20px 1fr;
-  gap: 14px;
-}
-
-.timeline__dot {
-  position: relative;
-  width: 12px;
-  height: 12px;
-  margin-top: 6px;
-  border-radius: 50%;
-  background: #53e5c8;
-  box-shadow: 0 0 20px rgba(83, 229, 200, 0.55);
-}
-
-.timeline__dot::after {
-  content: '';
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  width: 2px;
-  height: calc(100% + 28px);
-  transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(83, 229, 200, 0.6), transparent);
-}
-
-.timeline__item:last-child .timeline__dot::after {
-  display: none;
-}
-
-.timeline__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
 }
 
 .state-card {
@@ -1049,29 +247,36 @@ button {
   animation: spin 1s linear infinite;
 }
 
-@keyframes pulse {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.6);
-  }
-  35% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(1.85);
-  }
+/* 列表局部刷新的加载遮罩：翻页时保留原列表、只盖一层。
+   换成整块状态卡会让内容高度骤降，外层滚动位置被夹 → 页面自己跳，
+   所以列表相关的加载态一律走这层遮罩，宿主容器需 position: relative。 */
+.pane-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5; /* 高于 el-table 的固定列（EP 给的是 3） */
 }
 
-@keyframes ping {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(4);
-    opacity: 0;
-  }
+/* 底色和模糊放伪元素上：backdrop-filter 会给后代当定位参照，
+   写在 .pane-loading 上会让下面那个 fixed 的转圈退回「相对遮罩居中」 */
+.pane-loading::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(5, 12, 22, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.pane-loading .loader {
+  /* 表格可能有几屏高，居中于遮罩会把转圈推到视口外/边缘，用户看不到反馈。
+     钉在视口中心 —— 遮罩铺满容器，转圈永远在眼皮底下。 */
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  margin: -15px 0 0 -15px;
+  width: 30px;
+  height: 30px;
+  border-width: 2px;
 }
 
 @keyframes float {
@@ -1090,65 +295,16 @@ button {
 }
 
 @media (max-width: 1200px) {
-  .dashboard-grid,
-  .detail-grid,
-  .metrics-row {
-    grid-template-columns: repeat(1, minmax(0, 1fr));
-  }
-
-  .chart-card--wide,
-  .dashboard-span-4,
-  .detail-block--wide,
-  .hero-panel,
-  .metrics-row,
-  .alert-feed {
-    grid-column: span 1;
-  }
-
-  .hero-panel__content,
   .topbar,
-  .topbar__actions,
-  .detail-hero__header,
-  .war-room__topbar {
+  .topbar__actions {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .war-room__main {
-    grid-template-columns: 1fr;
-  }
-
-  .alerts-table__head,
-  .alerts-table__row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .metric-modal__summary {
-    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 768px) {
   .app-shell {
     padding: 18px;
-  }
-
-  .alerts-table__head {
-    display: none;
-  }
-
-  .metric-card h3 {
-    font-size: 1.5rem;
-  }
-
-  .hero-panel__pulse {
-    width: 160px;
-    height: 160px;
-  }
-
-  .threat-map__detail-meta {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 
@@ -1157,8 +313,12 @@ button {
  * append-to-body 的弹窗渲染在 body，scoped 样式够不到，故放全局。
  * ------------------------------------------------------------------ */
 
-/* 弹窗遮罩 */
-.el-overlay {
+/* 弹窗遮罩。
+ * 类名叠一次是为了提权重：main.ts 现在显式引入了 el-overlay.css（含
+ * `.el-overlay{background-color:var(--el-overlay-color-lighter)}`），它加载在本文件之后，
+ * 同权重会盖掉这里的暗色与模糊。叠类名（同 .el-notification.el-notification 的做法）
+ * 比 !important 干净，也不会误伤别的 overlay。 */
+.el-overlay.el-overlay {
   background: rgba(3, 8, 16, 0.72);
   backdrop-filter: blur(4px);
 }
@@ -1199,6 +359,91 @@ button {
 .el-dialog .el-dialog__footer {
   padding: 14px 24px;
   border-top: 1px solid rgba(125, 201, 255, 0.12);
+}
+
+/* 确认弹窗（ElMessageBox）
+   EP 默认是亮色：容器取 --el-bg-color（白底）、标题取 --el-text-color-primary（深灰字），
+   在暗色界面上会突兀地白一块，跟 el-dialog 完全两个风格。
+   这里先改它自己的变量（子元素都读这些变量，改一处全跟着变），再补几条结构色。
+   同样用 .el-overlay 前缀 —— EP 的 message-box 样式在 main.ts 里显式引入，加载在本文件之后，
+   同权重会被它压掉。 */
+.el-overlay .el-message-box {
+  --el-messagebox-border-radius: 16px;
+  --el-messagebox-padding-primary: 18px;
+  --el-messagebox-box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --el-messagebox-font-size: 1.05rem;
+  --el-messagebox-content-font-size: 0.9rem;
+  --el-messagebox-title-color: #e8f1ff;
+  --el-messagebox-content-color: rgba(217, 232, 255, 0.9);
+  background: linear-gradient(165deg, rgba(16, 30, 54, 0.98), rgba(8, 17, 31, 0.98));
+  border: 1px solid rgba(91, 166, 255, 0.28);
+}
+
+.el-overlay .el-message-box__header {
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.14);
+}
+
+.el-overlay .el-message-box__title {
+  font-weight: 600;
+}
+
+.el-overlay .el-message-box__headerbtn .el-message-box__close {
+  color: rgba(217, 232, 255, 0.7);
+}
+.el-overlay .el-message-box__headerbtn:hover .el-message-box__close {
+  color: #fff;
+}
+
+/* 类型图标按语义取站内色，别沿用 EP 的默认亮色系 */
+.el-overlay .el-message-box__status.el-message-box-icon--warning {
+  --el-messagebox-color: #ffc37d;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--error {
+  --el-messagebox-color: #ff9a92;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--success {
+  --el-messagebox-color: #6ef0c4;
+}
+.el-overlay .el-message-box__status.el-message-box-icon--info,
+.el-overlay .el-message-box__status.el-message-box-icon--primary {
+  --el-messagebox-color: #9ad6ff;
+}
+
+/* 后台任务完成通知（ElNotification）
+   处境与 ElMessageBox 相同：EP 样式在 main.ts 里显式引入、加载在本文件之后，同权重会被压掉。
+   两点要注意：
+   1) 背景取的是 --el-bg-color-overlay（不是 notification 专属变量），所以必须直接写
+      background-color，光改变量不管用；
+   2) 这里没有 .el-overlay 之类的包裹层可用，只能把选择器自身叠一次（.el-notification.el-notification，
+      权重 0,2,0）来压过 EP 的 .el-notification（0,1,0）。类型图标同理 ——
+      EP 把它写在 `.el-notification .el-notification--success` 上，得再补一个类凑到 0,3,0。 */
+.el-notification.el-notification {
+  --el-notification-radius: 14px;
+  --el-notification-title-color: #e8f1ff;
+  --el-notification-content-color: rgba(217, 232, 255, 0.88);
+  --el-notification-close-color: rgba(217, 232, 255, 0.55);
+  --el-notification-close-hover-color: #fff;
+  --el-notification-border-color: rgba(91, 166, 255, 0.3);
+  --el-notification-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  background-color: rgba(13, 26, 46, 0.98);
+}
+
+.el-notification .el-notification__title {
+  font-weight: 600;
+}
+
+.el-notification .el-notification--success.el-notification--success {
+  --el-notification-icon-color: #6ef0c4;
+}
+.el-notification .el-notification--error.el-notification--error {
+  --el-notification-icon-color: #ff9a92;
+}
+.el-notification .el-notification--warning.el-notification--warning {
+  --el-notification-icon-color: #ffc37d;
+}
+.el-notification .el-notification--info.el-notification--info {
+  --el-notification-icon-color: #9ad6ff;
 }
 
 /* 表格（暗色） */

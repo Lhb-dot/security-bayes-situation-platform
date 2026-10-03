@@ -1,8 +1,17 @@
 """Legacy PMWNB HTTP endpoints kept for older clients.
 
-The current frontend uses ``/api/v1``. These endpoints remain available because
-older integrations may still call them, but they are isolated from application
-startup and the database-backed API.
+The current frontend only calls ``/api/v1``; nothing in ``frontend/src`` references
+these paths or ``/china-map.json``. They are nevertheless **live**: ``app.main``
+imports this module and calls ``include_router(legacy_model_router)``, and
+``backend/tests/test_application_structure.py`` asserts every path below exists.
+
+Being live also means being part of the process: importing this module pulls in
+``app.services.model_sim`` (which creates ``TRAINED_MODEL_DIR`` at import time) and
+``app.algorithms.pmwnb_demo``, and the training flag below is shared process-local
+state, not per-session state. Unlike the v1 routers these endpoints do not go
+through the service layer, so they have no ``scenario_id`` scoping and no database
+access — ``/api/model/risk_statistics`` in particular returns hard-coded sample
+numbers rather than aggregated data.
 """
 
 from fastapi import APIRouter, Depends, HTTPException

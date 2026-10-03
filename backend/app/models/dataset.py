@@ -30,7 +30,11 @@ class Dataset(Base):
     file_path: Mapped[str] = mapped_column(String(255), nullable=False)
     fields_schema: Mapped[list] = mapped_column(JSONB, nullable=False)
     label_field: Mapped[str] = mapped_column(String(64), nullable=False)
-    # 数据可见性分级：platform（平台）/ company（公司）/ personal（个人）
+    # 数据可见性分级：platform（平台）/ company（公司）/ personal（个人）。
+    # 注意 default/server_default 都是 "platform"（最宽可见），这只是为了兼容
+    # 20260814_000003 迁移给存量行回填的默认值；写入路径上 DatasetService.create /
+    # upload_from_file 一定按上传者角色显式赋值（SCENARIO_USER 强制 personal），
+    # 不允许依赖列默认值。绕过 Service 直接插 Dataset 会让个人数据变成全平台可见。
     visibility: Mapped[str] = mapped_column(
         String(16), nullable=False, default="platform", server_default="platform"
     )

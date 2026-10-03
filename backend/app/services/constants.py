@@ -8,9 +8,9 @@
 - 5.4  风险等级生成规则（可配置阈值，此处仅提供兜底值）
 - 6.4.1 分类类别统一约定（风险样本 = 正类，显式映射，禁止自动推断）
 
-⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES /
-DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的业务数据字典，
-作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
+⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES / DATASET_LOGICAL_IDS /
+DATASET_DISPLAY_NAMES / DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的
+业务数据字典，作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
 与数据库种子数据。
 """
 
@@ -36,14 +36,35 @@ ROLE_USER = ROLE_SCENARIO_USER
 # 管理级角色集合（能做管理操作的角色）
 ADMIN_ROLES = (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
 
+# ---------------------------------------------------------------------------
+# AI 产物的两级受众（模型级评价与样本级研判解释共用同一套键）
+#
+# 三级角色压成两级：超管与场景管理员拿到的解释裁剪结果一致（见
+# schemas/explanation_contract.explanation_for_role），归入 management；
+# 场景用户归入 user。产物按受众分格存储，管理员版不会被用户版覆盖。
+# ---------------------------------------------------------------------------
+EVALUATION_AUDIENCE_MANAGEMENT = "management"
+EVALUATION_AUDIENCE_USER = "user"
+EVALUATION_AUDIENCES = (EVALUATION_AUDIENCE_MANAGEMENT, EVALUATION_AUDIENCE_USER)
+
+
+def evaluation_audience(role: str | None) -> str:
+    """三级角色 → AI 产物受众键（management / user）。"""
+    return (
+        EVALUATION_AUDIENCE_MANAGEMENT
+        if role in ADMIN_ROLES
+        else EVALUATION_AUDIENCE_USER
+    )
+
 USER_STATUS_ENABLED = "ENABLED"
 USER_STATUS_DISABLED = "DISABLED"
 USER_STATUSES = (USER_STATUS_ENABLED, USER_STATUS_DISABLED)
 
 # 账号字段长度约束（与 ORM 列定义一致）
 USERNAME_MAX_LEN = 64
-PASSWORD_HASH_MAX_LEN = 128
+PASSWORD_HASH_MAX_LEN = 128  # ORM 列 password_hash 的长度（哈希串固定约 118 字符）
 PASSWORD_MIN_LEN = 6  # 需求将"复杂密码策略"列为 P2，第一阶段仅做基本长度校验
+PASSWORD_MAX_LEN = 128  # 密码明文长度上限（与 UserService 的校验口径一致）
 
 # 数据可见性分级（三级角色数据所有权：平台/公司/个人）
 DATASET_VISIBILITY_PLATFORM = "platform"   # 平台数据：最外层管理员管理，各场景基线
@@ -66,7 +87,7 @@ SCENARIO_ACCESS_STATUSES = (SCENARIO_ACCESS_ACTUAL, SCENARIO_ACCESS_RESERVED)
 SCENARIO_CODES = (
     "network_security",     # 网络安全
     "power_system",         # 电力系统
-    "geological_risk",      # 地质风险（⚠️ 当前 seed 迁移 d6adba5112b8 未覆盖，需补充）
+    "geological_risk",      # 地质风险（由迁移 20260806_120000_add_geological_risk_scenario 追加）
     "flightdeck_operation", # 航母甲板作业
 )
 
@@ -87,6 +108,12 @@ DATASET_LABEL_FIELD_MAX_LEN = 64
 # 需求文档 §2 第一阶段数据集编码清单（用于风险规则映射与展示，不作为"禁止新增"约束——
 # 需求文档主题即为"接入新的数据集"，管理员可上传新数据集；未登记的数据集默认不生成风险事件，
 # 需在 DATASET_RISK_TYPES 中补充映射）
+#
+# 口径不变式（新增数据集时必须同时满足，见《全项目代码审查/报告/B5.md》）：
+#   1. DATASET_DISPLAY_NAMES 的键 ⊇ DATASET_LOGICAL_IDS（每个登记项都要有展示名）；
+#   2. DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES 的键 ⊆ DATASET_LOGICAL_IDS，
+#      且两者必须成对登记（未登记 = 不产风险事件，见 dashboard_service 的 registered 判断）；
+#   3. 例外：dis_global_catalog 只登记展示名（全球地质目录，不作为训练/风险样本）。
 DATASET_LOGICAL_IDS = (
     "kdd_train_20_percent",
     "nf_unsw_nb15_v2",
@@ -99,6 +126,15 @@ DATASET_LOGICAL_IDS = (
     "carrier_feature2_biaoqian",
     "carrier_feature2_lisan",
     "carrier_paired_trail",
+    # 生产 seed 上传的数据集（同一批物理文件的再次注册，logical_id 与平台内置清单不同）
+    "net_flow_company_v1",
+    "alice_conn_personal_v1",
+    "power_grid_company_v1",
+    "bob_sensor_personal_v1",
+    "carrier_track_company_v1",
+    "deck_user01_trail_personal_v1",
+    "geo_slope_company_v1",
+    "carol_slope_personal_v1",
 )
 
 # 数据集展示名兜底字典（仅在 Dataset 记录缺少 file_path 时使用）。
@@ -124,6 +160,15 @@ DATASET_DISPLAY_NAMES = {
     "carrier_feature2_biaoqian": "Feature2_Cleaning_biaoqian",
     "carrier_feature2_lisan": "Feature2_Cleaning_lisan",
     "carrier_paired_trail": "paired_TrailData_feature2_biaoqian",
+    # 生产 seed 注册的数据集：展示名一律取源文件名（去扩展名），与 dataset_display_name_of 口径一致
+    "net_flow_company_v1": "NF-UNSW-NB15-v2",
+    "alice_conn_personal_v1": "KDDTrain_20Percent",
+    "power_grid_company_v1": "powergrid_knowledgebase_dataset",
+    "bob_sensor_personal_v1": "powergrid_knowledgebase_dataset",
+    "carrier_track_company_v1": "Feature2_Cleaning_lisan",
+    "deck_user01_trail_personal_v1": "paired_TrailData_feature2_biaoqian",
+    "geo_slope_company_v1": "DIS_Landslides",
+    "carol_slope_personal_v1": "DIS_raw_data",
 }
 
 
@@ -163,10 +208,12 @@ def dataset_display_name_of(dataset: object | None) -> str | None:
 
 # ---------------------------------------------------------------------------
 # 算法（数据库设计文档v2 2.4；需求文档 6.6.1）
+#
+# 状态只登记实际会被写入的取值：算法由开发人员通过代码接入（见 algorithm_service），
+# 全后端没有任何代码路径写入 "DEPRECATED"（grep 证据见 B5 报告），故不再登记该值。
+# 若将来引入算法下线流程，在此补回并同步 dashboard_service 的可用算法计数口径。
 # ---------------------------------------------------------------------------
 ALGORITHM_STATUS_AVAILABLE = "AVAILABLE"
-ALGORITHM_STATUS_DEPRECATED = "DEPRECATED"
-ALGORITHM_STATUSES = (ALGORITHM_STATUS_AVAILABLE, ALGORITHM_STATUS_DEPRECATED)
 
 # 需求文档 §6.6.1 第一阶段算法编码（数据字典，硬编码校验基准）
 # 六个算法：A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB；MAWNB 对应外部 MVCAVWNB。
@@ -181,7 +228,6 @@ MODEL_STATUS_TRAINING = "TRAINING"   # 训练中
 MODEL_STATUS_FAILED = "FAILED"       # 训练失败
 MODEL_STATUS_DRAFT = "DRAFT"         # 训练成功，待管理员审核发布
 MODEL_STATUS_PUBLISHED = "PUBLISHED" # 已发布，可供普通用户选择
-MODEL_STATUS_OFFLINE = "OFFLINE"     # 已下线，不再接受新的推理请求
 MODEL_STATUS_DISABLED = "DISABLED"   # 已禁用，对普通用户不可见，保留记录
 
 MODEL_STATUSES = (
@@ -189,20 +235,17 @@ MODEL_STATUSES = (
     MODEL_STATUS_FAILED,
     MODEL_STATUS_DRAFT,
     MODEL_STATUS_PUBLISHED,
-    MODEL_STATUS_OFFLINE,
     MODEL_STATUS_DISABLED,
 )
 
 # 需求文档 §6.7.2 状态转换规则（Service 层强制校验）
 # TRAINING → FAILED / DRAFT；DRAFT → PUBLISHED / DISABLED；
 # PUBLISHED → DISABLED；DISABLED → PUBLISHED。
-# OFFLINE 仅为历史兼容状态，迁移后统一使用 DISABLED。
 MODEL_STATUS_TRANSITIONS = {
     MODEL_STATUS_TRAINING: (MODEL_STATUS_FAILED, MODEL_STATUS_DRAFT),
     MODEL_STATUS_FAILED: (),
     MODEL_STATUS_DRAFT: (MODEL_STATUS_PUBLISHED, MODEL_STATUS_DISABLED),
     MODEL_STATUS_PUBLISHED: (MODEL_STATUS_DISABLED,),
-    MODEL_STATUS_OFFLINE: (),
     MODEL_STATUS_DISABLED: (MODEL_STATUS_PUBLISHED,),
 }
 
@@ -259,6 +302,16 @@ DATASET_POSITIVE_LABELS = {
     "carrier_feature2_biaoqian": {"1"},                        # Collision=1 风险 / 0 正常
     "carrier_feature2_lisan": {"1"},
     "carrier_paired_trail": {"1"},
+    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
+    # 标签语义与其源文件完全一致，见上表同名源文件的登记说明。
+    "net_flow_company_v1": {"1"},                              # 源 NF-UNSW-NB15-v2，Label 正类=1
+    "alice_conn_personal_v1": {"anomaly"},                     # 源 KDDTrain_20Percent，class 正类=anomaly
+    "power_grid_company_v1": {"1"},                            # 源 powergrid_knowledgebase_dataset，Target_Event 正类=1
+    "bob_sensor_personal_v1": {"1"},                           # 同上
+    "carrier_track_company_v1": {"1"},                         # 源 Feature2_Cleaning_lisan，Collision 正类=1
+    "deck_user01_trail_personal_v1": {"1"},                    # 源 paired_TrailData_feature2_biaoqian，Collision 正类=1
+    "geo_slope_company_v1": {"1"},                             # 源 DIS_Landslides，LS 正类=1
+    "carol_slope_personal_v1": {"1"},                          # 源 DIS_raw_data，Label 正类=1
 }
 # dis_global_catalog：多分类编目数据，不参与二分类训练与风险事件生成（§4.4.3），未列入映射。
 
@@ -296,6 +349,15 @@ DATASET_RISK_TYPES = {
     "carrier_feature2_biaoqian": RISK_TYPE_FLIGHT_DECK,
     "carrier_feature2_lisan": RISK_TYPE_FLIGHT_DECK,
     "carrier_paired_trail": RISK_TYPE_FLIGHT_DECK,
+    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
+    "net_flow_company_v1": RISK_TYPE_NETWORK,
+    "alice_conn_personal_v1": RISK_TYPE_NETWORK,
+    "power_grid_company_v1": RISK_TYPE_POWER,
+    "bob_sensor_personal_v1": RISK_TYPE_POWER,
+    "carrier_track_company_v1": RISK_TYPE_FLIGHT_DECK,
+    "deck_user01_trail_personal_v1": RISK_TYPE_FLIGHT_DECK,
+    "geo_slope_company_v1": RISK_TYPE_GEOLOGICAL,
+    "carol_slope_personal_v1": RISK_TYPE_GEOLOGICAL,
 }
 
 # 阈值兜底（需求文档 §5.4.1 第 6 条：正式阈值应通过 risk_threshold 表配置提供，
@@ -314,4 +376,6 @@ HANDLING_ACTION_MAX_LEN = 32
 # ---------------------------------------------------------------------------
 REPORT_TYPES = ("SCENE_SNAPSHOT", "USER_SNAPSHOT")
 REPORT_FORMATS = ("markdown", "html", "pdf")
+#: 报告数据范围：self=本人个人数据；all=管理员管理范围内的聚合数据（全平台 / 本场景）；已取消“指定单个用户”。
+REPORT_SCOPES = ("self", "all")
 REPORT_TYPE_MAX_LEN = 16

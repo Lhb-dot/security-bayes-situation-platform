@@ -69,7 +69,7 @@ def build_analysis_nl(report_data: dict) -> str:
         )
 
     if ov.get("avg_risk_prob") is not None:
-        sentences.append(f"平均风险概率为 {ov['avg_risk_prob']:.3f}。")
+        sentences.append(f"风险样本的平均概率为 {ov['avg_risk_prob']:.3f}。")
 
     buckets = pred.get("risk_prob_buckets") or []
     if buckets:
@@ -104,10 +104,25 @@ def build_analysis_nl(report_data: dict) -> str:
 
     if key_events:
         top = key_events[0]
-        sentences.append(
-            f"报告期内重点风险事件 {len(key_events)} 起，等级最高为[{top.get('risk_level')}]"
-            f"（概率 {top.get('probability')}）。"
-        )
+        shown = len(key_events)
+        # key_events 是截断后的列表，总起数只能看 key_events_total；
+        # 老报告没有这个字段，那就干脆不提数量，不能拿 len() 冒充总数。
+        total = report_data.get("key_events_total")
+        if total is None:
+            sentences.append(
+                f"报告期内重点风险事件中，等级最高为[{top.get('risk_level')}]"
+                f"（概率 {top.get('probability')}）。"
+            )
+        elif total > shown:
+            sentences.append(
+                f"报告期内重点风险事件共 {total} 起，报告中列出概率最高的 {shown} 起，"
+                f"等级最高为[{top.get('risk_level')}]（概率 {top.get('probability')}）。"
+            )
+        else:
+            sentences.append(
+                f"报告期内重点风险事件 {total} 起，等级最高为[{top.get('risk_level')}]"
+                f"（概率 {top.get('probability')}）。"
+            )
 
     return "".join(sentences)
 
