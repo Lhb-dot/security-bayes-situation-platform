@@ -27,6 +27,8 @@ import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/jobHelpers';
 import { parseBeijingNaive } from '@/utils/datetime';
 import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
+import { createStorePoller } from './jobPollingCore';
+import type { PollContext } from './jobPollingCore';
 
 /** 训练中：只要状态还是它，就说明后台线程没推进完 */
 const STATUS_TRAINING = 'TRAINING';
@@ -69,8 +71,7 @@ export interface BackgroundTrainingJob {
   elapsed: number;
 }
 
-let pollTimer: number | null = null;
-let polling = false;
+const pollFor = createStorePoller(POLL_INTERVAL_MS, currentUid);
 
 /**
  * 已经出过完成 / 失败通知的任务（modelVersionId）。
@@ -81,7 +82,15 @@ let polling = false;
  * 每秒重复弹一条通知，一直弹到 POLL_TIMEOUT_MS（65 分钟）超时。这里保证一个任务只通知一次。
  * reset() 时清空（换账号 / 重新恢复任务时重建）。
  */
-const settledIds = new Set<number>();
+const settledByStore = new WeakMap<object, Set<number>>();
+const settledIdsFor = (store: object) => {
+  let ids = settledByStore.get(store);
+  if (!ids) {
+    ids = new Set<number>();
+    settledByStore.set(store, ids);
+  }
+  return ids;
+};
 
 const isTerminalStatus = (status: string) => TERMINAL_STATUSES.includes(status);
 
@@ -139,16 +148,11 @@ export const useTrainingJobStore = defineStore('trainingJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      pollFor(this).start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      pollFor(this).stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -167,9 +171,9 @@ export const useTrainingJobStore = defineStore('trainingJob', {
      * 否则 `resumePending` 拿到空集合，会把所有终态任务都判成未读。
      */
     reset() {
-      this.stopPolling();
+      pollFor(this).reset();
       this.jobs = [];
-      settledIds.clear();
+      settledIdsFor(this).clear();
       this.syncSeen();
     },
 
@@ -198,9 +202,11 @@ export const useTrainingJobStore = defineStore('trainingJob', {
      */
     async resumePending() {
       this.reset();
+      const context = pollFor(this).capture();
       const seen = new Set(this.seenIds);
       try {
         const rows = await listTrainingJobs(true);
+        if (!context.isCurrent()) return;
         for (const row of rows ?? []) {
           const status = String(row?.status ?? '');
           if (!status) continue;
@@ -213,19 +219,22 @@ export const useTrainingJobStore = defineStore('trainingJob', {
         // 恢复失败不影响页面：训练仍在后台跑，结果可在模型中心看到
       }
       // 接口带 include_finished 会把更早的终态也捞回来，超过保留时长的先丢掉
-      this.purgeExpired();
+      if (context.isCurrent()) this.purgeExpired();
     },
 
-    async _tick() {
-      if (polling) return;   // 上一轮还没回来（请求慢），跳过这一拍
-      polling = true;
-      try {
+    _tick(): Promise<void> {
+      return pollFor(this).tick();
+    },
+
+    async _poll(context: PollContext) {
+        if (!context.isCurrent()) return;
         const running = this.runningJobs;
         if (!running.length) {
           this.stopPolling();
           return;
         }
         for (const job of running) {
+          if (!context.isCurrent()) return;
           job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
           if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
             this._timeout(job);
@@ -233,23 +242,23 @@ export const useTrainingJobStore = defineStore('trainingJob', {
           }
           try {
             const row = await getModelVersionDetail(job.modelVersionId);
+            if (!context.isCurrent()) return;
             job.status = String(row?.status ?? '');
             if (job.status === STATUS_TRAINING) continue;
             job.error = String(row?.evaluation_metrics?.error ?? '') || null;
             this._settle(job);
           } catch (err) {
+            if (!context.isCurrent()) return;
             // 单次轮询失败（网络抖动 / 服务端重启）不立刻判死，交给超时兜底
             job.error = messageOf(err, job.error ?? '训练状态查询失败');
           }
         }
-        if (!this.running) this.stopPolling();
-      } finally {
-        polling = false;
-      }
+        if (context.isCurrent() && !this.running) this.stopPolling();
     },
 
     /** 任务到达终态：出通知。**不从列表移除** —— 顶栏面板要展示它。 */
     _settle(job: BackgroundTrainingJob) {
+      const settledIds = settledIdsFor(this);
       // 一个任务只通知一次，理由见 settledIds 的说明
       if (settledIds.has(job.modelVersionId)) return;
       settledIds.add(job.modelVersionId);
