@@ -27,6 +27,7 @@ import { createIsTerminal, messageOf } from '@/utils/job';
 import { parseBeijingNaive } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
+import { createPollTimer, filterExpired, trimFinished } from './jobPollingCore';
 
 /** 训练中：只要状态还是它，就说明后台线程没推进完 */
 const STATUS_TRAINING = 'TRAINING';
@@ -69,8 +70,8 @@ export interface BackgroundTrainingJob {
   elapsed: number;
 }
 
-let pollTimer: number | null = null;
 let polling = false;
+const poll = createPollTimer(POLL_INTERVAL_MS, () => void useTrainingJobStore()._tick());
 
 /**
  * 已经出过完成 / 失败通知的任务（modelVersionId）。
@@ -139,16 +140,11 @@ export const useTrainingJobStore = defineStore('trainingJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      poll.start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      poll.stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -273,16 +269,13 @@ export const useTrainingJobStore = defineStore('trainingJob', {
 
     /** 终态任务超过上限就丢最旧的 */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => String(job.modelVersionId)),
+      this.jobs = trimFinished(
+        this.jobs,
+        isTerminal,
+        (job) => String(job.modelVersionId),
+        (job) => job.startedAt,
+        MAX_FINISHED,
       );
-      this.jobs = this.jobs.filter((job) => !drop.has(String(job.modelVersionId)));
     },
 
     /**
@@ -292,8 +285,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
      * `_tick` 手里那个对象已经不在数组里，会白跑一轮。
      */
     purgeExpired(): boolean {
-      const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = filterExpired(this.jobs, isTerminal, (job) => job.startedAt, FINISHED_TTL_MS);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;
