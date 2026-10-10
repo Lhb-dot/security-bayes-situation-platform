@@ -15,7 +15,7 @@
  *
  * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DOMPurify from 'dompurify';
 import { ElMessage } from 'element-plus';
@@ -42,6 +42,9 @@ const router = useRouter();
 const route = useRoute();
 const datasetStore = useDatasetStore();
 const userStore = useUserStore();
+let pageActive = true;
+let sessionRevision = 0;
+watch(() => userStore.currentUser?.user_id, () => { sessionRevision += 1; }, { flush: 'sync' });
 
 // ===================== 具名常量（原先散在代码里的魔法值） =====================
 /** 模型下拉一次拉全量：单个数据集下的模型版本数远小于这个上限 */
@@ -93,10 +96,11 @@ const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
 const selectedScenario = ref<ScenarioId | ''>('');
 const selectedDatasetId = ref<string>('');
 const loadingDatasets = ref(false);
+const datasets = ref<Dataset[]>([]);
 
 const datasetOptions = computed<Dataset[]>(() =>
   selectedScenario.value
-    ? datasetStore.datasets.filter((d) => d.scenario_id === selectedScenario.value)
+    ? datasets.value.filter((d) => d.scenario_id === selectedScenario.value)
     : []
 );
 
@@ -138,6 +142,7 @@ const sampleTotal = ref(0);
 const samplePage = ref(1);
 const SAMPLE_PAGE_SIZE = 50;
 const selectedSampleIndex = ref<number | null>(null);
+let sampleSequence = 0;
 
 const totalSamplePages = computed(() =>
   Math.max(1, Math.ceil(sampleTotal.value / SAMPLE_PAGE_SIZE))
@@ -284,62 +289,97 @@ const resetResults = () => {
 
 /** 换场景 / 换数据集 / 换模型时统一清空输入区（字段、取值、样本，并丢弃上一轮结果） */
 const resetInputState = () => {
+  sampleSequence += 1;
+  sampleLoading.value = false;
+  samplePage.value = 1;
   inputFields.value = [];
   inputData.value = {};
   samples.value = [];
   sampleTotal.value = 0;
+  expandedGroups.value = [];
   resetResults();
 };
 
-watch(selectedScenario, async (scenario) => {
+/** 每层只校验自身和上游选择，子层变化不会使仍有效的父层查询失效。 */
+const captureSelection = (level: 'scenario' | 'dataset' | 'model') => {
+  const session = sessionRevision;
+  const owner = userStore.currentUser?.user_id;
+  const scenario = selectedScenario.value;
+  const datasetId = selectedDatasetId.value;
+  const modelId = selectedModelId.value;
+  return () => pageActive && session === sessionRevision && owner === userStore.currentUser?.user_id
+    && scenario === selectedScenario.value
+    && (level === 'scenario' || datasetId === selectedDatasetId.value)
+    && (level !== 'model' || modelId === selectedModelId.value);
+};
+
+watch([selectedScenario, () => userStore.currentUser?.user_id], async ([scenario, owner], _, onCleanup) => {
+  let active = true;
+  onCleanup(() => { active = false; });
   selectedDatasetId.value = '';
   selectedModelId.value = '';
   resetInputState();
-  if (!scenario) {
-    datasetStore.datasets = [];
-    return;
-  }
+  datasets.value = [];
+  modelVersions.value = [];
+  loadingDatasets.value = false;
+  loadingModels.value = false;
+  if (!scenario || !owner) return;
+  const selectionIsCurrent = captureSelection('scenario');
+  const isCurrent = () => active && selectionIsCurrent();
   loadingDatasets.value = true;
   try {
-    await datasetStore.fetchDatasets(scenario);
+    const list = await datasetStore.fetchDatasets(scenario, { isCurrent });
+    if (isCurrent()) datasets.value = list;
   } catch {
-    datasetStore.datasets = [];
+    if (isCurrent()) datasets.value = [];
   } finally {
-    loadingDatasets.value = false;
+    if (isCurrent()) loadingDatasets.value = false;
   }
-});
+}, { flush: 'sync' });
 
-watch(selectedDatasetId, async (datasetId) => {
+watch(selectedDatasetId, async (datasetId, _, onCleanup) => {
+  let active = true;
+  onCleanup(() => { active = false; });
   selectedModelId.value = '';
   resetInputState();
+  modelVersions.value = [];
+  loadingModels.value = false;
   if (!datasetId) return;
+  const selectionIsCurrent = captureSelection('dataset');
+  const isCurrent = () => active && selectionIsCurrent();
   loadingModels.value = true;
   try {
     const scenarioNumeric = scenarios.value.find((s) => s.code === selectedScenario.value)?.id;
-    modelVersions.value = await getModelVersionList({
+    const list = await getModelVersionList({
       scenario_id: scenarioNumeric,
       dataset_id: datasetId,
       page_size: MODEL_LIST_PAGE_SIZE,
     });
+    if (!isCurrent()) return;
+    modelVersions.value = list;
     const def = publishedModels.value.find((m) => m.is_default);
     selectedModelId.value = def ? def.model_version_id : '';
   } catch {
     // 拉取失败必须清空：留着上一个数据集的模型列表会按旧列表自动选中模型
-    modelVersions.value = [];
+    if (isCurrent()) modelVersions.value = [];
   } finally {
-    loadingModels.value = false;
+    if (isCurrent()) loadingModels.value = false;
   }
-});
+}, { flush: 'sync' });
 
-watch(selectedModelId, async (modelId) => {
+watch(selectedModelId, async (modelId, _, onCleanup) => {
+  let active = true;
+  onCleanup(() => { active = false; });
   resetInputState();
-  samplePage.value = 1;
   if (!modelId) return;
   const model = selectedModel.value;
   if (!model) return;
+  const selectionIsCurrent = captureSelection('model');
+  const isCurrent = () => active && selectionIsCurrent();
   try {
-    await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''));
-    inputFields.value = datasetStore.fields.filter((f: DatasetField) => f.field_role === FIELD_ROLE_INPUT);
+    const definition = await datasetStore.fetchFields(String(model.dataset_id), String(model.dataset_version ?? ''), { isCurrent });
+    if (!isCurrent()) return;
+    inputFields.value = definition.filter((f) => f.field_role === FIELD_ROLE_INPUT);
     inputData.value = buildInputData(inputFields.value);
     // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
     const port = route.query.port;
@@ -350,28 +390,37 @@ watch(selectedModelId, async (modelId) => {
     expandedGroups.value = fieldGroups.value.length > 0 ? [fieldGroups.value[0].name] : [];
     await loadSamples(1);
   } catch {
-    inputFields.value = [];
-    inputData.value = {};
+    if (isCurrent()) {
+      inputFields.value = [];
+      inputData.value = {};
+    }
   }
-});
+}, { flush: 'sync' });
 
 const loadSamples = async (page: number) => {
-  if (!selectedModel.value) return;
+  const model = selectedModel.value;
+  if (!model) return;
+  const sequence = ++sampleSequence;
+  const selectionIsCurrent = captureSelection('model');
+  const isCurrent = () => sequence === sampleSequence && selectionIsCurrent();
   sampleLoading.value = true;
   try {
-    const preview = await getDatasetPreview(String(selectedModel.value.dataset_id), {
+    const preview = await getDatasetPreview(String(model.dataset_id), {
       page,
       page_size: SAMPLE_PAGE_SIZE,
     });
+    if (!isCurrent()) return;
     samples.value = preview.rows;
     sampleTotal.value = preview.total;
     samplePage.value = preview.page;
     selectedSampleIndex.value = null;
   } catch {
-    samples.value = [];
-    sampleTotal.value = 0;
+    if (isCurrent()) {
+      samples.value = [];
+      sampleTotal.value = 0;
+    }
   } finally {
-    sampleLoading.value = false;
+    if (isCurrent()) sampleLoading.value = false;
   }
 };
 
@@ -379,8 +428,15 @@ const loadSamples = async (page: number) => {
 const samplePaneRef = ref<HTMLElement | null>(null);
 
 /** 样本翻页：包一层滚动锚定，换页后视口停在原处 */
-const changeSamplePage = (target: number) =>
-  keepScroll(() => loadSamples(target), samplePaneRef.value);
+const changeSamplePage = (target: number) => {
+  const selectionIsCurrent = captureSelection('model');
+  let sequence = sampleSequence;
+  return keepScroll(() => {
+    const request = loadSamples(target);
+    sequence = sampleSequence;
+    return request;
+  }, samplePaneRef.value, () => sequence === sampleSequence && selectionIsCurrent());
+};
 
 /** 点样本行 → 把该行取值填进输入表单 */
 const applySample = (index: number) => {
@@ -650,11 +706,23 @@ const stopExplanation = () => {
 };
 
 onMounted(async () => {
-  const list = await getScenarioList();
-  scenarios.value = list;
-  if (!selectedScenario.value && scenarioOptions.value.length) {
-    selectedScenario.value = scenarioOptions.value[0].value;
+  const session = sessionRevision;
+  const owner = userStore.currentUser?.user_id;
+  try {
+    const list = await getScenarioList();
+    if (!pageActive || session !== sessionRevision || owner !== userStore.currentUser?.user_id) return;
+    scenarios.value = list;
+    if (!selectedScenario.value && scenarioOptions.value.length) {
+      selectedScenario.value = scenarioOptions.value[0].value;
+    }
+  } catch {
+    // 场景查询失败保持空范围，不继续发起数据集或模型请求。
   }
+});
+
+onBeforeUnmount(() => {
+  pageActive = false;
+  sampleSequence += 1;
 });
 
 /**

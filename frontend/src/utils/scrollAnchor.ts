@@ -64,17 +64,22 @@ const restore = (anchors: Anchor[]): void => {
 
 export const keepScroll = async (
   action: () => unknown,
-  anchor?: HTMLElement | null
+  anchor?: HTMLElement | null,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> => {
   const anchors = capture(anchor);
   try {
     await action();
   } finally {
     // 三次摆位：动作返回时（DOM 可能还没换）、DOM 更新后、下一帧布局定稿后
-    restore(anchors);
-    await nextTick();
-    restore(anchors);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    restore(anchors);
+    if (isCurrent()) {
+      restore(anchors);
+      await nextTick();
+      if (isCurrent()) {
+        restore(anchors);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        if (isCurrent()) restore(anchors);
+      }
+    }
   }
 };

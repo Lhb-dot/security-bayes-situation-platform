@@ -96,7 +96,14 @@ watch(tableWrapRef, (el) => {
 });
 
 /** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
-const changePage = (target: number) => keepScroll(() => loadPage(target), tableWrapRef.value);
+const changePage = (target: number) => {
+  let sequence = loadSequence;
+  return keepScroll(() => {
+    const request = loadPage(target);
+    sequence = loadSequence;
+    return request;
+  }, tableWrapRef.value, () => mounted && sequence === loadSequence);
+};
 
 onBeforeUnmount(() => {
   mounted = false;
