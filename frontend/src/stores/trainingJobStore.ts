@@ -23,6 +23,7 @@ import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getModelVersionDetail, listTrainingJobs } from '@/api/trainingApi';
 import { createIsTerminal, messageOf } from '@/utils/job';
+import { parseBeijingNaive } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
 
@@ -91,17 +92,6 @@ let polling = false;
  * reset() 时清空（换账号 / 重新恢复任务时重建）。
  */
 const settledIds = new Set<number>();
-
-/**
- * 服务端时间戳解析。row_to_dict 出的是北京时间 naive 字符串（`common.py` 的 to_beijing +
- * `%Y-%m-%d %H:%M:%S`），没有时区标记 —— 直接 `new Date()` 会按浏览器本地时区解析，
- * 换个时区就偏。这里显式补上 +08:00。
- */
-const parseServerTime = (value?: string): number | null => {
-  if (!value) return null;
-  const parsed = new Date(`${value.replace(' ', 'T')}+08:00`).getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 const isTerminalStatus = (status: string) => TERMINAL_STATUSES.includes(status);
 
@@ -227,7 +217,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
           const id = Number(row.id ?? row.model_version_id);
           if (!Number.isFinite(id)) continue;
           if (isTerminalStatus(status) && seen.has(String(id))) continue;
-          this.track(id, trainingJobTitle(row), status, parseServerTime(row.trained_at) ?? undefined);
+          this.track(id, trainingJobTitle(row), status, parseBeijingNaive(row.trained_at) ?? undefined);
         }
       } catch {
         // 恢复失败不影响页面：训练仍在后台跑，结果可在模型中心看到

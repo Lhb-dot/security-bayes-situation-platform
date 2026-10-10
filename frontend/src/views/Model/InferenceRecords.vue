@@ -19,6 +19,7 @@ import {
   streamInferenceExplanation,
 } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
+import { formatBeijingDateTime, parseInstant } from '@/utils/datetime';
 import { keepScroll } from '@/utils/scrollAnchor';
 
 /** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
@@ -158,23 +159,11 @@ watch([explanationReasoning, explanationMarkdown], stickExplanationToBottom);
 /** 该推理所用模型是否已保存 AI 评价（无评价时入口仍可点，面板内给出提示） */
 const hasModelEvaluation = computed(() => Boolean(modelEvaluationMarkdown.value));
 
-/**
- * 只用于弹窗里的 `generated_explanation.generated_at` —— 它是后端手写进 JSONB 的 UTC ISO 串
- * （如 2026-09-14T09:09:08.949249+00:00），直接渲染会把带微秒的原文怼到界面上。
- * 表格里的 `executed_at` 是 ORM DateTime 列，row_to_dict 已转成北京时间字符串，不用再过这里。
- */
+/** 只格式化 JSONB 里的 UTC ISO 串；表格字段是北京时间字符串，不走这里。 */
 const formatBeijingTime = (value: string | null | undefined): string => {
   if (!value) return '';
-  const raw = String(value);
-  // 无时区标记的裸时间按 UTC 处理（后端统一存 timezone.utc）
-  const parsed = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
-  if (Number.isNaN(parsed.getTime())) return raw;
-  const beijing = new Date(parsed.getTime() + 8 * 60 * 60 * 1000);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${beijing.getUTCFullYear()}-${pad(beijing.getUTCMonth() + 1)}-${pad(beijing.getUTCDate())} ` +
-    `${pad(beijing.getUTCHours())}:${pad(beijing.getUTCMinutes())}:${pad(beijing.getUTCSeconds())}`
-  );
+  const ms = parseInstant(value);
+  return ms === null ? String(value) : formatBeijingDateTime(ms);
 };
 
 const toggleModelEvaluation = async () => {
