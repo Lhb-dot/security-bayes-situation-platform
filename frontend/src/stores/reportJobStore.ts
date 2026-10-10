@@ -26,7 +26,8 @@ import {
   listReportGenerateJobs,
 } from '@/api/reportApi';
 import type { Report } from '@/types/security';
-import { createIsTerminal, messageOf, toMillis } from '@/utils/job';
+import { createIsTerminal, messageOf } from '@/utils/job';
+import { toMillis } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
 

@@ -17,7 +17,8 @@ import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getInferenceBatchJob, listInferenceBatchJobs } from '@/api/inferenceRecordApi';
 import type { BatchInferenceResult } from '@/api/inferenceRecordApi';
-import { createIsTerminal, messageOf, toMillis } from '@/utils/job';
+import { createIsTerminal, messageOf } from '@/utils/job';
+import { toMillis } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
 

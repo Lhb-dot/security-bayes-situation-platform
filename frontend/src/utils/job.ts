@@ -9,12 +9,6 @@
 export const messageOf = (err: unknown, fallback: string): string =>
   err instanceof Error && err.message ? err.message : fallback;
 
-/** 后端 created_at 是 epoch 秒；缺失或非法时退回本地时钟。 */
-export const toMillis = (createdAt?: number): number =>
-  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
-    ? createdAt * 1000
-    : Date.now();
-
 /**
  * 生成「任务是否已到终态」的判定函数。
  * 返回的函数签名与原来的局部 isTerminal 一致，可直接传给 Array.filter。
