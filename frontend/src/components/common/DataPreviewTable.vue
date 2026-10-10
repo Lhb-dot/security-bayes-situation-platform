@@ -8,8 +8,10 @@
  * 滚轮优先级：表格是定高（max-height）内滚容器，浏览器默认会先滚表格、页面不动。
  * 这里用 attachOuterFirstWheel 反转滚动链 —— 先把外层页面滚到顶/底，余量再滚表格。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useDatasetStore } from '@/stores/datasetStore';
+import { useUserStore } from '@/stores/userStore';
+import type { DataPreview } from '@/types/security';
 import { attachOuterFirstWheel } from '@/utils/scrollChain';
 import { keepScroll } from '@/utils/scrollAnchor';
 
@@ -25,25 +27,37 @@ const props = withDefaults(
 );
 
 const datasetStore = useDatasetStore();
+const userStore = useUserStore();
 const currentPage = ref(1);
 const loading = ref(true);
 const error = ref('');
 
-const preview = computed(() => datasetStore.preview);
+const preview = ref<DataPreview | null>(null);
+let loadSequence = 0;
+let mounted = true;
 const rows = computed(() => preview.value?.rows ?? []);
 const total = computed(() => preview.value?.total ?? 0);
 /** 动态列：以首行键为正式字段名（跨分页字段结构稳定） */
 const columns = computed<string[]>(() => (rows.value.length > 0 ? Object.keys(rows.value[0]) : []));
 
 const loadPage = async (page: number) => {
+  const sequence = ++loadSequence;
+  const id = props.datasetId;
+  const pageSize = props.pageSize;
+  const owner = userStore.currentUser?.user_id;
+  const isCurrent = () => mounted && sequence === loadSequence
+    && id === props.datasetId && pageSize === props.pageSize && owner === userStore.currentUser?.user_id;
   loading.value = true;
   error.value = '';
   try {
-    await datasetStore.fetchPreview(props.datasetId, { page, page_size: props.pageSize });
+    const result = await datasetStore.fetchPreview(id, { page, page_size: pageSize }, { isCurrent });
+    if (!isCurrent()) return;
+    preview.value = result;
+    currentPage.value = result.page;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '预览数据加载失败';
+    if (isCurrent()) error.value = err instanceof Error ? err.message : '预览数据加载失败';
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 };
 
@@ -55,16 +69,17 @@ const cellClass = ({ column }: { column: { property: string } }): string =>
 const headerClass = ({ column }: { column: { property: string } }): string =>
   column.property === props.labelField ? 'preview-label-header' : '';
 
-onMounted(() => {
-  loadPage(1);
-});
-
 watch(
-  () => props.datasetId,
-  () => {
+  [() => props.datasetId, () => props.pageSize, () => userStore.currentUser?.user_id],
+  ([id, , owner]) => {
+    loadSequence += 1;
+    preview.value = null;
     currentPage.value = 1;
-    loadPage(1);
-  }
+    error.value = '';
+    if (id && owner) void loadPage(1);
+    else loading.value = false;
+  },
+  { immediate: true, flush: 'sync' },
 );
 
 /**
@@ -84,6 +99,8 @@ watch(tableWrapRef, (el) => {
 const changePage = (target: number) => keepScroll(() => loadPage(target), tableWrapRef.value);
 
 onBeforeUnmount(() => {
+  mounted = false;
+  loadSequence += 1;
   detachWheel?.();
   detachWheel = null;
 });

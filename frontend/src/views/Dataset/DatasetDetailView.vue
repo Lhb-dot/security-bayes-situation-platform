@@ -5,10 +5,12 @@
  * 两页签：字段结构 + 数据内容预览（只读分页、标签列高亮）。
  * 数据链路：页面 → datasetStore / scenarioStore（页面不直连 API）。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { useScenarioStore } from '@/stores/scenarioStore';
+import { useUserStore } from '@/stores/userStore';
+import type { Dataset, DatasetField } from '@/types/security';
 import DataPreviewTable from '@/components/common/DataPreviewTable.vue';
 import { stripArffQuotes } from '@/utils/arffValue';
 
@@ -16,6 +18,7 @@ const route = useRoute();
 const router = useRouter();
 const datasetStore = useDatasetStore();
 const scenarioStore = useScenarioStore();
+const userStore = useUserStore();
 
 const datasetId = computed(() => String(route.params.datasetId ?? ''));
 const loading = ref(true);
@@ -23,38 +26,48 @@ const error = ref('');
 const notFound = ref(false);
 const activeTab = ref('fields');
 
-const dataset = computed(() =>
-  datasetStore.datasets.find((d) => d.dataset_id === datasetId.value) ?? null
-);
+const dataset = ref<Dataset | null>(null);
+const loadedFields = ref<DatasetField[] | null>(null);
 const scenarioName = computed(() =>
   dataset.value ? (scenarioStore.scenarioById(dataset.value.scenario_id)?.name ?? dataset.value.scenario_id) : ''
 );
 const fields = computed(() =>
-  datasetStore.fields.length > 0 ? datasetStore.fields : (dataset.value?.fields ?? [])
+  loadedFields.value ?? dataset.value?.fields ?? []
 );
 const labelField = computed(() =>
   fields.value.find((f) => f.field_role === '分类标签')?.field_name
-  ?? datasetStore.preview?.label_field
   ?? ''
 );
 
-onMounted(async () => {
+watch([datasetId, () => userStore.currentUser?.user_id], async ([id, owner], _, onCleanup) => {
+  let active = true;
+  onCleanup(() => { active = false; });
+  const context = { isCurrent: () => active };
+  dataset.value = null;
+  loadedFields.value = null;
   loading.value = true;
   error.value = '';
   notFound.value = false;
+  if (!owner || !id) {
+    loading.value = false;
+    return;
+  }
   try {
-    await Promise.all([datasetStore.fetchDatasets(), scenarioStore.fetchScenarioList()]);
+    const [list] = await Promise.all([datasetStore.fetchDatasets(undefined, context), scenarioStore.fetchScenarioList()]);
+    if (!active) return;
+    dataset.value = list.find((item) => item.dataset_id === id) ?? null;
     if (!dataset.value) {
       notFound.value = true;
       return;
     }
-    await datasetStore.fetchFields(datasetId.value);
+    const definition = await datasetStore.fetchFields(id, undefined, context);
+    if (active) loadedFields.value = definition;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '数据集加载失败';
+    if (active) error.value = err instanceof Error ? err.message : '数据集加载失败';
   } finally {
-    loading.value = false;
+    if (active) loading.value = false;
   }
-});
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <template>
