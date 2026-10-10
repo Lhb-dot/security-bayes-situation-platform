@@ -20,6 +20,7 @@ import {
 } from '@/api/datasetApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 import { useUserStore } from '@/stores/userStore';
+import { stripArffQuotes } from '@/utils/arffValue';
 
 const router = useRouter();
 
@@ -509,7 +510,11 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <!-- 样例数据：定宽截断，悬停由列的 show-overflow-tooltip 展示完整值 -->
-        <el-table-column prop="sample_value" label="样例数据" width="170" show-overflow-tooltip />
+        <el-table-column label="样例数据" width="170" show-overflow-tooltip>
+          <template #default="{ row }: { row: { sample_value?: string } }">
+            {{ stripArffQuotes(row.sample_value) }}
+          </template>
+        </el-table-column>
         <!-- 字段说明：只用一个圆点表示有/无（无=灰、有=绿），有说明时悬停展示文本 -->
         <el-table-column label="字段说明" width="88" align="center">
           <template #default="{ row }: { row: DatasetField }">

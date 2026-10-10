@@ -73,12 +73,7 @@ export interface UserListParams {
 }
 
 export const getUserList = async (params?: UserListParams): Promise<UserListResult> => {
-  const data = await unwrapData<{
-    items?: ApiUser[];
-    total?: number;
-    page?: number;
-    page_size?: number;
-  }>(
+  const data = await unwrapData(
     await request.get('/api/v1/users', {
       params: {
         page: params?.page ?? 1,

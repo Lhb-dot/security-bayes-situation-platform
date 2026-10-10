@@ -28,7 +28,6 @@ import type { AlgorithmParamDef } from '@/types/security';
 import { useUserStore } from '@/stores/userStore';
 import { useTrainingJobStore } from '@/stores/trainingJobStore';
 import { getScenarios, getDatasets, getAlgorithms, trainModelAsync } from '@/api/trainingApi';
-import type { AlgorithmRow, ModelVersionRow } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -157,6 +156,11 @@ const trainingJobStore = useTrainingJobStore();
 const activeJob = computed(() => trainingJobStore.activeJob);
 const training = computed(() => Boolean(activeJob.value));
 
+/** 提交训练后返回的模型版本行（trainingApi 为 JS 模块无类型，本页只用到 id） */
+interface ModelVersionRow {
+  id: number;
+}
+
 // ===================== 场景切换 → 加载数据集 =====================
 /** 竞态令牌：连着切两个场景时只认最后一次请求的结果。否则先发出的旧场景请求
  *  后返回，会把旧场景的数据集盖在新场景上，训练就成了「B 场景 + A 场景数据集」 */
@@ -244,11 +248,20 @@ const handleTrain = async () => {
   }
 };
 
+/** /api/v1/algorithms 返回的算法行（trainingApi 为 JS 模块无类型，此处显式声明） */
+interface ApiAlgorithmRow {
+  id: number;
+  code: string;
+  display_name: string;
+  description?: string | null;
+  status: string;
+  param_schema?: unknown[];
+}
+
 onMounted(async () => {
   try {
     scenarios.value = await getScenarios();
-    const algorithmRows: AlgorithmRow[] = await getAlgorithms();
-    algorithms.value = algorithmRows.map((a) => ({
+    algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
       id: a.id,
       display_name: a.display_name,
       available: a.status === 'AVAILABLE',

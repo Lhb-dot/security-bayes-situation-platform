@@ -38,7 +38,6 @@ backend/java/.build-*/
 backend/java/.check*/
 *.jar
 *.class
-!backend/lib/*.jar
 backend/java/algorithm-src/PMWNB/dataset_59/
 backend/java/algorithm-src/PMWNB/PMWNB.zip
 

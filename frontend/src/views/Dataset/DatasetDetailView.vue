@@ -10,6 +10,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useDatasetStore } from '@/stores/datasetStore';
 import { useScenarioStore } from '@/stores/scenarioStore';
 import DataPreviewTable from '@/components/common/DataPreviewTable.vue';
+import { stripArffQuotes } from '@/utils/arffValue';
 
 const route = useRoute();
 const router = useRouter();
@@ -114,10 +115,14 @@ onMounted(async () => {
                   </span>
                 </template>
               </el-table-column>
-              <el-table-column prop="sample_value" label="样例值" width="140" show-overflow-tooltip />
+              <el-table-column label="样例值" width="140" show-overflow-tooltip>
+                <template #default="{ row }: { row: { sample_value?: string } }">
+                  {{ stripArffQuotes(row.sample_value) }}
+                </template>
+              </el-table-column>
               <el-table-column label="枚举值域" min-width="240" show-overflow-tooltip>
                 <template #default="{ row }: { row: { enum_values?: string[] } }">
-                  <span class="dataset-detail__enum">{{ row.enum_values?.join(' / ') ?? '—' }}</span>
+                  <span class="dataset-detail__enum">{{ row.enum_values?.map(stripArffQuotes).join(' / ') ?? '—' }}</span>
                 </template>
               </el-table-column>
               <!-- 字段说明放在最后一列：只用一个圆点表示有/无（无=灰、有=绿），有说明时悬停展示文本 -->

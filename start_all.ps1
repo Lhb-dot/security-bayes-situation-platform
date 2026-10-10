@@ -97,10 +97,19 @@ if ($pgOk) {
     }
 }
 
+# ---- Java 服务日志目录 ----
+# 三个 Java 服务统一把 stdout/stderr 重定向到文件：不重定向时子进程 stdout 会挂到
+# 本窗口的控制台，窗口被关掉/输出阻塞时服务端 println 可能挂住（12315 一直这么做，
+# 12313/12314 原先漏了，出问题也没日志可查）。
+$logDir = Join-Path $backend "storage\logs"
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
 # ---- Java PMWNB ----
 Write-Host "  Java PMWNB    " -NoNewline
 $p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\pmwnb-service.jar","12313" `
-    -WorkingDirectory $backend -WindowStyle Hidden -PassThru
+    -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $logDir "pmwnb-service.out.log") `
+    -RedirectStandardError (Join-Path $logDir "pmwnb-service.err.log")
 if ($p) { $javaPid = $p.Id }
 $ok = $false
 $t = (Get-Date).AddSeconds(30)
@@ -114,7 +123,9 @@ else     { Write-Host ":12313  FAIL" -ForegroundColor Red }
 # ---- Java Predict (通用预测服务, 12314) ----
 Write-Host "  Predict       " -NoNewline
 $p = Start-Process -FilePath $javaBin -ArgumentList "-jar","lib\predict-service.jar","12314" `
-    -WorkingDirectory $backend -WindowStyle Hidden -PassThru
+    -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $logDir "predict-service.out.log") `
+    -RedirectStandardError (Join-Path $logDir "predict-service.err.log")
 if ($p) { $predictPid = $p.Id }
 $ok = $false
 $t = (Get-Date).AddSeconds(20)
@@ -129,13 +140,11 @@ else     { Write-Host ":12314  FAIL" -ForegroundColor Red }
 # 5 个 jar 字节完全相同，原本是同一个程序起 5 次、只差第 2 个启动参数；
 # 合并后算法由请求体的 algorithm_code 指定，端口 12315-12319 → 12315。
 Write-Host "  Java NB Algo  " -NoNewline
-$algoLogDir = Join-Path $backend "storage\logs"
-New-Item -ItemType Directory -Path $algoLogDir -Force | Out-Null
 $nbAlgoProc = Start-Process -FilePath $javaBin `
     -ArgumentList @("-jar", (Join-Path $backend "lib\nb-algorithm-service.jar"), "12315") `
     -WorkingDirectory $backend -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput (Join-Path $algoLogDir "nb-algorithm.out.log") `
-    -RedirectStandardError (Join-Path $algoLogDir "nb-algorithm.err.log")
+    -RedirectStandardOutput (Join-Path $logDir "nb-algorithm.out.log") `
+    -RedirectStandardError (Join-Path $logDir "nb-algorithm.err.log")
 if ($nbAlgoProc) { $algoPids += $nbAlgoProc.Id }
 $nbOk = $false
 $t = (Get-Date).AddSeconds(20)

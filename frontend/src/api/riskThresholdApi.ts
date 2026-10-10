@@ -71,7 +71,7 @@ export const getRiskThresholds = async (): Promise<ThresholdConfig[]> => {
 /** 查询当前账号全部阈值修改记录 */
 export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]> => {
   await ensureScenarioMaps();
-  const data = await unwrapData<{ items?: ApiThresholdChangeLog[] }>(
+  const data = await unwrapData(
     await request.get('/api/v1/risk-thresholds/audit-logs', { params: { page: 1, page_size: 200 } }),
   );
   return (data.items ?? []).map((item: ApiThresholdChangeLog) => ({

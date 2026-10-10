@@ -56,9 +56,7 @@ export const getModelVersionPage = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<ModelVersionPage> => {
-  const data = await unwrapData<Partial<ModelVersionPage>>(
-    await request.get('/api/v1/model-versions', { params }),
-  );
+  const data = await unwrapData(await request.get('/api/v1/model-versions', { params }));
   return {
     items: data.items ?? [],
     total: data.total ?? 0,

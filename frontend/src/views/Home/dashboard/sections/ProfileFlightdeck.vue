@@ -194,23 +194,25 @@ const groupLabels = computed(() => {
   return map;
 });
 
+/**
+ * 本表**只讲同源编码族治理**（同源组 / 编码形态 / 正类数 / 正类一致性），
+ * 不复述字段数、样本量（资产属性，归 S2）、也不复述已发布模型数（归 S3 建模覆盖）。
+ * 同一粒度的信息全页只展示一次。
+ */
 const familyColumns: DashColumn[] = [
   { key: 'name', label: '数据集' },
   { key: 'source_group', label: '同源组' },
   { key: 'encoding', label: '编码形态' },
-  { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
-  { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
   { key: 'risk_count', label: '正类数', numeric: true, align: 'right' },
   { key: 'collision_consistent', label: '正类一致性' },
-  { key: 'published_model_count', label: '已发布模型数', numeric: true, align: 'right' },
 ];
 
 /**
  * 同源编码族逐行对比。
  *
  * 管理端要回答的问题：同一批样本被注册成了几种编码？各自的正类数一致吗
- * （不一致说明同源组内至少有一份数据的标签口径有问题）？谁已经拿去建过模了
- * （同源组里只有代表份应该入模，多份入模等于把同一批样本重复喂给模型）。
+ * （不一致说明同源组内至少有一份数据的标签口径有问题）？
+ * 至于「谁已经拿去建过模了」，由 S3 建模覆盖统一回答，本表不再重复。
  */
 const familyRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.encoding_family.map((row) => ({
@@ -219,15 +221,12 @@ const familyRows = computed<Array<Record<string, unknown>>>(() =>
     // 组名查不到时退回原始 key（同组同值，不丢信息）；空串由 DashTable 渲染成「—」
     source_group: groupLabels.value.get(row.source_group) ?? row.source_group,
     encoding: ENCODING_TEXT[row.encoding] ?? '未知',
-    attribute_count: row.attribute_count,
-    record_count: row.record_count,
     risk_count: row.risk_count,
     // 正类一致性：与同源组代表的 risk_count 相同才算一致，不一致标红（管理告警）
     collision_consistent:
       row.collision_consistent === true
         ? { text: '一致', tone: 'ok' }
         : { text: '不一致', tone: 'up' },
-    published_model_count: row.published_model_count,
   })),
 );
 
@@ -241,16 +240,16 @@ const absorbedCount = computed(() => {
   return Math.max(stat.file_count - stat.effective_group_count, 0);
 });
 
+/**
+ * 去重收益四问中的后三问。
+ *
+ * **「同源冗余率」不在这里** —— 它已经是 S1 第 4 个 KPI（场景特色位），
+ * 同一个数在同一页出现两次会让读者以为是两个指标。此处只讲「去重前后样本差了多少、
+ * 吸收掉几份」，冗余率本身由 S1 承载。
+ */
 const redundancyKpis = computed(() => {
   const stat = props.data.redundancy;
   return [
-    {
-      label: '同源冗余率',
-      value: fmtPercent(stat.redundancy_rate),
-      tone: 'warning' as const,
-      raw: true,
-      sub: '1 - 有效数据集数 / 文件数',
-    },
     {
       label: '去重前样本',
       value: stat.raw_samples,
@@ -312,6 +311,11 @@ const datasetRows = computed(() =>
   })),
 );
 
+/**
+ * 本表**只讲资产属性**。`已发布模型数` 归 S3 建模覆盖（柱状图已按数据集逐根呈现），此处不再重复。
+ * `标签字段` 保留在本表 —— 舰面场景的 D1 讲的是同源编码族，不承载标签口径，
+ * 故标签字段在本场景只在 S2 出现一次。
+ */
 const assetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名' },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
@@ -319,7 +323,6 @@ const assetColumns: DashColumn[] = [
   { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
   { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
   { key: 'visibility', label: '可见性' },
-  { key: 'model', label: '已发布模型数' },
   { key: 'version', label: '版本', align: 'right' },
 ];
 
@@ -329,10 +332,9 @@ const assetColumns: DashColumn[] = [
  * 未登记风险口径的数据集**不隐藏**（契约 §0.1：不得用 is_risk_label 过滤掉未登记数据集），
  * 而是在「标签字段」列挂黄色告警标签 —— 未登记意味着它不会产生风险事件，
  * 这是管理端必须看见的信息，不是可以省略的行。
- * 模型数查不到时给 undefined，由 DashTable 统一渲染「—」，而不是假装 0（会误报未建模）。
  */
 const assetRows = computed<Array<Record<string, unknown>>>(() =>
-  datasetRows.value.map(({ item, name, model }) => ({
+  datasetRows.value.map(({ item, name }) => ({
     logical_id: item.logical_id,
     name,
     record_count: item.record_count,
@@ -341,7 +343,6 @@ const assetRows = computed<Array<Record<string, unknown>>>(() =>
     risk_rate: fmtPercent(item.risk_rate),
     attribute_count: item.attribute_count,
     visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility,
-    model: model ? `已发布 ${model.published} / 共 ${model.total}` : undefined,
     version: `v${item.version}`,
   })),
 );

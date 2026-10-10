@@ -13,7 +13,6 @@ import { marked } from 'marked';
 import { useUserStore } from '@/stores/userStore';
 import { getAlgorithms } from '@/api/algorithmApi';
 import { getDatasets, getScenarios } from '@/api/trainingApi';
-import type { AlgorithmRow, DatasetRow, ScenarioRow } from '@/api/trainingApi';
 import {
   deleteModelVersion,
   disableModel,
@@ -506,8 +505,29 @@ onBeforeUnmount(() => {
  * 下拉框数据源的行类型（描述后端**实际返回**的字段）：
  * - GET /algorithms 返回算法表原始行，而 algorithmApi 声明的 AlgorithmDefinition 与后端不符，
  *   所以下面只能双重断言收口（根因在 algorithmApi.ts，属跨分区提案）；
- * - GET /scenarios、GET /datasets 的行类型由 trainingApi 导出。
+ * - GET /scenarios、GET /datasets 来自未类型化的 trainingApi.js，只能在此就地声明。
  */
+interface AlgorithmRow {
+  id: number;
+  code: string;
+  display_name: string;
+}
+
+interface ScenarioRow {
+  id: number;
+  code: string;
+  name: string;
+  access_status: string;
+}
+
+interface DatasetRow {
+  id: number;
+  logical_id: string;
+  name: string;
+  version: number;
+  scenario_id: number;
+}
+
 onMounted(async () => {
   await userStore.bootstrap();
   if (currentUser.value?.role !== 'SUPER_ADMIN' && currentUser.value?.scenario_code) {
@@ -515,15 +535,13 @@ onMounted(async () => {
   }
   const rows = await getAlgorithms() as unknown as AlgorithmRow[];
   algorithms.value = rows.map((a) => ({ algorithm_id: String(a.id), display_name: a.display_name || a.code }));
-  const scenarioRows: ScenarioRow[] = await getScenarios();
+  const scenarioRows = await getScenarios() as ScenarioRow[];
   allScenarios.value = scenarioRows
     .filter((scenario) => scenario.access_status === 'ACTUAL')
     .map((scenario) => ({ id: scenario.id, code: scenario.code, name: scenario.name }));
-  const datasetRows: DatasetRow[][] = await Promise.all(
-    allScenarios.value.map((scenario) => getDatasets(scenario.id)),
-  );
+  const datasetRows = await Promise.all(allScenarios.value.map((scenario) => getDatasets(scenario.id)));
   allDatasets.value = datasetRows.flatMap((rows) =>
-    rows.map((dataset) => ({
+    (rows as DatasetRow[]).map((dataset) => ({
       ...dataset,
       scenario_code: allScenarios.value.find((scenario) => scenario.id === dataset.scenario_id)?.code || '',
     }))

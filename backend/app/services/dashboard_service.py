@@ -160,6 +160,9 @@ GEO_DATASET_ROLES = {
     "dis_causative_factors": "致灾因子表",
     "dis_global_catalog": "全球编目表",
     "dis_guaruja_random": "随机基线集",
+    # 生产 seed 用新 logical_id 注册的同一份 DIS_Landslides（字节完全相同，正常会被
+    # 同源去重吸收）。此处登记是兜底：一旦它成为组代表，角色不能落到「未分类」。
+    "geo_slope_company_v1": "风险标签表",
 }
 #: 未在 GEO_DATASET_ROLES 中登记的数据集统一角色
 GEO_ROLE_UNCLASSIFIED = "未分类"
@@ -1946,8 +1949,21 @@ class DashboardService(ServiceBase):
         }
 
         modeling_by_logical = modeling_by_logical or {}
-        roles: list[dict[str, Any]] = []
+
+        # 同源去重：同一份物理文件被多次注册时（如 geo_slope_company_v1 ≡ dis_landslides，
+        # 字节完全相同）只保留第一个。否则角色矩阵会多出一行同名同内容的数据集，
+        # 因子覆盖矩阵也会把同一个来源算两次。D1/D2 共用这一份基底。
+        unique_entries: list[Dataset] = []
+        seen_fingerprints: set[str] = set()
         for entry in by_logical.values():
+            fingerprint = content_fingerprint(entry)
+            if fingerprint in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fingerprint)
+            unique_entries.append(entry)
+
+        roles: list[dict[str, Any]] = []
+        for entry in unique_entries:
             info = reader.describe(entry)
             modeling = modeling_by_logical.get(entry.logical_id) or {}
             roles.append(
@@ -1971,9 +1987,12 @@ class DashboardService(ServiceBase):
         for factor in GEO_FACTORS:
             covered: list[str] = []
             definitions: list[tuple] = []
-            for entry in by_logical.values():
+            for entry in unique_entries:
                 for field in reader.fields(entry):
-                    if _clean(field.get("name")) == factor:
+                    # 大小写无关：guaruja_random 的字段全是小写（twi / slope / elevation），
+                    # 与 GEO_FACTORS 的大写写法同义（scenario_feature_catalog 的 names 里
+                    # 两种写法都已登记）。精确匹配会把它们整批漏掉，低估覆盖度。
+                    if _clean(field.get("name")).lower() == factor.lower():
                         covered.append(entry.logical_id)
                         definitions.append(tuple(field.get("enum_values") or ()))
                         break

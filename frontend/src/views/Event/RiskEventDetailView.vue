@@ -79,7 +79,7 @@ const creatorName = computed(() =>
 );
 
 /**
- * 后端文案常量（utils/request.ts 把响应体 detail 原样塞进 Error.message）：
+ * 后端文案常量（utils/request.js 把响应体 detail 原样塞进 Error.message）：
  * 404 = risk_event_service._get「风险事件不存在」；403 = _require_event_access「无权限操作」。
  * 旧代码比对的是「无权查看该事件 / 无权访问该场景」——后端从不产生这两条，
  * 于是 denied 分支永远进不去，403 落到通用错误卡 + 一个必然失败的重试按钮。

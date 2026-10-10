@@ -17,11 +17,8 @@ import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getInferenceBatchJob, listInferenceBatchJobs } from '@/api/inferenceRecordApi';
 import type { BatchInferenceResult } from '@/api/inferenceRecordApi';
-import { createIsTerminal, messageOf } from '@/utils/job';
-import { toMillis } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { currentUid } from '@/stores/helpers';
-import { createPollTimer, filterExpired, trimFinished } from './jobPollingCore';
+import { useUserStore } from '@/stores/userStore';
 
 type BatchStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
@@ -69,10 +66,20 @@ export interface BatchJobResult {
   result: BatchInferenceResult;
 }
 
+let pollTimer: number | null = null;
 let polling = false;
-const poll = createPollTimer(POLL_INTERVAL_MS, () => void useBatchJobStore()._tick());
 
-const isTerminal = createIsTerminal<BackgroundBatchJob>(TERMINAL_STATUSES);
+const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
+
+const toMillis = (createdAt?: number): number =>
+  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
+    ? createdAt * 1000
+    : Date.now();
+
+const messageOf = (err: unknown, fallback: string) =>
+  err instanceof Error && err.message ? err.message : fallback;
+
+const isTerminal = (job: BackgroundBatchJob) => TERMINAL_STATUSES.includes(job.status);
 
 export const useBatchJobStore = defineStore('batchJob', {
   state: () => ({
@@ -127,11 +134,16 @@ export const useBatchJobStore = defineStore('batchJob', {
     },
 
     startPolling() {
-      poll.start();
+      if (pollTimer !== null) return;
+      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
+      void this._tick();
     },
 
     stopPolling() {
-      poll.stop();
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -279,7 +291,16 @@ export const useBatchJobStore = defineStore('batchJob', {
 
     /** 终态任务超过上限就丢最旧的 */
     _trimFinished() {
-      this.jobs = trimFinished(this.jobs, isTerminal, (job) => job.jobId, (job) => job.startedAt, MAX_FINISHED);
+      const finished = this.jobs.filter(isTerminal);
+      if (finished.length <= MAX_FINISHED) return;
+      const drop = new Set(
+        finished
+          .slice()
+          .sort((a, b) => a.startedAt - b.startedAt)
+          .slice(0, finished.length - MAX_FINISHED)
+          .map((job) => job.jobId),
+      );
+      this.jobs = this.jobs.filter((job) => !drop.has(job.jobId));
     },
 
     /**
@@ -289,7 +310,8 @@ export const useBatchJobStore = defineStore('batchJob', {
      * `_tick` 手里那个对象已经不在数组里，会白跑一轮。
      */
     purgeExpired(): boolean {
-      const kept = filterExpired(this.jobs, isTerminal, (job) => job.startedAt, FINISHED_TTL_MS);
+      const deadline = Date.now() - FINISHED_TTL_MS;
+      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;
