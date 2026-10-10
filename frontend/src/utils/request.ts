@@ -26,6 +26,31 @@ interface RequestInstance extends Omit<AxiosInstance, 'get' | 'post' | 'put' | '
 
 const CSRF_STORAGE_KEY = 'bayes_csrf_token';
 
+export type RequestErrorKind = 'unauthorized' | 'timeout' | 'canceled' | 'network' | 'http';
+
+/** 保留原有 Error/message 用法，同时让会话恢复能够区分未登录、超时和断网。 */
+export class RequestError extends Error {
+  readonly status: number | undefined;
+  readonly code: string | undefined;
+  readonly kind: RequestErrorKind;
+
+  constructor(message: string, details: { status?: number; code?: string } = {}) {
+    super(message);
+    this.name = 'RequestError';
+    this.status = details.status;
+    this.code = details.code;
+    this.kind = details.status === 401 ? 'unauthorized'
+      : details.code === 'ERR_CANCELED' ? 'canceled'
+        : ['ECONNABORTED', 'ETIMEDOUT'].includes(details.code ?? '') ? 'timeout'
+          : details.status ? 'http' : 'network';
+  }
+}
+
+// HTTP 客户端共用浏览器凭据；会话切换前的请求不能清除新会话的凭据或触发跳转。
+let sessionRevision = 0;
+const requestSessions = new WeakMap<object, number>();
+export const invalidateSessionRequests = (): void => { sessionRevision += 1; };
+
 const service = axios.create({
   // Dev: empty baseURL + Vite /api proxy keeps cookies first-party.
   // Prod: set VITE_API_BASE_URL to the backend origin when not same-origin.
@@ -127,6 +152,7 @@ const extractErrorMessage = async (error: unknown): Promise<string> => {
 };
 
 service.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  requestSessions.set(config, sessionRevision);
   const method = (config.method || 'get').toUpperCase();
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     const csrf = currentCsrfToken();
@@ -140,14 +166,19 @@ service.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 service.interceptors.response.use(
   (response: AxiosResponse) => response.data,
   async (error: AxiosError) => {
-    if (error.response?.status === 401) {
+    const currentSession = error.config && requestSessions.get(error.config) === sessionRevision
+      && !error.config.signal?.aborted;
+    if (error.response?.status === 401 && currentSession) {
       setCsrfToken(null);
       // 老版本把当前用户 id 写在 localStorage 里，现在已无写入方；这里只是清残留，
       // 清不掉（隐私模式）也不影响流程。
       safeStorage(() => window.localStorage.removeItem('bayes_session_user_id'));
       if (unauthorizedHandler) unauthorizedHandler();
     }
-    return Promise.reject(new Error(await extractErrorMessage(error)));
+    return Promise.reject(new RequestError(await extractErrorMessage(error), {
+      status: error.response?.status,
+      code: error.code,
+    }));
   },
 );
 

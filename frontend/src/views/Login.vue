@@ -16,7 +16,8 @@ const userStore = useUserStore();
 const username = ref('');
 const password = ref('');
 const loading = ref(false);
-const errorMsg = ref('');
+// 复用已有错误提示区域；普通未登录/401 保持原样，断网和超时提供恢复入口说明。
+const errorMsg = ref(userStore.bootstrapError);
 
 const handleLogin = async () => {
   if (loading.value) return;

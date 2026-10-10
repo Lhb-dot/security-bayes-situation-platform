@@ -25,6 +25,14 @@ export interface UserListResult {
   page_size: number;
 }
 
+export const SESSION_QUERY_TIMEOUT_MS = 10_000;
+export const USER_LIST_QUERY_TIMEOUT_MS = 15_000;
+
+export interface AuthRequestContext {
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+}
+
 const toUserAccount = (user: ApiUser): UserAccount => ({
   id: user.id,
   user_id: String(user.id),
@@ -44,22 +52,26 @@ const toUserAccount = (user: ApiUser): UserAccount => ({
 const unwrapUser = (payload: AuthPayload | ApiUser): UserAccount =>
   toUserAccount('user' in payload ? payload.user : payload);
 
-export const login = async (username: string, password: string): Promise<UserAccount> => {
+export const login = async (username: string, password: string, context?: AuthRequestContext): Promise<UserAccount> => {
   const payload = await unwrapData(
-    await request.post('/api/v1/auth/login', { username, password }),
+    await request.post('/api/v1/auth/login', { username, password }, { signal: context?.signal }),
   ) as AuthPayload;
-  setCsrfToken(payload.csrf_token ?? null);
+  if (context?.isCurrent() ?? true) setCsrfToken(payload.csrf_token ?? null);
   return unwrapUser(payload);
 };
 
-export const getMe = async (): Promise<UserAccount> =>
-  unwrapUser(await unwrapData(await request.get('/api/v1/auth/me')));
+export const getMe = async (options?: { signal?: AbortSignal }): Promise<UserAccount> =>
+  unwrapUser(await unwrapData(await request.get('/api/v1/auth/me', {
+    signal: options?.signal,
+    timeout: SESSION_QUERY_TIMEOUT_MS,
+    timeoutErrorMessage: '会话恢复超时，请检查网络后重新登录或刷新重试',
+  })));
 
-export const logout = async (): Promise<void> => {
+export const logout = async (context?: AuthRequestContext): Promise<void> => {
   try {
-    await unwrapData(await request.post('/api/v1/auth/logout'));
+    await unwrapData(await request.post('/api/v1/auth/logout', undefined, { signal: context?.signal }));
   } finally {
-    setCsrfToken(null);
+    if (context?.isCurrent() ?? true) setCsrfToken(null);
   }
 };
 
@@ -80,6 +92,8 @@ export const getUserList = async (params?: UserListParams): Promise<UserListResu
     page_size?: number;
   }>(
     await request.get('/api/v1/users', {
+      timeout: USER_LIST_QUERY_TIMEOUT_MS,
+      timeoutErrorMessage: '用户列表加载超时，请稍后重试',
       params: {
         page: params?.page ?? 1,
         page_size: params?.page_size ?? 200,

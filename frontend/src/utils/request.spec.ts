@@ -2,7 +2,8 @@
 import { AxiosError } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import request, { getCsrfToken, setCsrfToken, setUnauthorizedHandler, unwrapData } from './request';
+import request, { getCsrfToken, invalidateSessionRequests, RequestError, setCsrfToken, setUnauthorizedHandler, unwrapData } from './request';
+import { deferred } from '@/test/queryFixtures';
 
 const originalAdapter = request.defaults.adapter;
 const response = (config: InternalAxiosRequestConfig, data: unknown, status = 200) => ({
@@ -34,6 +35,16 @@ afterEach(() => {
 });
 
 describe('response interceptor contract', () => {
+  it.each([
+    ['ECONNABORTED', undefined, 'timeout'], ['ETIMEDOUT', undefined, 'timeout'],
+    ['ERR_CANCELED', undefined, 'canceled'], ['ERR_NETWORK', undefined, 'network'],
+    ['ERR_BAD_RESPONSE', 401, 'unauthorized'], ['ERR_BAD_RESPONSE', 503, 'http'],
+  ] as const)('preserves %s/%s metadata as %s', async (code, status, kind) => {
+    request.defaults.adapter = async (config) => {
+      throw new AxiosError('readable error', code, config, undefined, status ? response(config, {}, status) : undefined);
+    };
+    await expect(request.get('/test')).rejects.toMatchObject({ name: 'RequestError', code, status, kind, message: 'readable error' });
+  });
   it('returns the response body, rather than an AxiosResponse wrapper', async () => {
     const body = { code: 0, data: { id: 7 } };
     request.defaults.adapter = async (config) => response(config, body);
@@ -77,6 +88,27 @@ describe('response interceptor contract', () => {
 });
 
 describe('CSRF and unauthorized handling', () => {
+  it('does not let an old request 401 clear new credentials or redirect', async () => {
+    const wait = deferred<void>();
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    request.defaults.adapter = async (config) => {
+      started();
+      await wait.promise;
+      throw new AxiosError('old 401', 'ERR_BAD_RESPONSE', config, undefined, response(config, {}, 401));
+    };
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    const old = request.get('/test');
+    const handled = expect(old).rejects.toBeInstanceOf(RequestError);
+    await ready;
+    invalidateSessionRequests();
+    setCsrfToken('new-session');
+    wait.resolve();
+    await handled;
+    expect(getCsrfToken()).toBe('new-session');
+    expect(handler).not.toHaveBeenCalled();
+  });
   it('uses the cookie token first and attaches it only to mutating methods', async () => {
     setCsrfToken('session-token');
     document.cookie = 'bayes_csrf=cookie-token; Path=/';
