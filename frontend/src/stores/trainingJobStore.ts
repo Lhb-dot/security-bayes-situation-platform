@@ -22,6 +22,7 @@
 import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getModelVersionDetail, listTrainingJobs } from '@/api/trainingApi';
+import type { TrainingJobRow } from '@/api/trainingApi';
 import { createIsTerminal, messageOf } from '@/utils/job';
 import { parseBeijingNaive } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
@@ -66,17 +67,6 @@ export interface BackgroundTrainingJob {
   startedAt: number;
   /** 已用秒数（每次轮询按真实时间差重算） */
   elapsed: number;
-}
-
-/** 后端返回的训练任务行（trainingApi 为 JS 模块无类型，此处只声明用到的字段） */
-interface TrainingJobRow {
-  id?: number;
-  model_version_id?: number;
-  status?: string;
-  scenario_name?: string;
-  algorithm_name?: string;
-  trained_at?: string;
-  evaluation_metrics?: { error?: string } | null;
 }
 
 let pollTimer: number | null = null;
