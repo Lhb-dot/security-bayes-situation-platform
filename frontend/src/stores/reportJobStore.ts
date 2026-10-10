@@ -30,6 +30,7 @@ import { createIsTerminal, messageOf } from '@/utils/job';
 import { toMillis } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
+import { createPollTimer, filterExpired, trimFinished } from './jobPollingCore';
 
 export type ReportJobKind = 'generate' | 'export';
 export type ReportJobStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
@@ -76,8 +77,8 @@ const TERMINAL_STATUSES: ReportJobStatus[] = ['DONE', 'FAILED'];
  */
 const FINISHED_TTL_MS = 24 * 60 * 60 * 1000;
 
-let pollTimer: number | null = null;
 let polling = false;
+const poll = createPollTimer(POLL_INTERVAL_MS, () => void useReportJobStore()._tick());
 
 /** 下载文件名：去掉文件系统不接受的字符（与后端 report_export.safe_filename 一致） */
 const safeFileName = (title: string, reportId: string) => {
@@ -173,16 +174,11 @@ export const useReportJobStore = defineStore('reportJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      poll.start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      poll.stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -343,16 +339,7 @@ export const useReportJobStore = defineStore('reportJob', {
 
     /** 终态任务超过上限就丢最旧的（正常情况下 markAllSeen 会先清掉） */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => job.jobId),
-      );
-      this.jobs = this.jobs.filter((job) => !drop.has(job.jobId));
+      this.jobs = trimFinished(this.jobs, isTerminal, (job) => job.jobId, (job) => job.startedAt, MAX_FINISHED);
     },
 
     /**
@@ -362,8 +349,7 @@ export const useReportJobStore = defineStore('reportJob', {
      * `_tick` 手里那个对象已经不在数组里，会白跑一轮。
      */
     purgeExpired(): boolean {
-      const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = filterExpired(this.jobs, isTerminal, (job) => job.startedAt, FINISHED_TTL_MS);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;
