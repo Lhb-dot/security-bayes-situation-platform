@@ -84,6 +84,23 @@ describe('training polling integration', () => {
     expect(detail).not.toHaveBeenCalled();
   });
 
+  it('resumes polling with server time after refresh, preserving unseen completed jobs', async () => {
+    list.mockResolvedValue([
+      { id: 1, status: 'TRAINING', trained_at: '2026-10-10 23:58:00' },
+      { id: 2, status: 'DRAFT', trained_at: '2026-10-10 23:57:00' },
+    ]);
+    await store.resumePending();
+    await store._tick();
+    expect(store.activeJob?.elapsed).toBe(120);
+    expect(store.unseenJobs.map((job) => job.modelVersionId)).toEqual([2]);
+    expect(ElNotification).not.toHaveBeenCalled();
+    detail.mockResolvedValue({ id: 1, status: 'DRAFT' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(store.running).toBe(false);
+    expect(store.unseenJobs).toHaveLength(2);
+    expect(ElNotification).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses an account-changed response even before the UI resets its Store', async () => {
     const wait = deferred<Awaited<ReturnType<typeof getModelVersionDetail>>>();
     detail.mockReturnValue(wait.promise);

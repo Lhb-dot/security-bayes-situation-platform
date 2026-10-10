@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createJobPoller } from './jobPollingCore';
+import { createJobPoller, createStorePoller } from './jobPollingCore';
 import type { PollContext } from './jobPollingCore';
 
 const deferred = () => {
@@ -73,5 +73,20 @@ describe('job polling lifecycle', () => {
     await expect(poll.tick()).rejects.toThrow('unexpected');
     await poll.tick();
     expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps different Store instances independent when one is reset', async () => {
+    const pollFor = createStorePoller(1000, () => 'a');
+    const first = { _poll: vi.fn(async () => {}) };
+    const second = { _poll: vi.fn(async () => {}) };
+    pollFor(first).start();
+    pollFor(second).start();
+    await vi.advanceTimersByTimeAsync(0);
+    pollFor(first).reset();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(first._poll).toHaveBeenCalledTimes(1);
+    expect(second._poll).toHaveBeenCalledTimes(3);
+    expect(pollFor(first)).not.toBe(pollFor(second));
+    pollFor(second).stop();
   });
 });

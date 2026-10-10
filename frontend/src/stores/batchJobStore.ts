@@ -216,44 +216,44 @@ export const useBatchJobStore = defineStore('batchJob', {
     },
 
     async _poll(context: PollContext) {
+      if (!context.isCurrent()) return;
+      const running = this.runningJobs;
+      if (!running.length) {
+        this.stopPolling();
+        return;
+      }
+      for (const job of running) {
         if (!context.isCurrent()) return;
-        const running = this.runningJobs;
-        if (!running.length) {
-          this.stopPolling();
-          return;
+        job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
+        if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
+          this._timeout(job);
+          continue;
         }
-        for (const job of running) {
+        try {
+          const view = await getInferenceBatchJob(job.jobId);
           if (!context.isCurrent()) return;
-          job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
-          if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
-            this._timeout(job);
-            continue;
+          job.status = view.status as BatchStatus;
+          job.error = view.error;
+          job.processed = view.processed;
+          job.total = view.total;
+          if (job.status === STATUS_DONE && view.result) {
+            this.lastResult = {
+              jobId: job.jobId,
+              modelVersionId: job.modelVersionId,
+              title: job.title,
+              result: view.result,
+            };
+            this._settle(job);
+          } else if (job.status === STATUS_FAILED) {
+            this._settle(job);
           }
-          try {
-            const view = await getInferenceBatchJob(job.jobId);
-            if (!context.isCurrent()) return;
-            job.status = view.status as BatchStatus;
-            job.error = view.error;
-            job.processed = view.processed;
-            job.total = view.total;
-            if (job.status === STATUS_DONE && view.result) {
-              this.lastResult = {
-                jobId: job.jobId,
-                modelVersionId: job.modelVersionId,
-                title: job.title,
-                result: view.result,
-              };
-              this._settle(job);
-            } else if (job.status === STATUS_FAILED) {
-              this._settle(job);
-            }
-          } catch (err) {
-            if (!context.isCurrent()) return;
-            // 单次轮询失败（网络抖动 / 服务端重启导致任务丢失）不立刻判死，交给超时兜底
-            job.error = messageOf(err, job.error ?? '任务状态查询失败');
-          }
+        } catch (err) {
+          if (!context.isCurrent()) return;
+          // 单次轮询失败（网络抖动 / 服务端重启导致任务丢失）不立刻判死，交给超时兜底
+          job.error = messageOf(err, job.error ?? '任务状态查询失败');
         }
-        if (context.isCurrent() && !this.running) this.stopPolling();
+      }
+      if (context.isCurrent() && !this.running) this.stopPolling();
     },
 
     /** 任务到达终态：出通知。**不从列表移除** —— 顶栏面板要展示它。 */
