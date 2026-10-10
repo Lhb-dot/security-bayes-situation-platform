@@ -205,6 +205,49 @@ def validate_fields_schema(
     return None
 
 
+def _unquote(text: str) -> str:
+    """剥掉最外层成对的单/双引号（Weka 用引号包裹含 `]`、逗号等字符的枚举值）。"""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
+
+def normalize_input_features(fields_schema: Any, input_features: Any) -> Any:
+    """把枚举输入就地对齐成 fields_schema 里声明的写法，返回同一个 dict。
+
+    ARFF 离散化数据集的枚举值是 Weka 的带引号形式（``'(-inf-27.755]'``）——
+    Weka 训练与预测都按这个字符串匹配属性取值。但上传 CSV、手工输入、以及
+    旧版 seed 回填的数据集会给出**去掉引号**的形式（``(-inf-27.755]``）。
+    两者语义相同、字符串不等：直接比较会误报「不在枚举值域内」；就算放行，
+    Java 侧 ``Instance.setValue(i, String)`` 也会因 ``indexOfValue`` 匹配不上而
+    **静默置缺失**，预测结果无声失真。
+
+    因此这里按「忽略最外层引号」匹配，命中后回写值域里的规范形式，
+    校验、预测、落库统一用规范值。匹配不上的原样保留，交给
+    ``validate_input_features`` 报可读错误。
+    """
+    if not isinstance(input_features, dict):
+        return input_features
+    for field in fields_schema or []:
+        if not isinstance(field, dict) or field.get("role") == "label":
+            continue
+        if str(field.get("type", "")).lower() != "enum":
+            continue
+        name = field.get("name")
+        if name not in input_features or input_features.get(name) is None:
+            continue
+        allowed = field.get("enum_values") or []
+        raw = str(input_features[name])
+        if raw in {str(v) for v in allowed}:
+            continue  # 已经是值域里的写法
+        stripped = _unquote(raw)
+        for candidate in allowed:
+            if _unquote(str(candidate)) == stripped:
+                input_features[name] = candidate
+                break
+    return input_features
+
+
 def validate_input_features(fields_schema: list[dict], input_features: Any) -> str | None:
     """校验单条推理输入（需求 3.1.3 / 3.1.5）。
 

@@ -35,7 +35,7 @@ import DashFunnel from '@/components/dashboard/DashFunnel.vue';
 import DashLine from '@/components/dashboard/DashLine.vue';
 import DashRows from '@/components/dashboard/DashRows.vue';
 import DashTable from '@/components/dashboard/DashTable.vue';
-import type { DashColumn } from '@/components/dashboard/DashTable.vue';
+import type { DashColumn, DashCell } from '@/components/dashboard/DashTable.vue';
 import { fmtDate, fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: GeologicalProfile }>();
@@ -173,55 +173,58 @@ const VISIBILITY_TEXT: Record<string, string> = {
 const visibilityText = (value: string | undefined) =>
   value ? (VISIBILITY_TEXT[value] ?? value) : '—';
 
-/** 每数据集的模型版本统计（后端已按 dataset 聚合，这里只做 logical_id 索引） */
-const modelingByDataset = computed(
-  () => new Map(props.data.modeling.map((item) => [item.logical_id, item])),
-);
-
 /* ------------------------------------------------------------------ */
 /* D1 ★ 数据集角色分工矩阵                                              */
 /* ------------------------------------------------------------------ */
+
+/** 「不该入模」的角色：编目表是全球事件背景库、基线集是负样本采样法的参照物，
+ *  两者未建模是设计使然，不计入「数据白躺」告警。 */
+const UNTRAINABLE_ROLES = new Set(['全球编目表', '随机基线集']);
 
 /**
  * 管理端的第一问：这些数据集各干什么活？
  * 角色（因子表/风险标签表/致灾因子表/全球编目表/随机基线集）由后端显式登记表映射，
  * 前端不做任何推断。
  *
- * 两列状态是**管理告警**，不是隐藏理由：
- *   「未建模」= 有数据却没有模型版本；
- *   「未登记·不产事件」= 该数据集的风险口径没进显式登记表，因此不会产生风险事件
- *   （constants.py 禁止按标签字符串/数值大小自动推断正类，只能靠登记表补齐）。
- *   这两类问题必须留在表里被看见，而不是像旧版那样用 is_risk_label 过滤掉整行。
+ * 本表**只讲职责**（角色 / 标签 / 建模与研判状态），不复述样本量、字段数、风险占比 ——
+ * 那些是「资产属性」，统一在 S2 资产明细里出现一次。同一粒度的信息全页只展示一次。
+ *
+ * 「建模与研判状态」把原先分开的两列（参与训练 / 产生风险事件）压成一个结论：
+ * 两列各自是二值，并排放时读者要自己做四象限判断，而页面不给判据；更关键的是
+ * 「未建模」在编目表、基线集上属于**设计使然**，在因子表 / 标签表上才是**数据白躺** ——
+ * 一律标黄会把真正的告警稀释掉。合并后每个数据集只给一个结论，结论里已含「该不该建」。
+ *
+ * 三类问题必须留在表里被看见，而不是像旧版那样用 is_risk_label 过滤掉整行。
  */
 const roleColumns: DashColumn[] = [
   { key: 'name', label: '数据集', width: 220 },
   { key: 'role', label: '角色', width: 110 },
-  { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
   { key: 'label_field', label: '标签字段' },
   { key: 'label_kind', label: '标签类型' },
-  { key: 'training', label: '参与训练' },
-  { key: 'risk_events', label: '产生风险事件' },
-  { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
-  { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
+  { key: 'status', label: '建模与研判状态' },
 ];
 
 const roleRows = computed<Array<Record<string, unknown>>>(() =>
-  props.data.roles.map((item) => ({
-    logical_id: item.logical_id,
-    name: nameOf(item.logical_id, item.name),
-    role: item.role,
-    attribute_count: item.attribute_count,
-    label_field: item.label_field,
-    label_kind: labelKindText(item.label_kind),
-    training: item.participates_in_training
-      ? { text: '已建模', tone: 'ok' }
-      : { text: '未建模', tone: 'warn' },
-    risk_events: item.produces_risk_events
-      ? { text: '是', tone: 'ok' }
-      : { text: '未登记·不产事件', tone: 'warn' },
-    record_count: fmtInt(item.record_count),
-    risk_rate: fmtPercent(item.risk_rate),
-  })),
+  props.data.roles.map((item) => {
+    let status: DashCell;
+    if (item.participates_in_training) {
+      status = { text: '已入模', tone: 'ok' };
+    } else if (UNTRAINABLE_ROLES.has(item.role)) {
+      status = { text: '设计内不入模', tone: 'muted' };
+    } else if (item.produces_risk_events) {
+      status = { text: '待建模 · 有风险口径', tone: 'warn' };
+    } else {
+      status = { text: '未登记 · 不产事件', tone: 'warn' };
+    }
+    return {
+      logical_id: item.logical_id,
+      name: nameOf(item.logical_id, item.name),
+      role: item.role,
+      label_field: item.label_field,
+      label_kind: labelKindText(item.label_kind),
+      status,
+    };
+  }),
 );
 
 /* ------------------------------------------------------------------ */
@@ -240,14 +243,22 @@ const factorColumns: DashColumn[] = [
   { key: 'binning', label: '分箱一致性', width: 110 },
 ];
 
+/**
+ * 分箱一致性只在**多源**时才有意义：只有一份数据含该因子时，「一致」是恒真命题
+ * （后端把单源定义为 `consistent_binning = true`），显示「一致」会让读者以为比对过了。
+ * 单源一律显示「单源无从比较」，把「这个因子只有一个来源」直接说出来。
+ */
 const factorRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.factor_coverage.map((item) => ({
     factor: item.factor,
     datasets: item.datasets.map((logicalId) => nameOf(logicalId)).join('、'),
     coverage: item.datasets.length,
-    binning: item.consistent_binning
-      ? { text: '一致', tone: 'ok' }
-      : { text: '不一致', tone: 'up' },
+    binning:
+      item.datasets.length > 1
+        ? item.consistent_binning
+          ? { text: '一致', tone: 'ok' }
+          : { text: '不一致', tone: 'up' }
+        : { text: '单源无从比较', tone: 'muted' },
   })),
 );
 
@@ -256,49 +267,41 @@ const factorRows = computed<Array<Record<string, unknown>>>(() =>
 /* ------------------------------------------------------------------ */
 
 /**
- * 列结构与四场景完全一致（契约 §7）：数据集名 / 样本量 / 标签字段 / 风险占比 /
- * 字段数 / 可见性 / 已发布模型数 / 版本。
+ * 管理端的资产视角：每份数据**本身**什么样（体量 / 字段数 / 可见性 / 版本）。
  *
- * 这里遍历**全部** datasets，不做任何过滤：未登记风险口径的行（`caliber_registered === false`）
- * 必须带着「未登记风险口径」标注留在表里 —— 旧版用 is_risk_label 把它过滤掉，
- * 结果管理端看不到「谁没登记」，这正是要修的登记表缺项问题。
+ * 与 D1 的分工：D1 讲「职责」（角色、标签口径、建模状态），S2 讲「资产属性」。
+ * 标签字段归 D1、模型数归 S3，这里都不再出现 —— 同一粒度的信息全页只展示一次。
+ *
+ * 遍历**全部** datasets，不做任何过滤：未登记风险口径的行必须留在表里
+ * （旧版用 is_risk_label 把它过滤掉，结果管理端看不到「谁没登记」）。
+ * 该状态现在由 D1 的「建模与研判状态」列统一表达，不再在此处重复标注。
  */
 const datasetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名', width: 220 },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
-  { key: 'label_field', label: '标签字段' },
   { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
   { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
   { key: 'visibility', label: '可见性' },
-  { key: 'models', label: '已发布模型数' },
   { key: 'version', label: '版本', numeric: true, align: 'right' },
 ];
 
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
-  props.data.datasets.map((item) => {
-    // 后端保证每个可见数据集都在 modeling 里；查不到时给「—」而不是伪造 0/0
-    const stat = modelingByDataset.value.get(item.logical_id);
-    return {
-      logical_id: item.logical_id,
-      name: nameOf(item.logical_id, item.name),
-      // 未登记风险口径 → 模板插槽里补一枚醒目告警标签
-      unregistered: item.caliber_registered === false,
-      record_count: fmtInt(item.record_count),
-      label_field: item.label_field,
-      risk_rate: fmtPercent(item.risk_rate),
-      attribute_count: item.attribute_count,
-      visibility: visibilityText(item.visibility),
-      models: stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
-      version: item.version,
-    };
-  }),
+  props.data.datasets.map((item) => ({
+    logical_id: item.logical_id,
+    name: nameOf(item.logical_id, item.name),
+    record_count: fmtInt(item.record_count),
+    risk_rate: fmtPercent(item.risk_rate),
+    attribute_count: item.attribute_count,
+    visibility: visibilityText(item.visibility),
+    version: item.version,
+  })),
 );
 
 /* ------------------------------------------------------------------ */
 /* S3 建模覆盖                                                          */
 /* ------------------------------------------------------------------ */
 
-/** S3 的单一基底：每数据集一行，柱状图 / 白躺名单 / 版本合计都从它派生 */
+/** S3 的单一基底：每数据集一行，柱状图与版本合计都从它派生 */
 const modelingRows = computed(() =>
   props.data.modeling.map((item) => ({
     name: nameOf(item.logical_id),
@@ -313,12 +316,7 @@ const modelingBars = computed(() =>
   modelingRows.value.map((row) => ({ value: row.name, count: row.total })),
 );
 
-/** 白躺数据集（有数据、无任何模型版本）—— 单独点名，柱状图看不出「0 根柱」 */
-const whiteLying = computed(() =>
-  modelingRows.value.filter(isWhiteLying).map((row) => row.name),
-);
-
-/** 已发布 / 草稿合计（DashBars 只渲染 count，published/draft 的逐数据集明细在 S2 列里） */
+/** 已发布 / 草稿合计（逐数据集的模型数由本块柱状图给出，不再在 S2 重复一列） */
 const modelTotals = computed(() =>
   modelingRows.value.reduce(
     (acc, row) => ({ published: acc.published + row.published, draft: acc.draft + row.draft }),
@@ -395,7 +393,7 @@ const memberRows = computed(() => {
   <!-- D1 ★ 数据集角色分工矩阵 -->
   <DashCard
     title="数据集角色分工矩阵"
-    source="按数据集逐行对比 · 角色由显式登记表映射 · 「未登记·不产事件」表示该数据集风险口径未登记，不会产生风险事件"
+    source="按数据集逐行对比 · 角色由显式登记表映射 · 状态列综合「是否入模」「是否登记风险口径」「角色是否可训练」三条判据"
   >
     <DashTable :columns="roleColumns" :rows="roleRows" row-key="logical_id" dense />
   </DashCard>
@@ -411,32 +409,19 @@ const memberRows = computed(() => {
   <!-- S2 数据集资产明细 -->
   <DashCard
     title="数据集资产明细"
-    source="全量数据集，不做过滤；未登记风险口径的行单独标注"
+    source="全量数据集，不做过滤 · 只列资产属性；标签口径见角色分工矩阵、模型数见建模覆盖"
   >
-    <DashTable :columns="datasetColumns" :rows="datasetRows" row-key="logical_id" dense>
-      <template #label_field="{ row }">
-        <span>{{ row.label_field }}</span>
-        <span
-          v-if="row.unregistered === true"
-          class="d-tag d-tag--warn"
-          style="margin-left: 6px"
-        >未登记风险口径</span>
-      </template>
-    </DashTable>
+    <DashTable :columns="datasetColumns" :rows="datasetRows" row-key="logical_id" dense />
   </DashCard>
 
   <!-- S3 建模覆盖 -->
-  <DashCard title="建模覆盖" source="每数据集一根柱 = 模型版本总数；总数为 0 即「数据白躺」">
+  <DashCard
+    title="建模覆盖"
+    source="每数据集一根柱 = 模型版本总数；哪份数据该建模而未建模，见上方角色分工矩阵的状态列"
+  >
     <DashBars :items="modelingBars" :label-width="250" suffix=" 个版本" />
-    <p style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7">
-      <span
-        v-if="whiteLying.length"
-        class="d-tag d-tag--warn"
-      >数据白躺 {{ whiteLying.length }} 份</span>
-      <span v-if="whiteLying.length" style="margin-left: 6px">{{ whiteLying.join('、') }}</span>
-      <span style="margin-left: 8px; color: rgba(220, 234, 255, 0.5)">
-        已发布合计 {{ modelTotals.published }} / 草稿合计 {{ modelTotals.draft }}
-      </span>
+    <p style="margin: 12px 0 0; font-size: 11.5px; line-height: 1.7; color: rgba(220, 234, 255, 0.5)">
+      已发布合计 {{ modelTotals.published }} / 草稿合计 {{ modelTotals.draft }}
     </p>
   </DashCard>
 

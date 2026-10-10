@@ -168,9 +168,12 @@ const kpis = computed<KpiItem[]>(() => [
 /* D1 ★ 电参量基线一致性（跨数据集）                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 本表**只讲电参量基线**（各参数均值 / 工频合格率 / 丢包率 / 结论），
+ * 不复述样本量 —— 那是「资产属性」，在 S2 资产明细里出现一次。同一粒度的信息全页只展示一次。
+ */
 const d1Columns: DashColumn[] = [
   { key: 'name', label: '数据集' },
-  { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
   { key: 'voltage', label: '电压均值' },
   { key: 'current', label: '电流均值' },
   { key: 'temperature', label: '温度均值' },
@@ -201,7 +204,6 @@ const d1Rows = computed<Array<Record<string, unknown>>>(() =>
   props.data.telemetry_by_dataset.map((item) => ({
     logical_id: item.logical_id,
     name: nameOf(item.logical_id, item.name),
-    record_count: item.record_count,
     voltage: meanText(item, PARAM_KEYS.voltage),
     current: meanText(item, PARAM_KEYS.current),
     temperature: meanText(item, PARAM_KEYS.temperature),
@@ -238,6 +240,11 @@ const d2Rows = computed<Array<Record<string, unknown>>>(() =>
 /* S2 数据集资产明细 / S3 建模覆盖                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 本表**只讲资产属性**。`已发布模型数` 归 S3 建模覆盖（柱状图已按数据集逐根呈现），此处不再重复。
+ * `标签字段` 保留在本表 —— 电力场景的 D1 讲的是电参量基线，不承载标签口径，
+ * 故标签字段在本场景只在 S2 出现一次。
+ */
 const s2Columns: DashColumn[] = [
   { key: 'name', label: '数据集名' },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
@@ -245,7 +252,6 @@ const s2Columns: DashColumn[] = [
   { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
   { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
   { key: 'visibility', label: '可见性' },
-  { key: 'model_count', label: '已发布模型数' },
   { key: 'version', label: '版本', numeric: true, align: 'right' },
 ];
 
@@ -267,7 +273,6 @@ const datasetRows = computed(() =>
       visibility: VISIBILITY_TEXT[item.visibility] ?? item.visibility,
       // 未登记风险口径 = 该数据集的标签没有进显式登记表 → 不产生风险事件，必须让管理员看见
       unregistered: item.caliber_registered === false,
-      model_count: `已发布 ${stat?.published ?? 0} / 共 ${stat?.total ?? 0}`,
       version: `v${item.version}`,
       // S3 用：该数据集的模型版本三元组（无模型时三项均为 0 = 数据白躺）
       models: {

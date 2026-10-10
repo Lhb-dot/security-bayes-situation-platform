@@ -26,6 +26,7 @@ import { useBatchJobStore } from '@/stores/batchJobStore';
 import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
 import { getDatasetPreview } from '@/api/datasetApi';
 import { keepScroll } from '@/utils/scrollAnchor';
+import { stripArffQuotes } from '@/utils/arffValue';
 import { getModelVersionList, type BackendModelVersion } from '@/api/modelVersionApi';
 import type { Dataset, DatasetField, ScenarioId } from '@/types/security';
 import {
@@ -826,7 +827,7 @@ onUnmounted(() => {
                   type="number"
                   :step="field.field_type === FIELD_TYPE_FLOAT ? FLOAT_INPUT_STEP : INT_INPUT_STEP"
                   class="form-input"
-                  :placeholder="field.sample_value"
+                  :placeholder="stripArffQuotes(field.sample_value)"
                 />
                 <select
                   v-else-if="field.enum_values && field.enum_values.length > 0"
@@ -834,14 +835,14 @@ onUnmounted(() => {
                   class="form-input"
                 >
                   <option value="" disabled>请选择</option>
-                  <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ opt }}</option>
+                  <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ stripArffQuotes(opt) }}</option>
                 </select>
                 <input
                   v-else
                   v-model="inputData[field.field_name]"
                   type="text"
                   class="form-input"
-                  :placeholder="field.sample_value"
+                  :placeholder="stripArffQuotes(field.sample_value)"
                 />
               </div>
             </div>

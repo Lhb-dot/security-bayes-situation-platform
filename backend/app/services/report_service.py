@@ -22,7 +22,9 @@ report 表承载，此处 ReportService 即"实验记录/报表"能力的实现�
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import false, or_, select
+from sqlalchemy import false, func, or_, select, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import load_only
 
 from app.models.app_user import AppUser
 from app.models.dataset import Dataset
@@ -80,6 +82,18 @@ _SORT_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # 等级 / 处置状态的中文文案（报告正文与重点事件表共用）
 RISK_LEVEL_LABELS = {"HIGH": "高危", "MEDIUM": "中危", "LOW": "低危"}
 RISK_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOLVED": "已处置"}
+
+# 报告真正读到的 explain_data 键（见 ReportService._explain_expression）。
+# 整列 2394 行反序列化成 dict 实测峰值 748 MB，必须在 SQL 侧把不用的键裁掉。
+_REPORT_EXPLAIN_KEYS = (
+    "probability",
+    "class_distribution",
+    "calculation_method",
+    "feature_evidence",
+    "views",
+    "view_weights",
+    "prediction_label",
+)
 
 
 class ReportService(ServiceBase):
@@ -379,6 +393,29 @@ class ReportService(ServiceBase):
         stmt = stmt.order_by(RiskEvent.occurred_at.desc())
         return self.db.scalars(stmt).all()
 
+    @staticmethod
+    def _explain_expression():
+        """explain_data 的 SQL 侧裁剪：只保留报告真正读到的键。
+
+        消费点（改动前逐行核对过）：
+        - ``_prediction`` 读 ``probability`` / ``class_distribution``；
+        - ``_model_analysis`` 读 ``views`` / ``view_weights`` / ``calculation_method``
+          / ``prediction_label``；
+        - ``_feature_analysis`` 读 ``feature_evidence`` / ``calculation_method``。
+
+        整列反序列化实测峰值 748 MB，是全量加载里最大的一块；其中
+        ``input_features`` 在报告生成中完全没被读过。
+
+        必须套 ``type_coerce(..., JSONB)``：``func.jsonb_build_object`` 的返回类型是
+        NullType，结果处理器为 None，psycopg2 会把 jsonb 原样当字符串返回，
+        下游 ``record.explain_data.get(...)`` 会直接 AttributeError。
+        """
+        pairs = []
+        for key in _REPORT_EXPLAIN_KEYS:
+            pairs.append(key)
+            pairs.append(InferenceRecord.explain_data[key])
+        return type_coerce(func.jsonb_build_object(*pairs), JSONB)
+
     def _gather_records(self, current_user, role, scenario_id, scope):
         """汇总推理记录（含所属模型版本）。
 
@@ -386,13 +423,40 @@ class ReportService(ServiceBase):
         - SCENARIO_ADMIN：绑定场景内全部记录（含未发布模型）；
         - 场景用户：仅已发布模型（可见性规则，不因 scope=self 而放开）；
         - scope=self（个人数据）：只按创建者限定为当前账号本人。
+
+        这里**不能**写成 ``select(InferenceRecord, ModelVersion)`` 全量加载实体：
+        ``inference_record.explain_data`` 整列 2394 行反序列化实测 748 MB，
+        ``model_version`` 的 training_parameters / evaluation_metrics /
+        model_attributes / ai_evaluation 四个 JSONB 又占约 503 MB，
+        叠加峰值 1334 MB，远超 sb-api 的 MemoryMax=900MiB —— 报告生成必被 OOM kill。
+        只取用得到的列（裁剪口径见 ``_explain_expression``），实测降到 215 MB。
+
+        返回值仍是 ``(记录, 模型版本)`` 二元组列表，与 ``_build_report_data`` 的解包一致。
+        记录是 Row 而不是 ORM 实例：它的属性访问（.id / .executed_at /
+        .is_risk_event / .risk_score / .prediction_label / .explain_data）
+        与原来的 InferenceRecord 对下游完全等价。
         """
         if role in (ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER) and scenario_id is None:
             return []
 
         stmt = (
-            select(InferenceRecord, ModelVersion)
+            select(
+                InferenceRecord.id,
+                InferenceRecord.executed_at,
+                InferenceRecord.is_risk_event,
+                InferenceRecord.risk_score,
+                InferenceRecord.prediction_label,
+                self._explain_expression().label("explain_data"),
+                ModelVersion,
+            )
             .join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id)
+            .options(
+                load_only(
+                    ModelVersion.id,
+                    ModelVersion.dataset_id,
+                    ModelVersion.algorithm_id,
+                )
+            )
         )
         if scenario_id is not None:
             stmt = stmt.where(ModelVersion.scenario_id == scenario_id)
@@ -411,7 +475,7 @@ class ReportService(ServiceBase):
         if scope == "self":
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
-        return self.db.execute(stmt).all()
+        return [(row, row.ModelVersion) for row in self.db.execute(stmt).all()]
 
     # ------------------------------------------------------------------
     # 组装报告结构化数据 report_data（不含模型版本评价）

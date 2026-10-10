@@ -191,11 +191,6 @@ const VISIBILITY_TEXT: Record<string, string> = {
 const visibilityText = (value: string | undefined) =>
   value ? (VISIBILITY_TEXT[value] ?? value) : '—';
 
-/** 每数据集的模型版本统计（后端已按 dataset 聚合，这里只做 logical_id 索引） */
-const modelingByDataset = computed(
-  () => new Map(props.data.modeling.map((item) => [item.logical_id, item])),
-);
-
 /* ------------------------------------------------------------------ */
 /* D1 ★ 数据集风险口径可比性矩阵                                        */
 /* ------------------------------------------------------------------ */
@@ -207,16 +202,17 @@ const modelingByDataset = computed(
  * 变成可见的事实；`deviation` 再把每份数据的风险占比与场景合并口径的倍数关系标出来，
  * 偏离越大说明该数据集越不能代表场景整体。
  *
+ * 本表**只讲口径**（标签字段 / 正类取值 / 偏离 / 登记状态），不复述样本量、风险样本、
+ * 风险占比 —— 那些是「资产属性」，统一在 S2 资产明细里出现一次。同一粒度的信息全页只展示一次。
+ *
  * 「未登记·不产事件」是**管理告警**，不是隐藏理由：constants.py 禁止按标签字符串 /
  * 数值大小自动推断正类，未进显式登记表的数据集不会产生风险事件，必须留在表里被看见。
+ * 登记状态由本表承载后，S2 不再重复挂「未登记风险口径」标签。
  */
 const caliberColumns: DashColumn[] = [
   { key: 'name', label: '数据集', width: 220 },
   { key: 'label_field', label: '标签字段' },
   { key: 'positive_labels', label: '正类取值' },
-  { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
-  { key: 'risk_count', label: '风险样本', numeric: true, align: 'right' },
-  { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
   { key: 'deviation', label: '与场景合并口径偏离', numeric: true, align: 'right' },
   { key: 'registered', label: '登记状态' },
 ];
@@ -243,9 +239,6 @@ const caliberRows = computed<Array<Record<string, unknown>>>(() =>
       label_field: item.label_field,
       // 未登记正类 → 不猜、不推断，直接写「未登记」（显式登记表缺项）
       positive_labels: positives.length ? positives.join(LIST_SEPARATOR) : '未登记',
-      record_count: fmtInt(item.record_count),
-      risk_count: fmtInt(item.risk_count),
-      risk_rate: fmtPercent(item.risk_rate),
       deviation: deviationCell(item.deviation),
       registered: item.registered
         ? { text: '已登记', tone: 'ok' }
@@ -295,43 +288,34 @@ const dimensionRows = computed<Array<Record<string, unknown>>>(() =>
 /* ------------------------------------------------------------------ */
 
 /**
- * 列结构与四场景完全一致（契约 §7）：数据集名 / 样本量 / 标签字段 / 风险占比 /
- * 字段数 / 可见性 / 已发布模型数 / 版本。
+ * 列结构：数据集名 / 样本量 / 风险占比 / 字段数 / 可见性 / 版本。
+ *
+ * 本表**只讲资产属性**。`标签字段` 归 D1 口径矩阵（那是它的主题）、`已发布模型数` 归 S3
+ * 建模覆盖（柱状图已按数据集逐根呈现），此处都不再重复。
  *
  * 这里遍历**全部** datasets，不做任何过滤：未登记风险口径的行（`caliber_registered === false`）
- * 必须带着「未登记风险口径」标注留在表里 —— 用 is_risk_label 过滤会把「谁没登记」直接
- * 从管理端视野里抹掉，而这正是要暴露的登记表缺项问题。
- * 标注放在「标签字段」列内（不新增第 9 列，保持四场景 S2 列结构一致）。
+ * 必须留在表里 —— 用 is_risk_label 过滤会把「谁没登记」直接从管理端视野里抹掉。
+ * 「未登记」这件事由 D1 的「登记状态」列统一表达，此处不再重复挂标签。
  */
 const datasetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名', width: 220 },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
-  { key: 'label_field', label: '标签字段' },
   { key: 'risk_rate', label: '风险占比', numeric: true, align: 'right' },
   { key: 'attribute_count', label: '字段数', numeric: true, align: 'right' },
   { key: 'visibility', label: '可见性' },
-  { key: 'models', label: '已发布模型数' },
   { key: 'version', label: '版本', numeric: true, align: 'right' },
 ];
 
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
-  props.data.datasets.map((item) => {
-    // modeling 与 datasets 同源同序（后端对同一批可见数据集各出一行），命中缺失时留「—」
-    const stat = modelingByDataset.value.get(item.logical_id);
-    return {
-      logical_id: item.logical_id,
-      name: nameOf(item.logical_id, item.name),
-      // 未登记风险口径 → 模板插槽里补一枚醒目告警标签
-      unregistered: item.caliber_registered === false,
-      record_count: fmtInt(item.record_count),
-      label_field: item.label_field,
-      risk_rate: fmtPercent(item.risk_rate),
-      attribute_count: item.attribute_count,
-      visibility: visibilityText(item.visibility),
-      models: stat ? `已发布 ${stat.published} / 共 ${stat.total}` : '—',
-      version: item.version,
-    };
-  }),
+  props.data.datasets.map((item) => ({
+    logical_id: item.logical_id,
+    name: nameOf(item.logical_id, item.name),
+    record_count: fmtInt(item.record_count),
+    risk_rate: fmtPercent(item.risk_rate),
+    attribute_count: item.attribute_count,
+    visibility: visibilityText(item.visibility),
+    version: item.version,
+  })),
 );
 
 /* ------------------------------------------------------------------ */
@@ -445,14 +429,9 @@ const memberRows = computed(() => {
   <!-- S2 数据集资产明细 -->
   <DashCard
     title="数据集资产明细"
-    source="全量数据集，不做过滤；未登记风险口径的行在标签字段后单独标注"
+    source="全量数据集，不做过滤；「未登记」由 D1 的登记状态列统一表达"
   >
-    <DashTable :columns="datasetColumns" :rows="datasetRows" row-key="logical_id" dense>
-      <template #label_field="{ row }">
-        <span>{{ row.label_field }}</span>
-        <span v-if="row.unregistered === true" class="d-tag d-tag--warn" style="margin-left: 6px">未登记风险口径</span>
-      </template>
-    </DashTable>
+    <DashTable :columns="datasetColumns" :rows="datasetRows" row-key="logical_id" dense />
   </DashCard>
 
   <!-- S3 建模覆盖 -->

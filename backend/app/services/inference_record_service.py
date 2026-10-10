@@ -46,7 +46,13 @@ from app.services.constants import (
     is_risk_label,
 )
 from app.services.risk_event_service import RiskEventService
-from app.utils.common import get_logger, paginate, row_to_dict, validate_input_features
+from app.utils.common import (
+    get_logger,
+    normalize_input_features,
+    paginate,
+    row_to_dict,
+    validate_input_features,
+)
 
 logger = get_logger("inference_record")
 
@@ -371,7 +377,9 @@ class InferenceRecordService(ServiceBase):
 
         model, dataset = self._resolve_target(current_user, model_version_id)
 
-        # 输入校验（需求 3.1.2/3.1.5）：固定字段齐全 + 枚举值域
+        # 枚举值先对齐值域里的写法（带引号 / 去引号两种输入都收敛到 Weka 认的形式），
+        # 再做输入校验（需求 3.1.2/3.1.5）：固定字段齐全 + 枚举值域
+        input_features = normalize_input_features(dataset.fields_schema, input_features)
         err = validate_input_features(dataset.fields_schema, input_features)
         if err:
             raise ServiceError(400, err)

@@ -20,9 +20,20 @@ from app.services.algorithm_config import (
 
 
 def resolve_dataset_path(file_path: str) -> str:
-    if os.path.isabs(file_path):
-        return file_path
-    return str(PROJECT_ROOT / file_path)
+    """把 dataset.file_path 解析成可读的绝对路径（全项目读数据集文件的唯一入口）。
+
+    历史数据里存在 Windows 反斜杠写法（``data\\network\\X.arff``）。在 Windows 上
+    它能被当作路径分隔符正常解析，但在 Linux 上 ``os.path.isabs`` 判否、拼接后
+    整串会被当成**一个文件名**，于是 ``os.path.exists`` 恒为 False —— 表现为首页
+    「各场景有效样本量 / 风险占比」全是 0，且没有任何报错。
+
+    统一先归一化成 ``/`` 再判断与拼接，两个平台都能解析；正斜杠在 Windows 上同样
+    是合法分隔符，因此对已有的正斜杠数据无影响。
+    """
+    normalized = str(file_path).replace("\\", "/")
+    if os.path.isabs(normalized):
+        return normalized
+    return str(PROJECT_ROOT / normalized)
 
 
 def _request_train(

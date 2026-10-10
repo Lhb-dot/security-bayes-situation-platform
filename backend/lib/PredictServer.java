@@ -1,11 +1,13 @@
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,26 +46,70 @@ import weka.core.converters.ConverterUtils.DataSource;
  */
 public class PredictServer {
 
-    /** 模型缓存上限：超过后按最久未使用（LRU）淘汰。 */
-    private static final int MODEL_CACHE_CAPACITY = 4;
+    /**
+     * 模型缓存预算（字节）。
+     *
+     * 原来按条目数限制（capacity=4），但模型大小差三个数量级 —— 实测同目录下
+     * 47.5 / 98.6 / 123.5 / 178.9 / 205.6 MB 各一份，反序列化后按 1.4 倍膨胀，
+     * 4 个"条目"最坏情况是 1.15 GB，-Xmx384m 必然 OutOfMemoryError。
+     * 上限必须按字节算。
+     *
+     * 默认取堆上限的 55%，可用 -Dpredict.modelCacheBudgetBytes 覆盖。
+     */
+    private static final long MODEL_CACHE_BUDGET_BYTES = Long.getLong(
+            "predict.modelCacheBudgetBytes",
+            Math.max(48L << 20, (long) (Runtime.getRuntime().maxMemory() * 0.55)));
+
+    /** 反序列化后的堆占用约为模型文件的 1.4 倍（实测 205 MB 文件 → 287 MB 堆）。 */
+    private static final double MODEL_HEAP_FACTOR = 1.4;
+
+    /** 缓存条目：分类器 + 估算堆占用。 */
+    private static final class CachedModel {
+        final Classifier classifier;
+        final long bytes;
+
+        CachedModel(Classifier classifier, long bytes) {
+            this.classifier = classifier;
+            this.bytes = bytes;
+        }
+    }
 
     /**
-     * 模型缓存（LRU，上限见 MODEL_CACHE_CAPACITY）。
+     * 模型缓存（LRU，按 MODEL_CACHE_BUDGET_BYTES 限总量）。
      * 反序列化一个模型要读几百 MB 文件，所以缓存结果；但必须有上限，否则读过的模型
      * 会一直常驻堆内，内存随「历史上访问过多少个模型」无限增长。
      * 访问顺序由 LinkedHashMap(accessOrder=true) 维护，get/put 由 synchronizedMap 保证原子。
      */
-    private static final Map<String, Classifier> MODEL_CACHE =
-            Collections.synchronizedMap(new LinkedHashMap<String, Classifier>(MODEL_CACHE_CAPACITY, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Classifier> eldest) {
-                    if (size() > MODEL_CACHE_CAPACITY) {
-                        System.out.println("[PredictServer] 缓存已满，淘汰最久未使用的模型: " + eldest.getKey());
-                        return true;
-                    }
-                    return false;
-                }
-            });
+    private static final Map<String, CachedModel> MODEL_CACHE =
+            Collections.synchronizedMap(new LinkedHashMap<String, CachedModel>(8, 0.75f, true));
+
+    /** 估算模型反序列化后的堆占用。 */
+    private static long estimateModelBytes(String modelPath) {
+        return (long) (new File(modelPath).length() * MODEL_HEAP_FACTOR);
+    }
+
+    /**
+     * 按预算淘汰最久未使用的模型，直到能装下 {@code incomingBytes}。
+     *
+     * 单条超过预算时不淘汰自己（否则大模型永远缓存不上，每次预测都要重新反序列化），
+     * 而是把缓存清空后单独放它 —— 实测 205 MB 模型占 287 MB 堆，-Xmx384m 装得下。
+     */
+    private static void evictFor(long incomingBytes) {
+        synchronized (MODEL_CACHE) {
+            long total = 0;
+            for (CachedModel cached : MODEL_CACHE.values()) {
+                total += cached.bytes;
+            }
+            // entrySet() 按访问顺序迭代，从头删就是淘汰最久未使用的
+            Iterator<Map.Entry<String, CachedModel>> it = MODEL_CACHE.entrySet().iterator();
+            while (it.hasNext() && total + incomingBytes > MODEL_CACHE_BUDGET_BYTES) {
+                Map.Entry<String, CachedModel> eldest = it.next();
+                total -= eldest.getValue().bytes;
+                it.remove();
+                System.out.println("[PredictServer] 缓存预算不足，淘汰最久未使用的模型: " + eldest.getKey());
+            }
+        }
+    }
 
     private static final ConcurrentHashMap<String, Instances> HEADER_CACHE = new ConcurrentHashMap<>();
 
@@ -77,7 +123,7 @@ public class PredictServer {
         System.out.println("[PredictServer] listening on 127.0.0.1:" + port);
     }
 
-    private static void handleHealth(HttpExchange ex) throws IOException {
+    private static void handleHealth(HttpExchange ex) {
         JSONObject body = new JSONObject()
                 .put("status", "ok")
                 .put("model_cache", MODEL_CACHE.size())
@@ -137,9 +183,11 @@ public class PredictServer {
                 data.put("feature_attribution", new JSONArray());
             }
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // 必须是 Throwable 而不是 Exception：OutOfMemoryError 继承自 Error，
+            // catch (Exception) 接不住它，响应永远不发，客户端只能等到自己的超时。
             JSONObject err = new JSONObject().put("success", false)
-                    .put("error", String.valueOf(e.getMessage()));
+                    .put("error", message(e));
             respond(ex, 500, err);
         }
     }
@@ -312,24 +360,33 @@ public class PredictServer {
         return Math.round(value * 10000.0) / 10000.0;
     }
 
+    private static String message(Throwable e) {
+        return e.getMessage() == null ? e.toString() : e.getMessage();
+    }
+
     /**
-     * 读取模型，命中缓存则直接返回。
+     * 读取模型，命中缓存则直接返回；未命中先按预算腾出空间，再反序列化。
+     *
      * 刻意不用 computeIfAbsent：缓存是 synchronizedMap，其 computeIfAbsent 会在持锁期间
      * 执行反序列化（几百 MB、数百毫秒），把其它模型的读取一起堵住。
-     * 这里拆成 get / 锁外反序列化 / put，与另两个服务的写法保持一致。
+     *
+     * **淘汰必须在反序列化之前**：如果等 put 时再淘汰，新模型已经在堆里了，
+     * 新旧两份同时存活，照样 OOM。
      */
     private static Classifier loadModel(String modelPath) throws Exception {
-        Classifier cached = MODEL_CACHE.get(modelPath);
+        CachedModel cached = MODEL_CACHE.get(modelPath);
         if (cached != null) {
-            return cached;
+            return cached.classifier;
         }
+        long estimated = estimateModelBytes(modelPath);
+        evictFor(estimated);
         Classifier classifier;
         try {
             classifier = (Classifier) SerializationHelper.read(modelPath);
         } catch (Exception e) {
             throw new RuntimeException("模型加载失败: " + e.getMessage(), e);
         }
-        MODEL_CACHE.put(modelPath, classifier);
+        MODEL_CACHE.put(modelPath, new CachedModel(classifier, estimated));
         return classifier;
     }
 
@@ -388,12 +445,26 @@ public class PredictServer {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    private static void respond(HttpExchange ex, int code, JSONObject body) throws IOException {
-        byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-        ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-        ex.sendResponseHeaders(code, bytes.length);
-        try (OutputStream os = ex.getResponseBody()) {
-            os.write(bytes);
+    /**
+     * 写回响应。
+     *
+     * **刻意吞掉 IOException**：客户端提前断开时 `sendResponseHeaders` /
+     * `getResponseBody` 会抛 IOException，而 `handlePredict` 的 catch 块里那次
+     * `respond` 不在任何 try 内 —— 异常逃出去会直接打死工作线程，
+     * `ThreadPoolExecutor` 只会补一个新线程，客户端永远拿不到响应
+     * （实测线程编号一路涨到 9，即死了 5 次）。响应通道坏了没有任何补救手段，
+     * 唯一正确的处理就是别把线程一起带走。
+     */
+    private static void respond(HttpExchange ex, int code, JSONObject body) {
+        try {
+            byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            ex.sendResponseHeaders(code, bytes.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(bytes);
+            }
+        } catch (IOException e) {
+            System.err.println("[PredictServer] 响应写回失败（客户端可能已断开）: " + e);
         }
     }
 }

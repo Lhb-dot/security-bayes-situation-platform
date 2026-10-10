@@ -25,6 +25,7 @@ import weka.filters.Filter;
 import weka.filters.unsupervised.attribute.Remove;
 import weka.filters.unsupervised.attribute.Discretize;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -47,26 +49,100 @@ import java.util.concurrent.Executors;
  * /train 对数据执行交叉验证、全量训练并保存 Weka 模型；/predict 加载模型执行真实预测。
  */
 public final class NbAlgorithmService {
-    /** 模型缓存上限：超过后按最久未使用（LRU）淘汰。 */
-    private static final int MODEL_CACHE_CAPACITY = 4;
+    /**
+     * 模型缓存的**字节预算**（估算堆占用），不再按条目数限制。
+     *
+     * 原来是「最多 4 个条目」，但模型大小差 500 倍 —— 在役 PMWNB 模型 205 MB、
+     * 最小的只有 3 MB，4 个条目可以轻松超过 -Xmx384m：实测依次加载 205 MB 与
+     * 123 MB 两个模型后，老年代占用 346/365 MB（94.8%），加载第三个直接
+     * OutOfMemoryError。上限必须按字节算。
+     *
+     * 默认取堆上限的 55%，可用 -Dnb.modelCacheBudgetBytes 覆盖。
+     */
+    private static final long MODEL_CACHE_BUDGET_BYTES = Long.getLong(
+            "nb.modelCacheBudgetBytes",
+            Math.max(48L << 20, (long) (Runtime.getRuntime().maxMemory() * 0.55)));
+
+    /** 反序列化后的堆占用约为模型文件的 1.4 倍（实测 205 MB 文件 → 287 MB 堆）。 */
+    private static final double MODEL_HEAP_FACTOR = 1.4;
+
+    /** 缓存条目：分类器 + 估算堆占用。 */
+    private static final class CachedModel {
+        final Classifier classifier;
+        final long bytes;
+
+        CachedModel(Classifier classifier, long bytes) {
+            this.classifier = classifier;
+            this.bytes = bytes;
+        }
+    }
 
     /**
-     * 模型缓存（LRU，上限见 MODEL_CACHE_CAPACITY）。
+     * 模型缓存（LRU，按 MODEL_CACHE_BUDGET_BYTES 限总量）。
      * 反序列化一个模型要读几百 MB 文件，所以缓存结果；但必须有上限，否则读过的模型
      * 会一直常驻堆内，内存随「历史上访问过多少个模型」无限增长。
      * 访问顺序由 LinkedHashMap(accessOrder=true) 维护，get/put 由 synchronizedMap 保证原子。
      */
-    private static final Map<String, Classifier> MODEL_CACHE =
-            Collections.synchronizedMap(new LinkedHashMap<String, Classifier>(MODEL_CACHE_CAPACITY, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Classifier> eldest) {
-                    if (size() > MODEL_CACHE_CAPACITY) {
-                        System.out.println("[NbAlgorithmService] 缓存已满，淘汰最久未使用的模型: " + eldest.getKey());
-                        return true;
-                    }
-                    return false;
-                }
-            });
+    private static final Map<String, CachedModel> MODEL_CACHE =
+            Collections.synchronizedMap(new LinkedHashMap<String, CachedModel>(8, 0.75f, true));
+
+    /** 估算模型反序列化后的堆占用。 */
+    private static long estimateModelBytes(String modelPath) {
+        return (long) (new File(modelPath).length() * MODEL_HEAP_FACTOR);
+    }
+
+    /**
+     * 按预算淘汰最久未使用的模型，直到能装下 {@code incomingBytes}。
+     *
+     * 单条超过预算时不淘汰自己（否则大模型永远缓存不上，每次预测都要重新反序列化），
+     * 而是把缓存清空后单独放它 —— 实测 205 MB 模型占 287 MB 堆，-Xmx384m 装得下。
+     */
+    private static void evictFor(long incomingBytes) {
+        synchronized (MODEL_CACHE) {
+            long total = 0;
+            for (CachedModel cached : MODEL_CACHE.values()) {
+                total += cached.bytes;
+            }
+            // entrySet() 按访问顺序迭代，从头删就是淘汰最久未使用的
+            Iterator<Map.Entry<String, CachedModel>> it = MODEL_CACHE.entrySet().iterator();
+            while (it.hasNext() && total + incomingBytes > MODEL_CACHE_BUDGET_BYTES) {
+                Map.Entry<String, CachedModel> eldest = it.next();
+                total -= eldest.getValue().bytes;
+                it.remove();
+                System.out.println("[NbAlgorithmService] 缓存预算不足，淘汰最久未使用的模型: " + eldest.getKey());
+            }
+        }
+    }
+
+    /**
+     * 读模型；未命中先按预算腾出空间，再反序列化。
+     *
+     * **顺序不能反**：如果等 put 时再淘汰，新模型已经在堆里了，新旧两份同时存活，
+     * 照样 OOM —— 淘汰必须发生在反序列化之前。
+     */
+    private static Classifier loadModel(String modelPath) throws Exception {
+        CachedModel cached = MODEL_CACHE.get(modelPath);
+        if (cached != null) {
+            return cached.classifier;
+        }
+        long estimated = estimateModelBytes(modelPath);
+        evictFor(estimated);
+        Classifier classifier;
+        try {
+            classifier = (Classifier) SerializationHelper.read(modelPath);
+        } catch (Exception e) {
+            throw new RuntimeException("模型加载失败: " + e.getMessage(), e);
+        }
+        MODEL_CACHE.put(modelPath, new CachedModel(classifier, estimated));
+        return classifier;
+    }
+
+    /** 训练完成后把新模型放进缓存（同样先按预算腾空间）。 */
+    private static void cacheModel(String modelPath, Classifier classifier) {
+        long estimated = estimateModelBytes(modelPath);
+        evictFor(estimated);
+        MODEL_CACHE.put(modelPath, new CachedModel(classifier, estimated));
+    }
 
     /** 本服务支持的算法（同一个进程同时服务全部算法，5 个算法共用同一份字节码）。 */
     private static final String[] SUPPORTED_ALGORITHMS = {
@@ -161,16 +237,30 @@ public final class NbAlgorithmService {
             long started = System.nanoTime();
             Instances data = loadDataset(datasetPath);
             JSONObject parameters = req.optJSONObject("training_parameters");
-            Classifier classifier = createClassifier(
-                    parameters == null ? new JSONObject() : parameters, algorithmCode);
-            classifier.buildClassifier(data);
-            SerializationHelper.write(modelSavePath, classifier);
-            MODEL_CACHE.put(modelSavePath, classifier);
+            JSONObject effectiveParameters = parameters == null ? new JSONObject() : parameters;
+
+            // 顺序很关键：**先交叉验证，再训练全量模型**。
+            //
+            // 全量模型和 CV 的折模型都是百 MB 级对象 —— 本数据集 279 属性，序列化后
+            // 189 MB，堆内约 265 MB，-Xmx384m 只装得下一个。若按「先训全量、再跑 CV」
+            // 的顺序，CV 每折 buildClassifier 时全量模型还活着（还被下面的局部变量
+            // classifier 引用），两个 265 MB 对象叠加，实测 3 秒即 OutOfMemoryError。
+            // CV 放在前面，折模型用完即弃，堆里任何时刻只有一个训练好的模型。
+            //
+            // CV 的模板必须是**未训练**的：makeCopy 的实现是「把整个分类器序列化成
+            // 一个 byte[] 再反序列化」，传已训练模型进去等于凭空再复制两份。
+            // 每折本来就要 buildClassifier(train) 重新训练，复制已训练模型没有任何收益。
+            JSONObject quality = calculateQualityMetrics(
+                    createClassifier(effectiveParameters, algorithmCode),
+                    data,
+                    req.optJSONArray("risk_labels"));
 
             // 评估指标使用固定随机种子的分层交叉验证（避免训练集重代入偏乐观）；
-            // 保存的模型仍用全量数据训练（上面的 classifier.buildClassifier(data)）。
-            JSONObject quality = calculateQualityMetrics(
-                    classifier, data, req.optJSONArray("risk_labels"));
+            // 保存的模型用全量数据训练。
+            Classifier classifier = createClassifier(effectiveParameters, algorithmCode);
+            classifier.buildClassifier(data);
+            SerializationHelper.write(modelSavePath, classifier);
+            cacheModel(modelSavePath, classifier);
 
             JSONArray distribution = new JSONArray();
             for (int i = 0; i < data.numClasses(); i++) {
@@ -200,7 +290,11 @@ public final class NbAlgorithmService {
                     .put("dataset", datasetPath);
             metrics.put("training_parameters", parameters == null ? new JSONObject() : parameters);
             respond(ex, 200, new JSONObject().put("success", true).put("metrics", metrics));
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // 必须是 Throwable 而不是 Exception：OutOfMemoryError 继承自 Error，
+            // catch (Exception) 接不住它。逃逸的后果是工作线程直接死掉、响应永远不发，
+            // 客户端只能等到自己的超时（后端 TRAIN_TIMEOUT=600s），而模型文件其实
+            // 已经写到盘上了 —— 表现为"训练卡住十分钟后失败，却留下一个孤儿模型"。
             respond(ex, 500, new JSONObject().put("success", false).put("error", message(e)));
         }
     }
@@ -214,11 +308,7 @@ public final class NbAlgorithmService {
             JSONObject features = req.optJSONObject("features");
             if (features == null) throw new IllegalArgumentException("缺少 features 字段");
 
-            Classifier classifier = MODEL_CACHE.get(modelPath);
-            if (classifier == null) {
-                classifier = (Classifier) SerializationHelper.read(modelPath);
-                MODEL_CACHE.put(modelPath, classifier);
-            }
+            Classifier classifier = loadModel(modelPath);
             Instances header = new DataSource(arffPath).getStructure();
             if (header.classIndex() < 0) header.setClassIndex(header.numAttributes() - 1);
             Instance instance = buildInstance(header, features);
@@ -250,7 +340,8 @@ public final class NbAlgorithmService {
                 data.put("calculation_method", explain.getString("calculation_method"));
             }
             respond(ex, 200, new JSONObject().put("success", true).put("data", data));
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // 同 handleTrain：OOM 是 Error，catch (Exception) 接不住，会让连接挂死。
             respond(ex, 500, new JSONObject().put("success", false).put("error", message(e)));
         }
     }
@@ -443,9 +534,13 @@ public final class NbAlgorithmService {
     /**
      * Calculate aggregate metrics and fold accuracy statistics without changing
      * the classifier used for the saved full-data model.
+     *
+     * {@code untrainedTemplate} 必须是**未训练**的分类器实例：本方法每折都会
+     * makeCopy 一份再 buildClassifier(train)。传已训练模型会让 makeCopy 复制
+     * 几百 MB 的对象图（见 handleTrain 的说明）。
      */
     private static JSONObject calculateQualityMetrics(
-            Classifier template, Instances data, JSONArray riskLabels) throws Exception {
+            Classifier untrainedTemplate, Instances data, JSONArray riskLabels) throws Exception {
         int folds = Math.min(10, data.numInstances());
         if (folds < 2) throw new IllegalArgumentException("交叉验证至少需要 2 条样本");
 
@@ -457,7 +552,7 @@ public final class NbAlgorithmService {
         double[][] confusion = new double[data.numClasses()][data.numClasses()];
         double[] foldAccuracy = new double[folds];
         for (int fold = 0; fold < folds; fold++) {
-            Classifier copy = AbstractClassifier.makeCopy(template);
+            Classifier copy = AbstractClassifier.makeCopy(untrainedTemplate);
             Instances train = cvData.trainCV(folds, fold, random);
             Instances test = cvData.testCV(folds, fold);
             copy.buildClassifier(train);
@@ -834,7 +929,7 @@ public final class NbAlgorithmService {
     }
 
     private static double round(double value) { return Math.round(value * 10000.0) / 10000.0; }
-    private static String message(Exception e) { return e.getMessage() == null ? e.toString() : e.getMessage(); }
+    private static String message(Throwable e) { return e.getMessage() == null ? e.toString() : e.getMessage(); }
     private static String readBody(HttpExchange ex) throws IOException {
         return new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
     }
