@@ -18,7 +18,9 @@ import { ElNotification } from 'element-plus';
 import { getInferenceBatchJob, listInferenceBatchJobs } from '@/api/inferenceRecordApi';
 import type { BatchInferenceResult } from '@/api/inferenceRecordApi';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/jobHelpers';
+import { toMillis } from '@/utils/datetime';
+import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
 
 type BatchStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
@@ -69,17 +71,7 @@ export interface BatchJobResult {
 let pollTimer: number | null = null;
 let polling = false;
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
-const toMillis = (createdAt?: number): number =>
-  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
-    ? createdAt * 1000
-    : Date.now();
-
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
-const isTerminal = (job: BackgroundBatchJob) => TERMINAL_STATUSES.includes(job.status);
+const isTerminal = createIsTerminal<BackgroundBatchJob>(TERMINAL_STATUSES);
 
 export const useBatchJobStore = defineStore('batchJob', {
   state: () => ({
@@ -291,16 +283,7 @@ export const useBatchJobStore = defineStore('batchJob', {
 
     /** 终态任务超过上限就丢最旧的 */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => job.jobId),
-      );
-      this.jobs = this.jobs.filter((job) => !drop.has(job.jobId));
+      this.jobs = trimFinishedJobs(this.jobs, isTerminal, (job) => job.jobId, MAX_FINISHED);
     },
 
     /**
@@ -311,7 +294,7 @@ export const useBatchJobStore = defineStore('batchJob', {
      */
     purgeExpired(): boolean {
       const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = keepUnexpiredJobs(this.jobs, isTerminal, deadline);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;

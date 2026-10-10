@@ -19,6 +19,7 @@ import {
   streamInferenceExplanation,
 } from '@/api/inferenceRecordApi';
 import { useUserStore } from '@/stores/userStore';
+import { formatBeijingDateTime, parseInstant } from '@/utils/datetime';
 import { keepScroll } from '@/utils/scrollAnchor';
 
 /** 真实推理记录（后端 /api/v1/inference-records 返回结构，含补全展示字段） */
@@ -165,16 +166,8 @@ const hasModelEvaluation = computed(() => Boolean(modelEvaluationMarkdown.value)
  */
 const formatBeijingTime = (value: string | null | undefined): string => {
   if (!value) return '';
-  const raw = String(value);
-  // 无时区标记的裸时间按 UTC 处理（后端统一存 timezone.utc）
-  const parsed = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
-  if (Number.isNaN(parsed.getTime())) return raw;
-  const beijing = new Date(parsed.getTime() + 8 * 60 * 60 * 1000);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${beijing.getUTCFullYear()}-${pad(beijing.getUTCMonth() + 1)}-${pad(beijing.getUTCDate())} ` +
-    `${pad(beijing.getUTCHours())}:${pad(beijing.getUTCMinutes())}:${pad(beijing.getUTCSeconds())}`
-  );
+  const ms = parseInstant(value);
+  return ms === null ? String(value) : formatBeijingDateTime(ms);
 };
 
 const toggleModelEvaluation = async () => {

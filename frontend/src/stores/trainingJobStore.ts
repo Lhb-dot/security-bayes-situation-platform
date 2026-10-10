@@ -23,7 +23,9 @@ import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getModelVersionDetail, listTrainingJobs } from '@/api/trainingApi';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/jobHelpers';
+import { parseBeijingNaive } from '@/utils/datetime';
+import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
 
 /** 训练中：只要状态还是它，就说明后台线程没推进完 */
 const STATUS_TRAINING = 'TRAINING';
@@ -91,26 +93,10 @@ let polling = false;
  */
 const settledIds = new Set<number>();
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
-/**
- * 服务端时间戳解析。row_to_dict 出的是北京时间 naive 字符串（`common.py` 的 to_beijing +
- * `%Y-%m-%d %H:%M:%S`），没有时区标记 —— 直接 `new Date()` 会按浏览器本地时区解析，
- * 换个时区就偏。这里显式补上 +08:00。
- */
-const parseServerTime = (value?: string): number | null => {
-  if (!value) return null;
-  const parsed = new Date(`${value.replace(' ', 'T')}+08:00`).getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
 const isTerminalStatus = (status: string) => TERMINAL_STATUSES.includes(status);
 
 /** 判定任务对象是否已到终态（口径同上：只认 DRAFT / FAILED） */
-const isTerminal = (job: BackgroundTrainingJob) => isTerminalStatus(job.status);
+const isTerminal = createIsTerminal<BackgroundTrainingJob>(TERMINAL_STATUSES);
 
 /** 训练任务名：场景 · 算法 */
 export const trainingJobTitle = (row: TrainingJobRow) =>
@@ -231,7 +217,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
           const id = Number(row.id ?? row.model_version_id);
           if (!Number.isFinite(id)) continue;
           if (isTerminalStatus(status) && seen.has(String(id))) continue;
-          this.track(id, trainingJobTitle(row), status, parseServerTime(row.trained_at) ?? undefined);
+          this.track(id, trainingJobTitle(row), status, parseBeijingNaive(row.trained_at) ?? undefined);
         }
       } catch {
         // 恢复失败不影响页面：训练仍在后台跑，结果可在模型中心看到
@@ -297,16 +283,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
 
     /** 终态任务超过上限就丢最旧的 */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => String(job.modelVersionId)),
-      );
-      this.jobs = this.jobs.filter((job) => !drop.has(String(job.modelVersionId)));
+      this.jobs = trimFinishedJobs(this.jobs, isTerminal, (job) => String(job.modelVersionId), MAX_FINISHED);
     },
 
     /**
@@ -317,7 +294,7 @@ export const useTrainingJobStore = defineStore('trainingJob', {
      */
     purgeExpired(): boolean {
       const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = keepUnexpiredJobs(this.jobs, isTerminal, deadline);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;

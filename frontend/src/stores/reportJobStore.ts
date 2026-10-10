@@ -27,7 +27,9 @@ import {
 } from '@/api/reportApi';
 import type { Report } from '@/types/security';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/jobHelpers';
+import { toMillis } from '@/utils/datetime';
+import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
 
 export type ReportJobKind = 'generate' | 'export';
 export type ReportJobStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
@@ -77,14 +79,6 @@ const FINISHED_TTL_MS = 24 * 60 * 60 * 1000;
 let pollTimer: number | null = null;
 let polling = false;
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
-/** 服务端 created_at 是 epoch 秒；缺失时退回本地时钟 */
-const toMillis = (createdAt?: number): number =>
-  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
-    ? createdAt * 1000
-    : Date.now();
-
 /** 下载文件名：去掉文件系统不接受的字符（与后端 report_export.safe_filename 一致） */
 const safeFileName = (title: string, reportId: string) => {
   const cleaned = (title ?? '')
@@ -103,10 +97,7 @@ const saveBlob = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
-const isTerminal = (job: BackgroundReportJob) => TERMINAL_STATUSES.includes(job.status);
+const isTerminal = createIsTerminal<BackgroundReportJob>(TERMINAL_STATUSES);
 
 export const useReportJobStore = defineStore('reportJob', {
   state: () => ({
@@ -352,16 +343,7 @@ export const useReportJobStore = defineStore('reportJob', {
 
     /** 终态任务超过上限就丢最旧的（正常情况下 markAllSeen 会先清掉） */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => job.jobId),
-      );
-      this.jobs = this.jobs.filter((job) => !drop.has(job.jobId));
+      this.jobs = trimFinishedJobs(this.jobs, isTerminal, (job) => job.jobId, MAX_FINISHED);
     },
 
     /**
@@ -372,7 +354,7 @@ export const useReportJobStore = defineStore('reportJob', {
      */
     purgeExpired(): boolean {
       const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = keepUnexpiredJobs(this.jobs, isTerminal, deadline);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;
