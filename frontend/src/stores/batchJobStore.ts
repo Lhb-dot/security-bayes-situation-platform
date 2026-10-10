@@ -17,8 +17,9 @@ import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getInferenceBatchJob, listInferenceBatchJobs } from '@/api/inferenceRecordApi';
 import type { BatchInferenceResult } from '@/api/inferenceRecordApi';
+import { createIsTerminal, messageOf, toMillis } from '@/utils/job';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/helpers';
 
 type BatchStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
@@ -69,17 +70,7 @@ export interface BatchJobResult {
 let pollTimer: number | null = null;
 let polling = false;
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
-const toMillis = (createdAt?: number): number =>
-  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
-    ? createdAt * 1000
-    : Date.now();
-
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
-const isTerminal = (job: BackgroundBatchJob) => TERMINAL_STATUSES.includes(job.status);
+const isTerminal = createIsTerminal<BackgroundBatchJob>(TERMINAL_STATUSES);
 
 export const useBatchJobStore = defineStore('batchJob', {
   state: () => ({

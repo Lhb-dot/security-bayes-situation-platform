@@ -26,8 +26,9 @@ import {
   listReportGenerateJobs,
 } from '@/api/reportApi';
 import type { Report } from '@/types/security';
+import { createIsTerminal, messageOf, toMillis } from '@/utils/job';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/helpers';
 
 export type ReportJobKind = 'generate' | 'export';
 export type ReportJobStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
@@ -77,14 +78,6 @@ const FINISHED_TTL_MS = 24 * 60 * 60 * 1000;
 let pollTimer: number | null = null;
 let polling = false;
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
-/** 服务端 created_at 是 epoch 秒；缺失时退回本地时钟 */
-const toMillis = (createdAt?: number): number =>
-  typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt > 0
-    ? createdAt * 1000
-    : Date.now();
-
 /** 下载文件名：去掉文件系统不接受的字符（与后端 report_export.safe_filename 一致） */
 const safeFileName = (title: string, reportId: string) => {
   const cleaned = (title ?? '')
@@ -103,10 +96,7 @@ const saveBlob = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
-const isTerminal = (job: BackgroundReportJob) => TERMINAL_STATUSES.includes(job.status);
+const isTerminal = createIsTerminal<BackgroundReportJob>(TERMINAL_STATUSES);
 
 export const useReportJobStore = defineStore('reportJob', {
   state: () => ({

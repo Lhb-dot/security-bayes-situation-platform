@@ -22,8 +22,9 @@
 import { defineStore } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { getModelVersionDetail, listTrainingJobs } from '@/api/trainingApi';
+import { createIsTerminal, messageOf } from '@/utils/job';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
-import { useUserStore } from '@/stores/userStore';
+import { currentUid } from '@/stores/helpers';
 
 /** 训练中：只要状态还是它，就说明后台线程没推进完 */
 const STATUS_TRAINING = 'TRAINING';
@@ -91,8 +92,6 @@ let polling = false;
  */
 const settledIds = new Set<number>();
 
-const currentUid = (): string | null => useUserStore().currentUser?.user_id ?? null;
-
 /**
  * 服务端时间戳解析。row_to_dict 出的是北京时间 naive 字符串（`common.py` 的 to_beijing +
  * `%Y-%m-%d %H:%M:%S`），没有时区标记 —— 直接 `new Date()` 会按浏览器本地时区解析，
@@ -104,13 +103,10 @@ const parseServerTime = (value?: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const messageOf = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : fallback;
-
 const isTerminalStatus = (status: string) => TERMINAL_STATUSES.includes(status);
 
 /** 判定任务对象是否已到终态（口径同上：只认 DRAFT / FAILED） */
-const isTerminal = (job: BackgroundTrainingJob) => isTerminalStatus(job.status);
+const isTerminal = createIsTerminal<BackgroundTrainingJob>(TERMINAL_STATUSES);
 
 /** 训练任务名：场景 · 算法 */
 export const trainingJobTitle = (row: TrainingJobRow) =>
