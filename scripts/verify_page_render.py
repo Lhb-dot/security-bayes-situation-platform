@@ -3,25 +3,19 @@
 
 背景
 ----
-本项目前端是 **hash 路由**（`createWebHashHistory`），且由后端 StaticFiles 托管
-（12312 本身就是完整站点）。因此：
-- `curl http://127.0.0.1:12312/risk` 会得到 FastAPI 的 `{"detail":"Not Found"}`，
-  因为真实地址是 `http://127.0.0.1:12312/#/risk`；靠抓 HTML/JS 只能证明产物里
-  有/没有字符串，**证明不了页面上看得见什么**。
-- 直接硬加载 `/#/xxx`（已登录状态）会被路由守卫弹回角色落地页：`main.ts` 里
-  `app.use(router)` 在 `userStore.bootstrap()` 之前，守卫先跑、`currentUser` 还是
-  null → 跳 /login → bootstrap 完成后守卫再跑一次 → roleLanding。所以本脚本
-  **先登录 + reload，再用 `location.hash` 做客户端跳转**。
+本项目前端使用 history 路由，后端 SPAStaticFiles 为业务深链返回 index.html。
+本脚本先登录，再直接加载目标业务地址，验证会话恢复、路由守卫和真实页面文本。
+旧的 `#/risk` 参数仍可使用，但会先归一化为 `/risk`。
 
 用法
 ----
-    <python> scripts/verify_page_render.py --route "#/risk" \
+    <python> scripts/verify_page_render.py --route "/risk" \
         --absent "仅展示当前场景下的数据集版本" "训练参数右侧说明" \
         --present "训练配置" "开始训练" \
         --shot tmp/training_page.png
 
-依赖：`websockets`（隔离 venv 内已装）
-    C:\\Users\\11543\\.workbuddy-ai\\binaries\\python\\envs\\default\\Scripts\\python.exe
+依赖：`websockets`，以及本机 Chrome 或 Edge。
+可通过 --password-env 指定存放验证账号密码的环境变量，避免密码出现在命令行。
 
 退出码：0 = 全部断言通过；1 = 有断言失败或环境/登录失败。
 """
@@ -63,6 +57,9 @@ async def run(args) -> int:
     chrome = _find_chrome()
     port = args.port
     base = args.base.rstrip("/")
+    route = args.route.removeprefix("#")
+    if not route.startswith("/") or route.startswith("//"):
+        raise SystemExit("--route 必须是站内路径，如 /risk")
     profile = tempfile.mkdtemp(prefix="cdp-profile-")
     proc = subprocess.Popen(
         [
@@ -136,7 +133,7 @@ async def run(args) -> int:
             )
 
             # 1) 载入真实 SPA（登录页），拿到正确 origin
-            await send("Page.navigate", {"url": base + "/#/login"})
+            await send("Page.navigate", {"url": base + "/login"})
             await asyncio.sleep(4)
 
             # 2) 在页面内登录，cookie 落到正确 origin
@@ -152,7 +149,7 @@ async def run(args) -> int:
                   return r.status;
                 })()""" % (json.dumps(args.username), json.dumps(pwd))
                 status = await js(expr, await_promise=True)
-                print("login %s/%s -> HTTP %s" % (args.username, pwd, status))
+                print("login %s -> HTTP %s" % (args.username, status))
                 if status == 200:
                     ok_login = True
                     break
@@ -160,22 +157,24 @@ async def run(args) -> int:
                 print("FATAL: 登录失败（候选密码都不对）")
                 return 1
 
-            # 3) reload 让 bootstrap() 认到会话，再用 hash 做客户端跳转
-            await js("location.reload()")
-            await asyncio.sleep(5)
-            await js("location.hash = %s" % json.dumps(args.route))
+            # 3) 直接进入 history 深链，bootstrap 恢复会话后由守卫判断目标路由
+            await send("Page.navigate", {"url": base + route})
             text = ""
             for _ in range(20):
                 await asyncio.sleep(1)
                 text = await js("document.body ? document.body.innerText : ''") or ""
-                if args.ready and args.ready in text:
+                required = [args.ready] if args.ready else args.present
+                if required and all(value in text for value in required):
                     break
 
-            print("\n===== PAGE TEXT (%s) =====" % args.route)
+            actual_route = await js("location.pathname + location.search")
+            print("route -> %s" % actual_route)
+            print("\n===== PAGE TEXT (%s) =====" % route)
             print(text[:3000])
             print("===== END PAGE TEXT =====\n")
 
-            ok = True
+            ok = actual_route == route
+            print("ROUTE?", "OK" if ok else "!! UNEXPECTED REDIRECT")
             for s in args.absent:
                 hit = s in text
                 ok = ok and not hit
@@ -204,7 +203,7 @@ async def run(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="无头 Chrome 渲染断言（本项目专用）")
     ap.add_argument("--base", default="http://127.0.0.1:12312", help="站点根地址")
-    ap.add_argument("--route", default="#/risk", help="hash 路由，如 '#/risk'")
+    ap.add_argument("--route", default="/risk", help="站内 history 路由，如 '/risk'；兼容 '#/risk'")
     ap.add_argument("--username", default="admin")
     ap.add_argument(
         "--passwords",
@@ -212,6 +211,7 @@ def main() -> int:
         default=["123456", "admin123"],
         help="候选密码，逐个尝试（实测种子密码是 123456）",
     )
+    ap.add_argument("--password-env", help="读取验证账号密码的环境变量名（优先于 --passwords）")
     ap.add_argument("--absent", nargs="*", default=[], help="断言页面上【不应出现】的文本")
     ap.add_argument("--present", nargs="*", default=[], help="断言页面上【应出现】的文本")
     ap.add_argument("--ready", default="", help="等到该文本出现即认为页面就绪")
@@ -220,6 +220,11 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1440)
     ap.add_argument("--height", type=int, default=1250)
     args = ap.parse_args()
+    if args.password_env:
+        password = os.environ.get(args.password_env)
+        if not password:
+            ap.error("--password-env 指定的环境变量为空")
+        args.passwords = [password]
     return asyncio.run(run(args))
 
 
