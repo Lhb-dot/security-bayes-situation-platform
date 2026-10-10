@@ -28,6 +28,7 @@ import type { AlgorithmParamDef } from '@/types/security';
 import { useUserStore } from '@/stores/userStore';
 import { useTrainingJobStore } from '@/stores/trainingJobStore';
 import { getScenarios, getDatasets, getAlgorithms, trainModelAsync } from '@/api/trainingApi';
+import type { DatasetRow, ScenarioRow } from '@/api/trainingApi';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -41,29 +42,14 @@ const currentUser = computed(() => userStore.currentUser);
 const isManagement = computed(() => userStore.isManagement);
 
 // ===================== 场景（数据库） =====================
-interface DbScenario {
-  id: number;
-  code: string;
-  name: string;
-  access_status: string;
-}
-const scenarios = ref<DbScenario[]>([]);
+const scenarios = ref<ScenarioRow[]>([]);
 const scenarioOptions = computed(() =>
   scenarios.value.filter((s) => s.access_status === 'ACTUAL')
 );
 const selectedScenario = ref<number | ''>('');
 
 // ===================== 数据集（数据库） =====================
-interface DbDataset {
-  id: number;
-  logical_id: string;
-  name: string;
-  version: number;
-  status: string;
-  file_path: string;
-  fields_schema: unknown[];
-}
-const datasetList = ref<DbDataset[]>([]);
+const datasetList = ref<DatasetRow[]>([]);
 const selectedDatasetId = ref<number | ''>('');
 const loadingDatasets = ref(false);
 
@@ -156,11 +142,6 @@ const trainingJobStore = useTrainingJobStore();
 const activeJob = computed(() => trainingJobStore.activeJob);
 const training = computed(() => Boolean(activeJob.value));
 
-/** 提交训练后返回的模型版本行（trainingApi 为 JS 模块无类型，本页只用到 id） */
-interface ModelVersionRow {
-  id: number;
-}
-
 // ===================== 场景切换 → 加载数据集 =====================
 /** 竞态令牌：连着切两个场景时只认最后一次请求的结果。否则先发出的旧场景请求
  *  后返回，会把旧场景的数据集盖在新场景上，训练就成了「B 场景 + A 场景数据集」 */
@@ -232,7 +213,7 @@ const handleTrain = async () => {
     for (const p of visibleParams.value) {
       if (p.param_name in paramForm.value) training_parameters[p.param_name] = paramForm.value[p.param_name];
     }
-    const submitted: ModelVersionRow = await trainModelAsync({
+    const submitted = await trainModelAsync({
       scenario_id: selectedScenario.value,
       dataset_id: selectedDatasetId.value,
       algorithm_id: selectedAlgoId.value,
@@ -248,20 +229,10 @@ const handleTrain = async () => {
   }
 };
 
-/** /api/v1/algorithms 返回的算法行（trainingApi 为 JS 模块无类型，此处显式声明） */
-interface ApiAlgorithmRow {
-  id: number;
-  code: string;
-  display_name: string;
-  description?: string | null;
-  status: string;
-  param_schema?: unknown[];
-}
-
 onMounted(async () => {
   try {
     scenarios.value = await getScenarios();
-    algorithms.value = ((await getAlgorithms()) as ApiAlgorithmRow[]).map((a) => ({
+    algorithms.value = (await getAlgorithms()).map((a) => ({
       id: a.id,
       display_name: a.display_name,
       available: a.status === 'AVAILABLE',

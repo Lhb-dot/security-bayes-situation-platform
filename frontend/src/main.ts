@@ -37,7 +37,7 @@ app.use(pinia);
 const userStore = useUserStore(pinia);
 userStore.bootstrap().finally(() => {
   app.use(router);
-// 会话中途 401（cookie 过期）由这里接管跳转，request.ts 只负责清凭据。
+  // 会话中途 401（cookie 过期）由这里接管跳转，request.ts 只负责清凭据。
   setUnauthorizedHandler(() => {
     const current = router.currentRoute.value;
     if (current.path === '/login') return;
