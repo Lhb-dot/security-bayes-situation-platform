@@ -30,6 +30,8 @@ import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/jobHelpers';
 import { toMillis } from '@/utils/datetime';
 import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
+import { createStorePoller } from './jobPollingCore';
+import type { PollContext } from './jobPollingCore';
 
 export type ReportJobKind = 'generate' | 'export';
 export type ReportJobStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
@@ -76,8 +78,7 @@ const TERMINAL_STATUSES: ReportJobStatus[] = ['DONE', 'FAILED'];
  */
 const FINISHED_TTL_MS = 24 * 60 * 60 * 1000;
 
-let pollTimer: number | null = null;
-let polling = false;
+const pollFor = createStorePoller(POLL_INTERVAL_MS, currentUid);
 
 /** 下载文件名：去掉文件系统不接受的字符（与后端 report_export.safe_filename 一致） */
 const safeFileName = (title: string, reportId: string) => {
@@ -173,16 +174,11 @@ export const useReportJobStore = defineStore('reportJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      pollFor(this).start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      pollFor(this).stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -201,7 +197,7 @@ export const useReportJobStore = defineStore('reportJob', {
      * 否则 `resumePending` 拿到空集合，会把所有终态任务都判成未读。
      */
     reset() {
-      this.stopPolling();
+      pollFor(this).reset();
       this.jobs = [];
       this.syncSeen();
     },
@@ -232,12 +228,14 @@ export const useReportJobStore = defineStore('reportJob', {
      */
     async resumePending() {
       this.reset();
+      const context = pollFor(this).capture();
       const seen = new Set(this.seenIds);
       try {
         const [generates, exports] = await Promise.all([
           listReportGenerateJobs(),
           listReportExportJobs(),
         ]);
+        if (!context.isCurrent()) return;
         for (const view of generates ?? []) {
           const status = view.status as ReportJobStatus;
           if (TERMINAL_STATUSES.includes(status) && seen.has(view.job_id)) continue;
@@ -272,47 +270,50 @@ export const useReportJobStore = defineStore('reportJob', {
         // 恢复失败不影响页面：任务仍在服务端跑，产物最终会出现在报告列表里
       }
       // 服务端任务表里可能还躺着昨天甚至更早的，接回来之前先丢掉
-      this.purgeExpired();
+      if (context.isCurrent()) this.purgeExpired();
     },
 
-    async _tick() {
-      if (polling) return;   // 上一轮还没回来（请求慢），跳过这一拍
-      polling = true;
-      try {
-        const running = this.runningJobs;
-        if (!running.length) {
-          this.stopPolling();
-          return;
-        }
-        for (const job of running) {
-          job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
-          if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
-            this._timeout(job);
-            continue;
-          }
-          try {
-            if (job.kind === 'generate') {
-              const view = await getReportGenerateJob(job.jobId);
-              job.status = view.status;
-              job.error = view.error;
-              job.reportId = view.report_id;
-            } else {
-              const view = await getReportExportJob(job.jobId);
-              job.status = view.status;
-              job.error = view.error;
-              job.filename = view.filename;
-            }
-          } catch (err) {
-            // 单次轮询失败（网络抖动 / 服务端重启导致任务丢失）不立刻判死，交给超时兜底
-            job.error = messageOf(err, job.error ?? '任务状态查询失败');
-            continue;
-          }
-          if (isTerminal(job)) this._settle(job);
-        }
-        if (!this.runningJobs.length) this.stopPolling();
-      } finally {
-        polling = false;
+    _tick(): Promise<void> {
+      return pollFor(this).tick();
+    },
+
+    async _poll(context: PollContext) {
+      if (!context.isCurrent()) return;
+      const running = this.runningJobs;
+      if (!running.length) {
+        this.stopPolling();
+        return;
       }
+      for (const job of running) {
+        if (!context.isCurrent()) return;
+        job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
+        if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
+          this._timeout(job);
+          continue;
+        }
+        try {
+          if (job.kind === 'generate') {
+            const view = await getReportGenerateJob(job.jobId);
+            if (!context.isCurrent()) return;
+            job.status = view.status;
+            job.error = view.error;
+            job.reportId = view.report_id;
+          } else {
+            const view = await getReportExportJob(job.jobId);
+            if (!context.isCurrent()) return;
+            job.status = view.status;
+            job.error = view.error;
+            job.filename = view.filename;
+          }
+        } catch (err) {
+          if (!context.isCurrent()) return;
+          // 单次轮询失败（网络抖动 / 服务端重启导致任务丢失）不立刻判死，交给超时兜底
+          job.error = messageOf(err, job.error ?? '任务状态查询失败');
+          continue;
+        }
+        if (isTerminal(job)) this._settle(job);
+      }
+      if (context.isCurrent() && !this.runningJobs.length) this.stopPolling();
     },
 
     /** 任务到达终态：出通知、必要时取产物。**不从列表移除** —— 顶栏面板要展示它。 */
@@ -362,8 +363,10 @@ export const useReportJobStore = defineStore('reportJob', {
 
     /** 下载产物就绪：取文件流并触发下载 */
     async _downloadExport(job: BackgroundReportJob) {
+      const context = pollFor(this).capture();
       try {
         const blob = await downloadReportExportFile(job.jobId);
+        if (!context.isCurrent()) return;
         const ext = EXPORT_EXT[job.format ?? 'markdown'] ?? 'txt';
         saveBlob(blob, `${safeFileName(job.title, job.sourceReportId ?? job.jobId)}.${ext}`);
         ElNotification({
@@ -372,6 +375,7 @@ export const useReportJobStore = defineStore('reportJob', {
           type: 'success',
         });
       } catch (err) {
+        if (!context.isCurrent()) return;
         ElNotification({
           title: '报告下载失败',
           message: `《${job.title}》：${messageOf(err, '文件下载失败')}`,
