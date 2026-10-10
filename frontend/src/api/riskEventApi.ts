@@ -15,7 +15,9 @@ export const getRiskEventList = async (params?: {
   page_size?: number;
 }): Promise<RiskEvent[]> => {
   // 声明返回已映射的 RiskEvent[]，实际是后端原始行（status 为 PENDING/PROCESSING/RESOLVED 枚举，非中文）
-  const data = await unwrapData(await request.get('/api/v1/risk-events', { params }));
+  const data = await unwrapData<{ items?: RiskEvent[] }>(
+    await request.get('/api/v1/risk-events', { params }),
+  );
   return data.items ?? [];
 };
 
@@ -40,7 +42,9 @@ export const getRiskEventPage = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<RiskEventPage> => {
-  const data = await unwrapData(await request.get('/api/v1/risk-events', { params }));
+  const data = await unwrapData<Partial<RiskEventPage>>(
+    await request.get('/api/v1/risk-events', { params }),
+  );
   return {
     items: data.items ?? [],
     total: data.total ?? 0,

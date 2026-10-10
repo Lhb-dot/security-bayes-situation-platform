@@ -58,7 +58,12 @@ export const getReportPage = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<ReportPage> => {
-  const data = await unwrapData(await request.get('/api/v1/reports', { params }));
+  const data = await unwrapData<{
+    items?: ApiReport[];
+    total?: number;
+    page?: number;
+    page_size?: number;
+  }>(await request.get('/api/v1/reports', { params }));
   return {
     items: (data.items ?? []).map(toReport),
     total: data.total ?? 0,
@@ -69,7 +74,7 @@ export const getReportPage = async (params?: {
 
 /** 本账号配置的定时报告（GET /reports/scheduled，跟随账号，仅本人生成的） */
 export const getScheduledReports = async (): Promise<Report[]> => {
-  const data = await unwrapData(await request.get('/api/v1/reports/scheduled'));
+  const data = await unwrapData<ApiReport[]>(await request.get('/api/v1/reports/scheduled'));
   return (data ?? []).map(toReport);
 };
 

@@ -250,7 +250,7 @@ const fetchDatasetItems = async (params?: {
   await ensureScenarioMaps();
   const scenarioNumeric =
     params?.scenario_id != null ? scenarioIdByCodeCache?.[params.scenario_id] : undefined;
-  const data = await unwrapData(
+  const data = await unwrapData<{ items?: ApiDataset[] }>(
     await request.get('/api/v1/datasets', {
       params: {
         scenario_id: scenarioNumeric,
@@ -297,7 +297,7 @@ export const getDatasetFields = async (
   _datasetVersion?: string
 ): Promise<DatasetField[]> => {
   const pk = await resolveDatasetPk(datasetId);
-  const data = await unwrapData(
+  const data = await unwrapData<{ fields_schema?: ApiField[]; label_field?: string }>(
     await request.get(`/api/v1/datasets/${pk}/fields-schema`)
   );
   return mapFields(data.fields_schema as ApiField[] | undefined, data.label_field);
