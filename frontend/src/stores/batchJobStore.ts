@@ -21,6 +21,7 @@ import { createIsTerminal, messageOf } from '@/utils/job';
 import { toMillis } from '@/utils/datetime';
 import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/helpers';
+import { createPollTimer, filterExpired, trimFinished } from './jobPollingCore';
 
 type BatchStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
@@ -68,8 +69,8 @@ export interface BatchJobResult {
   result: BatchInferenceResult;
 }
 
-let pollTimer: number | null = null;
 let polling = false;
+const poll = createPollTimer(POLL_INTERVAL_MS, () => void useBatchJobStore()._tick());
 
 const isTerminal = createIsTerminal<BackgroundBatchJob>(TERMINAL_STATUSES);
 
@@ -126,16 +127,11 @@ export const useBatchJobStore = defineStore('batchJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      poll.start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      poll.stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -283,16 +279,7 @@ export const useBatchJobStore = defineStore('batchJob', {
 
     /** 终态任务超过上限就丢最旧的 */
     _trimFinished() {
-      const finished = this.jobs.filter(isTerminal);
-      if (finished.length <= MAX_FINISHED) return;
-      const drop = new Set(
-        finished
-          .slice()
-          .sort((a, b) => a.startedAt - b.startedAt)
-          .slice(0, finished.length - MAX_FINISHED)
-          .map((job) => job.jobId),
-      );
-      this.jobs = this.jobs.filter((job) => !drop.has(job.jobId));
+      this.jobs = trimFinished(this.jobs, isTerminal, (job) => job.jobId, (job) => job.startedAt, MAX_FINISHED);
     },
 
     /**
@@ -302,8 +289,7 @@ export const useBatchJobStore = defineStore('batchJob', {
      * `_tick` 手里那个对象已经不在数组里，会白跑一轮。
      */
     purgeExpired(): boolean {
-      const deadline = Date.now() - FINISHED_TTL_MS;
-      const kept = this.jobs.filter((job) => !isTerminal(job) || job.startedAt >= deadline);
+      const kept = filterExpired(this.jobs, isTerminal, (job) => job.startedAt, FINISHED_TTL_MS);
       if (kept.length === this.jobs.length) return false;
       this.jobs = kept;
       return true;
