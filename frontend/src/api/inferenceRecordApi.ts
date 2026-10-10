@@ -158,7 +158,9 @@ export const getInferenceRecordPage = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<InferenceRecordPage> => {
-  const data = await unwrapData(await request.get('/api/v1/inference-records', { params }));
+  const data = await unwrapData<Partial<InferenceRecordPage>>(
+    await request.get('/api/v1/inference-records', { params }),
+  );
   return {
     items: data.items ?? [],
     total: data.total ?? 0,

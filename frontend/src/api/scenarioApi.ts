@@ -83,7 +83,7 @@ export interface ApiScenarioOverview {
  * （数据集同源去重、模型只算已发布）。后端按角色限定可见场景与数据可见性。
  */
 export const getScenarioOverview = async (): Promise<ApiScenarioOverview> => {
-  const overview = unwrapData(await request.get('/api/v1/scenarios/overview'));
+  const overview = unwrapData<ApiScenarioOverview>(await request.get('/api/v1/scenarios/overview'));
   // 场景卡片本身就带数字 ID，顺手预热「编码 → 数字 ID」缓存：
   // 这样从场景中心点进场景大屏时，resolveScenarioId 直接命中缓存，
   // 不必再多发一次 GET /scenarios（原先首次进入场景大屏是两次串行请求）。
