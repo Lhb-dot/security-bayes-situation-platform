@@ -21,6 +21,8 @@ import { markSeenIds, readSeenIds } from '@/utils/jobSeen';
 import { currentUid } from '@/stores/jobHelpers';
 import { toMillis } from '@/utils/datetime';
 import { createIsTerminal, keepUnexpiredJobs, messageOf, trimFinishedJobs } from '@/utils/job';
+import { createStorePoller } from './jobPollingCore';
+import type { PollContext } from './jobPollingCore';
 
 type BatchStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 
@@ -68,8 +70,7 @@ export interface BatchJobResult {
   result: BatchInferenceResult;
 }
 
-let pollTimer: number | null = null;
-let polling = false;
+const pollFor = createStorePoller(POLL_INTERVAL_MS, currentUid);
 
 const isTerminal = createIsTerminal<BackgroundBatchJob>(TERMINAL_STATUSES);
 
@@ -126,16 +127,11 @@ export const useBatchJobStore = defineStore('batchJob', {
     },
 
     startPolling() {
-      if (pollTimer !== null) return;
-      pollTimer = window.setInterval(() => void this._tick(), POLL_INTERVAL_MS);
-      void this._tick();
+      pollFor(this).start();
     },
 
     stopPolling() {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
+      pollFor(this).stop();
     },
 
     /** 重新读一遍已读集合（会话恢复 / 别的标签页改动时用） */
@@ -154,7 +150,7 @@ export const useBatchJobStore = defineStore('batchJob', {
      * 否则 `resumePending` 拿到空集合，会把所有终态任务都判成未读。
      */
     reset() {
-      this.stopPolling();
+      pollFor(this).reset();
       this.jobs = [];
       this.lastResult = null;
       this.syncSeen();
@@ -186,9 +182,11 @@ export const useBatchJobStore = defineStore('batchJob', {
      */
     async resumePending() {
       this.reset();
+      const context = pollFor(this).capture();
       const seen = new Set(this.seenIds);
       try {
         const rows = await listInferenceBatchJobs();
+        if (!context.isCurrent()) return;
         for (const row of rows ?? []) {
           const status = row.status as BatchStatus;
           if (TERMINAL_STATUSES.includes(status) && seen.has(row.job_id)) continue;
@@ -210,19 +208,22 @@ export const useBatchJobStore = defineStore('batchJob', {
         // 恢复失败不影响页面：任务仍在服务端跑，结果可在推理记录里看到
       }
       // 服务端任务表里可能还躺着昨天甚至更早的，接回来之前先丢掉
-      this.purgeExpired();
+      if (context.isCurrent()) this.purgeExpired();
     },
 
-    async _tick() {
-      if (polling) return;   // 上一轮还没回来（请求慢），跳过这一拍
-      polling = true;
-      try {
+    _tick(): Promise<void> {
+      return pollFor(this).tick();
+    },
+
+    async _poll(context: PollContext) {
+        if (!context.isCurrent()) return;
         const running = this.runningJobs;
         if (!running.length) {
           this.stopPolling();
           return;
         }
         for (const job of running) {
+          if (!context.isCurrent()) return;
           job.elapsed = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
           if (Date.now() - job.startedAt >= POLL_TIMEOUT_MS) {
             this._timeout(job);
@@ -230,6 +231,7 @@ export const useBatchJobStore = defineStore('batchJob', {
           }
           try {
             const view = await getInferenceBatchJob(job.jobId);
+            if (!context.isCurrent()) return;
             job.status = view.status as BatchStatus;
             job.error = view.error;
             job.processed = view.processed;
@@ -246,14 +248,12 @@ export const useBatchJobStore = defineStore('batchJob', {
               this._settle(job);
             }
           } catch (err) {
+            if (!context.isCurrent()) return;
             // 单次轮询失败（网络抖动 / 服务端重启导致任务丢失）不立刻判死，交给超时兜底
             job.error = messageOf(err, job.error ?? '任务状态查询失败');
           }
         }
-        if (!this.running) this.stopPolling();
-      } finally {
-        polling = false;
-      }
+        if (context.isCurrent() && !this.running) this.stopPolling();
     },
 
     /** 任务到达终态：出通知。**不从列表移除** —— 顶栏面板要展示它。 */
