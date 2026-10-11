@@ -72,35 +72,7 @@ const BASELINE_SOURCE =
   '电力基线：电压 300–700 kV · 电流 400–1600 A · 温度 30–90 ℃ · 工频 49.8–50.2 Hz · 丢包 ≤1%';
 
 /* ------------------------------------------------------------------ */
-/* 展示名去重                                                          */
-/* ------------------------------------------------------------------ */
-
-/**
- * 数据集展示名去重。
- *
- * 后端 `dataset_display_name_of` 取的是上传文件名，同一份物理文件被不同账号重复注册时
- * （如 power_grid_company_v1 与 powergrid_knowledgebase 同源）会得到**完全相同的展示名**，
- * 矩阵里就会出现两行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
- */
-const displayNames = computed(() => {
-  const counts = new Map<string, number>();
-  for (const item of props.data.datasets) {
-    const name = item.name || item.logical_id;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const entries: Array<[string, string]> = props.data.datasets.map((item) => {
-    const name = item.name || item.logical_id;
-    return [item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name];
-  });
-  return new Map(entries);
-});
-
-/** 取展示名：优先用去重后的展示名，其次用接口自带的 name，最后兜底 logical_id */
-const nameOf = (logicalId: string, fallback?: string | null) =>
-  displayNames.value.get(logicalId) ?? fallback ?? logicalId;
-
-/* ------------------------------------------------------------------ */
-/* 建模覆盖映射                                                        */
+/* 建模覆盖映射                                                         */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -203,7 +175,7 @@ const verdictOf = (row: TelemetryByDataset): { text: string; tone: 'ok' | 'up' }
 const d1Rows = computed<Array<Record<string, unknown>>>(() =>
   props.data.telemetry_by_dataset.map((item) => ({
     logical_id: item.logical_id,
-    name: nameOf(item.logical_id, item.name),
+    name: item.logical_id,
     voltage: meanText(item, PARAM_KEYS.voltage),
     current: meanText(item, PARAM_KEYS.current),
     temperature: meanText(item, PARAM_KEYS.temperature),
@@ -230,7 +202,7 @@ const d2Rows = computed<Array<Record<string, unknown>>>(() =>
     value: item.value,
     kind: item.kind === 'system' ? '系统' : '设备',
     coverage: item.counts
-      .map((entry) => `${nameOf(entry.logical_id)}(${entry.count} 条, ${fmtPercent(entry.risk_rate)})`)
+      .map((entry) => `${entry.logical_id}(${entry.count} 条, ${fmtPercent(entry.risk_rate)})`)
       .join('、'),
     dataset_count: item.counts.length,
   })),
@@ -265,7 +237,7 @@ const datasetRows = computed(() =>
     const stat = modelingMap.value.get(item.logical_id);
     return {
       logical_id: item.logical_id,
-      name: nameOf(item.logical_id, item.name),
+      name: item.logical_id,
       record_count: item.record_count,
       label_field: item.label_field,
       risk_rate: fmtPercent(item.risk_rate),

@@ -125,35 +125,8 @@ const overviewKpis = computed(() => [
 ]);
 
 /* ------------------------------------------------------------------ */
-/* 展示名与枚举映射                                                     */
+/* 枚举映射                                                         */
 /* ------------------------------------------------------------------ */
-
-/**
- * 数据集展示名去重。
- *
- * `dataset_display_name_of` 取的是上传文件名，同源重复的两条记录（如 dis_landslides 与
- * geo_slope_company_v1 都指向 DIS_Landslides.arff）会得到**完全相同的展示名**，
- * 列表里就会出现两行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
- * D1/D2/S2/S3 全部复用这一份映射，保证同一数据集在四张表里叫同一个名字。
- * 两遍遍历：先数重名，再据此生成展示名。
- */
-const displayNames = computed(() => {
-  const counts = new Map<string, number>();
-  for (const item of props.data.datasets) {
-    const name = item.name || item.logical_id;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const names = new Map<string, string>();
-  for (const item of props.data.datasets) {
-    const name = item.name || item.logical_id;
-    names.set(item.logical_id, (counts.get(name) ?? 0) > 1 ? `${name}（${item.logical_id}）` : name);
-  }
-  return names;
-});
-
-/** logical_id → 展示名；优先去重表，其次后端行内的 name，最后回退 logical_id */
-const nameOf = (logicalId: string, fallback?: string) =>
-  displayNames.value.get(logicalId) ?? fallback ?? logicalId;
 
 /** 标签类型中文映射：纯描述性，不参与正类判定 */
 const LABEL_KIND_TEXT: Record<string, string> = {
@@ -218,7 +191,7 @@ const roleRows = computed<Array<Record<string, unknown>>>(() =>
     }
     return {
       logical_id: item.logical_id,
-      name: nameOf(item.logical_id, item.name),
+      name: item.logical_id,
       role: item.role,
       label_field: item.label_field,
       label_kind: labelKindText(item.label_kind),
@@ -251,7 +224,7 @@ const factorColumns: DashColumn[] = [
 const factorRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.factor_coverage.map((item) => ({
     factor: item.factor,
-    datasets: item.datasets.map((logicalId) => nameOf(logicalId)).join('、'),
+    datasets: item.datasets.join('、'),
     coverage: item.datasets.length,
     binning:
       item.datasets.length > 1
@@ -288,7 +261,7 @@ const datasetColumns: DashColumn[] = [
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.datasets.map((item) => ({
     logical_id: item.logical_id,
-    name: nameOf(item.logical_id, item.name),
+    name: item.logical_id,
     record_count: fmtInt(item.record_count),
     risk_rate: fmtPercent(item.risk_rate),
     attribute_count: item.attribute_count,
@@ -304,7 +277,7 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
 /** S3 的单一基底：每数据集一行，柱状图与版本合计都从它派生 */
 const modelingRows = computed(() =>
   props.data.modeling.map((item) => ({
-    name: nameOf(item.logical_id),
+    name: item.logical_id,
     published: item.published,
     draft: item.draft,
     total: item.total,

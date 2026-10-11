@@ -2,11 +2,13 @@
 /**
  * RiskEventDetailView.vue — 风险事件详情页（Task 012 / 需求 5.7）
  *
- * 三组信息：判定说明 / 基本信息 / 输入特征 —— 按「结论 → 属性与出处 → 原始数据」排列。
+ * 四组信息：判定说明 / 处置信息 / 基本信息 / 输入特征 —— 按「结论 → 处置 → 属性与出处 → 原始数据」排列。
  * 处置状态流转：待处置 → 处理中 → 已处置（已处置为终态禁用），入口在页头。
+ * 「流转至已处置」必须先填写处置方法（弹窗），随处置记录落库，并在「处置信息」区块回显；
+ * 功能上线前已处置的历史事件没有该记录，区块保留位置、内容留空。
  * 解释文本为事件生成时固化存储，前端不拼接、不重算（需求 5.7.3.1/5.7.3.4）。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useRiskEventStore } from '@/stores/riskEventStore';
@@ -70,10 +72,11 @@ const originalLabelText = computed(() =>
   event.value ? (ORIGINAL_LABEL[event.value.original_label] ?? event.value.original_label) : '--'
 );
 
-/** 创建者：优先经 userStore.users 映射用户名，未加载则显示 user_id */
+/** 创建者：详情接口直接下发用户名；列表接口没有该字段时退回 userStore.users（仅管理员拉得到全量用户），再退回 user_id */
 const creatorName = computed(() =>
   event.value
-    ? (userStore.users.find((u) => u.user_id === event.value?.created_by_user_id)?.display_name
+    ? (event.value.creator_name
+        ?? userStore.users.find((u) => u.user_id === event.value?.created_by_user_id)?.display_name
         ?? event.value.created_by_user_id)
     : '--'
 );
@@ -112,17 +115,79 @@ const nextStatus = computed<RiskEvent['status'] | null>(() => {
   return null;
 });
 
+/** 流转弹窗：仅「流转至已处置」需要先填写处置方法 */
+const resolveVisible = ref(false);
+const resolveComment = ref('');
+const submitting = ref(false);
+/** 处置方法是否填了内容（空白不算）—— 未填时确认按钮禁用 */
+const canSubmitResolve = computed(() => resolveComment.value.trim().length > 0);
+
+const applyStatus = async (target: RiskEvent['status'], comment?: string) => {
+  if (!event.value) return;
+  submitting.value = true;
+  try {
+    await riskEventStore.updateStatus(event.value.event_id, target, comment);
+    ElMessage.success(`已更新处置状态为「${target}」`);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '状态更新失败');
+  } finally {
+    submitting.value = false;
+  }
+};
+
 const handleStatusChange = async () => {
   // 先把目标状态取出来再 await：流转成功后 event.status 立刻变成新值，
   // nextStatus 随之重算为 null，事后再拼进提示语就成了「已更新处置状态为「null」」。
   const target = nextStatus.value;
-  if (!event.value || !target) return;
-  try {
-    await riskEventStore.updateStatus(event.value.event_id, target);
-    ElMessage.success(`已更新处置状态为「${target}」`);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '状态更新失败');
+  if (!target) return;
+  // 「已处置」是终态，必须先记录处置方法 —— 弹窗确认后走 submitResolve。
+  if (target === '已处置') {
+    resolveComment.value = '';
+    resolveVisible.value = true;
+    return;
   }
+  await applyStatus(target);
+};
+
+const submitResolve = async () => {
+  if (!canSubmitResolve.value) return;
+  await applyStatus('已处置', resolveComment.value.trim());
+  resolveVisible.value = false;
+};
+
+/**
+ * 处置方法文本域：高度随内容增长，封顶后转为内部滚动条。
+ *
+ * - 默认高度 = 4 行（与 rows 属性一致），输入变多时自动长高；
+ * - 上限取 min(420, 视口高 − 300)：300 是弹窗上下留白 + 头/脚/标签/内边距的余量，
+ *   保证长到极限时整个弹窗仍在视口内，不会被挤出屏幕；
+ * - 超过上限就只加内部滚轮（overflow-y: auto），而不是继续把弹窗撑高。
+ * - 用户不能手动拖拽改尺寸（CSS `resize: none`）。
+ */
+const resolveTextarea = ref<HTMLTextAreaElement | null>(null);
+const TEXTAREA_MIN_HEIGHT = 120;
+const textareaMaxHeight = () =>
+  Math.max(TEXTAREA_MIN_HEIGHT, Math.min(420, window.innerHeight - 300));
+
+const autoGrowTextarea = () => {
+  const el = resolveTextarea.value;
+  if (!el) return;
+  const max = textareaMaxHeight();
+  // 先归零再读 scrollHeight，否则收缩时读到的是上一次的固定高度、永远缩不回去
+  el.style.height = 'auto';
+  const next = Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), max);
+  el.style.height = `${next}px`;
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+};
+
+watch(resolveComment, () => void nextTick(autoGrowTextarea));
+watch(resolveVisible, (visible) => {
+  if (visible) void nextTick(autoGrowTextarea);
+});
+
+/** 视口变化时重新夹一次上限（窗口被压矮时弹窗不能被顶出屏幕） */
+const onViewportResize = () => {
+  if (resolveVisible.value) autoGrowTextarea();
 };
 
 /** 折叠状态下最多先展示多少条输入特征（超出部分点「展开全部」） */
@@ -139,7 +204,11 @@ const visibleFeatureEntries = computed(() =>
   featuresExpanded.value ? featureEntries.value : featureEntries.value.slice(0, FEATURE_PREVIEW_LIMIT)
 );
 
-onMounted(loadData);
+onMounted(() => {
+  void loadData();
+  window.addEventListener('resize', onViewportResize);
+});
+onUnmounted(() => window.removeEventListener('resize', onViewportResize));
 </script>
 
 <template>
@@ -197,7 +266,13 @@ onMounted(loadData);
         <p class="event-detail__explain">{{ formatExplanation(event.description) }}</p>
       </section>
 
-      <!-- 2 基本信息：判定属性在前，数据出处在后 -->
+      <!-- 2 处置信息：仅已处置事件展示；流转时未填（历史数据）则保留位置、内容留空 -->
+      <section v-if="event.status === '已处置'" class="card event-detail__card">
+        <h3 class="event-detail__card-title">处置信息</h3>
+        <p class="event-detail__handling">{{ event.handling_comment ?? '' }}</p>
+      </section>
+
+      <!-- 3 基本信息：判定属性在前，数据出处在后 -->
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">基本信息</h3>
         <div class="event-detail__grid">
@@ -207,11 +282,11 @@ onMounted(loadData);
           <div class="event-detail__item"><span>发生时间</span><strong>{{ event.occurred_at }}</strong></div>
           <div v-if="event.fault_position_x != null" class="event-detail__item"><span>故障位置 X</span><strong>{{ event.fault_position_x }}</strong></div>
           <div v-if="event.fault_position_y != null" class="event-detail__item"><span>故障位置 Y</span><strong>{{ event.fault_position_y }}</strong></div>
-          <div class="event-detail__item"><span>数据集</span><strong>{{ event.dataset_id }}</strong></div>
-          <div class="event-detail__item"><span>数据集版本</span><strong>{{ event.dataset_version }}</strong></div>
-          <div class="event-detail__item"><span>模型版本</span><strong>{{ event.model_version_id }}</strong></div>
-          <div class="event-detail__item"><span>算法</span><strong>{{ event.algorithm_id }}</strong></div>
-          <div class="event-detail__item"><span>推理记录</span><strong>{{ event.inference_record_id }}</strong></div>
+          <div class="event-detail__item"><span>数据集</span><strong>{{ event.dataset_name ?? event.dataset_id }}</strong></div>
+          <div class="event-detail__item"><span>数据集版本</span><strong>v{{ event.dataset_version }}</strong></div>
+          <div class="event-detail__item"><span>模型版本</span><strong>#{{ event.model_version_id }}</strong></div>
+          <div class="event-detail__item"><span>算法</span><strong>{{ event.algorithm_name ?? event.algorithm_id }}</strong></div>
+          <div class="event-detail__item"><span>推理记录</span><strong>#{{ event.inference_record_id }}</strong></div>
           <div class="event-detail__item"><span>创建者</span><strong>{{ creatorName }}</strong></div>
         </div>
       </section>
@@ -239,6 +314,36 @@ onMounted(loadData);
         </el-button>
       </section>
     </template>
+
+    <!-- 流转至「已处置」：先填写处置方法（必填），确认后写入处置记录 -->
+    <el-dialog
+      v-model="resolveVisible"
+      class="event-detail__dialog"
+      title="处置风险事件"
+      width="660px"
+      align-center
+      append-to-body
+      :close-on-click-modal="false"
+      :close-on-press-escape="!submitting"
+      :show-close="!submitting"
+    >
+      <div class="event-detail__dialog-field">
+        <label class="event-detail__dialog-label">处置方法<span class="required">*</span></label>
+        <textarea
+          ref="resolveTextarea"
+          v-model="resolveComment"
+          class="event-detail__dialog-textarea"
+          rows="4"
+          placeholder="说明处置方式与结果"
+        ></textarea>
+      </div>
+      <template #footer>
+        <el-button plain :disabled="submitting" @click="resolveVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!canSubmitResolve" :loading="submitting" @click="submitResolve">
+          确认处置
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -416,6 +521,22 @@ onMounted(loadData);
   line-height: 1.7;
 }
 
+/* 处置信息：与判定说明同款盒子，取「已处置」的青色。min-height 保证历史数据
+   （没有处置方法）时盒子不塌陷 —— 位置要留住，内容留空。 */
+.event-detail__handling {
+  margin: 0;
+  min-height: 48px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(83, 229, 200, 0.06);
+  border: 1px solid rgba(83, 229, 200, 0.18);
+  color: #dbe9ff;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 768px) {
   .event-detail__head {
     flex-direction: column;
@@ -449,5 +570,52 @@ onMounted(loadData);
   --el-button-hover-bg-color: rgba(91, 166, 255, 0.2) !important;
   --el-button-hover-border-color: rgba(91, 166, 255, 0.5) !important;
   --el-button-hover-text-color: #bae3ff !important;
+}
+
+/* 处置弹窗（append-to-body → 渲染在 body，scoped 样式够不到，必须写在全局块） */
+.event-detail__dialog {
+  /* 窄屏下不横向溢出（EP 把 width 写在内联 style 上，用 max-width 兜住） */
+  max-width: calc(100vw - 40px);
+}
+
+.event-detail__dialog .event-detail__dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-detail__dialog .event-detail__dialog-label {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.7);
+}
+
+.event-detail__dialog .event-detail__dialog-label .required {
+  margin-left: 2px;
+  color: #ff7b72;
+}
+
+.event-detail__dialog .event-detail__dialog-textarea {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
+  background: rgba(8, 17, 31, 0.7);
+  color: #e8f1ff;
+  font-size: 0.88rem;
+  font-family: inherit;
+  line-height: 1.6;
+  /* 高度由脚本按内容自适应（见 autoGrowTextarea），禁止用户拖拽改尺寸。
+     60vh 只是脚本失效时的兜底上限，正常情况由脚本的 min(420, 视口高-300) 先生效。 */
+  resize: none;
+  max-height: 60vh;
+  overflow-y: hidden;
+  outline: none;
+}
+
+.event-detail__dialog .event-detail__dialog-textarea:focus {
+  border-color: rgba(91, 166, 255, 0.5);
+}
+
+.event-detail__dialog .event-detail__dialog-textarea::placeholder {
+  color: rgba(217, 232, 255, 0.32);
 }
 </style>

@@ -128,8 +128,8 @@ class DatasetService(ServiceBase):
         normalized = dataset.file_path.replace("\\", "/")
         suffix = Path(normalized).suffix.lstrip(".").lower()
         data["data_format"] = suffix if suffix in ("csv", "arff", "json") else "arff"
-        # 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列用它展示，
-        # 与自动映射出来的中文展示名（name）区分开，两者用途不同。
+        # 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。仅作源文件溯源，
+        # 不参与展示 —— 展示名统一由 dataset_display_name_of() 给出（= logical_id）。
         data["file_name"] = Path(normalized).name
         data["record_count"] = self._count_records(dataset.file_path)
         data["referenced"] = self._is_referenced(dataset.id)

@@ -25,7 +25,7 @@ export interface NumericStats {
 export interface DatasetStat {
   dataset_id: number;
   logical_id: string;
-  /** 面向用户的中文展示名（后端 dataset_display_name 生成），展示一律用它，缺失时回退 logical_id */
+  /** 数据集名，= logical_id（后端展示名统一取内部编码） */
   name?: string;
   version: number;
   label_field: string;
@@ -157,7 +157,7 @@ export interface ProfileBase {
 export interface CaliberRow {
   /** 数据集逻辑 ID */
   logical_id: string;
-  /** 数据集展示名 */
+  /** 数据集名（= logical_id） */
   name: string;
   /** 标签字段名 */
   label_field: string;
@@ -214,7 +214,7 @@ export interface NetworkProfile extends ProfileBase {
 export interface TelemetryByDataset {
   /** 数据集逻辑 ID */
   logical_id: string;
-  /** 数据集展示名 */
+  /** 数据集名（= logical_id） */
   name: string;
   /** 该数据集样本量 */
   record_count: number;
@@ -258,7 +258,7 @@ export interface PowerProfile extends ProfileBase {
 export interface EncodingFamilyRow {
   /** 数据集逻辑 ID */
   logical_id: string;
-  /** 数据集展示名 */
+  /** 数据集名（= logical_id） */
   name: string;
   /** 所属同源组 key */
   source_group: string;
@@ -310,7 +310,7 @@ export interface FlightdeckProfile extends ProfileBase {
 export interface RoleRow {
   /** 数据集逻辑 ID */
   logical_id: string;
-  /** 数据集展示名 */
+  /** 数据集名（= logical_id） */
   name: string;
   /** 数据集角色（因子表 / 风险标签表 / 致灾因子表 / 全球编目表 / 随机基线集 / 未分类） */
   role: string;

@@ -16,7 +16,7 @@ export interface BackendModelVersion {
   scenario_name?: string | null;
   dataset_id: number;
   dataset_logical_id?: string | null;
-  /** 面向用户的中文展示名，展示优先用它 */
+  /** 数据集名（= logical_id） */
   dataset_name?: string | null;
   dataset_version?: number | null;
   algorithm_id: number;

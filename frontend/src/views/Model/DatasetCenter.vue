@@ -391,13 +391,13 @@ onMounted(async () => {
         row-class-name="dataset-table-row"
       >
         <el-table-column
-          prop="file_name"
+          prop="name"
           label="数据集名称"
           min-width="240"
           show-overflow-tooltip
         >
           <template #default="{ row }: { row: Dataset }">
-            <span class="dataset-table__name">{{ row.file_name || row.name }}</span>
+            <span class="dataset-table__name">{{ row.name }}</span>
           </template>
         </el-table-column>
 

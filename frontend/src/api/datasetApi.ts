@@ -170,7 +170,7 @@ const formatUploadedAt = (value: string): string => {
 export const mapApiDataset = (item: ApiDataset): Dataset => {
   const fields = mapFields(item.fields_schema, item.label_field);
   const scenarioId = resolveScenarioCode(item);
-  // 展示名统一取后端下发的 name（中文），logical_id 仅作兜底
+  // 数据集名统一取后端下发的 name（= logical_id）
   const displayName = item.name || item.logical_id;
   // 原始文件名：优先用后端下发的 file_name，缺失时从 file_path 取 basename 兜底
   const fileName =

@@ -19,10 +19,11 @@ const routes = [
     path: '/',
     // 按角色落地：SUPER_ADMIN → 全局总览；SCENARIO_ADMIN/USER → 自己场景详情；异常无场景账号 → 场景中心。
     // 具体规则只有一份实现（guards.ts 的 roleLanding），此处复用，避免两份副本各自漂移。
-    // 未登录时同样先落到场景中心，再由守卫改写成 /login?redirect=...
+    // 未登录直接去登录页：此前先落 /scenarios 再由守卫改写成 /login?redirect=/scenarios，
+    // 中间多一跳且 URL 挂着一个没人消费的 redirect 参数。
     redirect: () => {
       const user = useUserStore().currentUser;
-      return user ? roleLanding(user) : '/scenarios';
+      return user ? roleLanding(user) : '/login';
     },
     meta: { title: '首页' },
   },

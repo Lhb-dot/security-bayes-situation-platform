@@ -9,12 +9,10 @@
 - 6.4.1 分类类别统一约定（风险样本 = 正类，显式映射，禁止自动推断）
 
 ⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES / DATASET_LOGICAL_IDS /
-DATASET_DISPLAY_NAMES / DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的
+DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的
 业务数据字典，作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
 与数据库种子数据。
 """
-
-from pathlib import PurePosixPath
 
 # ---------------------------------------------------------------------------
 # 用户与角色（数据库设计文档v2 2.1；需求文档 6.5.1）
@@ -110,10 +108,9 @@ DATASET_LABEL_FIELD_MAX_LEN = 64
 # 需在 DATASET_RISK_TYPES 中补充映射）
 #
 # 口径不变式（新增数据集时必须同时满足，见《全项目代码审查/报告/B5.md》）：
-#   1. DATASET_DISPLAY_NAMES 的键 ⊇ DATASET_LOGICAL_IDS（每个登记项都要有展示名）；
-#   2. DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES 的键 ⊆ DATASET_LOGICAL_IDS，
+#   1. DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES 的键 ⊆ DATASET_LOGICAL_IDS，
 #      且两者必须成对登记（未登记 = 不产风险事件，见 dashboard_service 的 registered 判断）；
-#   3. 例外：dis_global_catalog 只登记展示名（全球地质目录，不作为训练/风险样本）。
+#   2. 例外：dis_global_catalog 只登记编码、不进风险映射（全球地质目录，不作为训练/风险样本）。
 DATASET_LOGICAL_IDS = (
     "kdd_train_20_percent",
     "nf_unsw_nb15_v2",
@@ -137,73 +134,23 @@ DATASET_LOGICAL_IDS = (
     "carol_slope_personal_v1",
 )
 
-# 数据集展示名兜底字典（仅在 Dataset 记录缺少 file_path 时使用）。
-#
-# 平台展示口径：数据集一律显示「上传文件名（去扩展名）」这一英文原名
-# （KDDTrain_20Percent / NF-UNSW-NB15-v2 / DIS_Landslides …），它是数据集的原始标识，
-# 比中文译名更适合作为数据集名。见 dataset_display_name_of()。
 # logical_id 是文件派生的稳定标识，供常量字典与去重逻辑做键值匹配，不得改写。
-# 只有手上没有 Dataset 记录、仅有 logical_id 时，才用 dataset_display_name()。
-DATASET_DISPLAY_NAMES = {
-    # 网络安全
-    "kdd_train_20_percent": "KDDTrain_20Percent",
-    "nf_unsw_nb15_v2": "NF-UNSW-NB15-v2",
-    # 电力系统
-    "powergrid_knowledgebase": "powergrid_knowledgebase_dataset",
-    # 地质灾害
-    "dis_raw_data": "DIS_raw_data",
-    "dis_landslides": "DIS_Landslides",
-    "dis_causative_factors": "DIS_Landslide_Causative_Factors",
-    "dis_global_catalog": "DIS_Global_Landslide_Catalog_Export",
-    "dis_guaruja_random": "DIS_guaruja_random",
-    # 舰面调度
-    "carrier_feature2_biaoqian": "Feature2_Cleaning_biaoqian",
-    "carrier_feature2_lisan": "Feature2_Cleaning_lisan",
-    "carrier_paired_trail": "paired_TrailData_feature2_biaoqian",
-    # 生产 seed 注册的数据集：展示名一律取源文件名（去扩展名），与 dataset_display_name_of 口径一致
-    "net_flow_company_v1": "NF-UNSW-NB15-v2",
-    "alice_conn_personal_v1": "KDDTrain_20Percent",
-    "power_grid_company_v1": "powergrid_knowledgebase_dataset",
-    "bob_sensor_personal_v1": "powergrid_knowledgebase_dataset",
-    "carrier_track_company_v1": "Feature2_Cleaning_lisan",
-    "deck_user01_trail_personal_v1": "paired_TrailData_feature2_biaoqian",
-    "geo_slope_company_v1": "DIS_Landslides",
-    "carol_slope_personal_v1": "DIS_raw_data",
-}
-
-
-def dataset_display_name(logical_id: str | None) -> str | None:
-    """logical_id → 数据集展示名；未登记则原样返回 logical_id。"""
-    if logical_id is None:
-        return None
-    return DATASET_DISPLAY_NAMES.get(logical_id, logical_id)
 
 
 def dataset_display_name_of(dataset: object | None) -> str | None:
-    """按 Dataset 记录取展示名：上传文件名（去扩展名） > 自填名 > 内置字典 > logical_id。
+    """按 Dataset 记录取展示名：一律取内部编码 logical_id（如 dis_raw_data）。
 
-    展示口径为英文原名：数据集文件保存在 data/<场景编码>/ 下且保留上传时的原始文件名
-    （见 DatasetService._save_uploaded_file 的 basename 处理），所以文件名本身就是该数据集
-    的原始标识（KDDTrain_20Percent、NF-UNSW-NB15-v2、DIS_Landslides…）。
+    全平台只保留这一套数据集名字 —— logical_id 同时也是风险规则映射
+    （DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）、同源去重白名单
+    （dashboard_service.CARRIER_LOGICAL_IDS）与报告下发的键，展示与匹配同源，
+    不会再出现「界面上看到的字在代码里搜不到」的情况。
 
-    所有「需要展示数据集名称」的位置都应改用本函数，否则同一个数据集会在
-    数据集中心显示自填名、在场景大屏/模型/推理记录里显示成内置映射名或
-    原始 logical_id。用 getattr 取值，避免 constants 反向依赖 ORM 模型。
+    所有「需要展示数据集名称」的位置都应改用本函数。用 getattr 取值，
+    避免 constants 反向依赖 ORM 模型。
     """
     if dataset is None:
         return None
-    file_path = getattr(dataset, "file_path", None)
-    if file_path:
-        # file_path 形如 "data\network\KDDTrain_20Percent.arff"；统一按 / 切分，
-        # 保证在 Windows（反斜杠）与 Linux（正斜杠）下取到同一个文件名。
-        file_name = PurePosixPath(str(file_path).replace("\\", "/")).name
-        if file_name:
-            stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-            if stem:
-                return stem
-    return getattr(dataset, "name", None) or dataset_display_name(
-        getattr(dataset, "logical_id", None)
-    )
+    return getattr(dataset, "logical_id", None) or getattr(dataset, "name", None)
 
 
 # ---------------------------------------------------------------------------

@@ -107,8 +107,7 @@ export const getCsrfToken = (): string | null => currentCsrfToken();
  *
  * 这里不直接改 window.location：history 模式下 vue-router 只监听 popstate，
  * 改 hash 既不触发导航，还会把地址污染成 /reports#/login。
- * 会话恢复期间（handler 尚未注册）只清凭据，随后的路由守卫会把用户送去
- * /login?redirect=<原目标>。
+ * 会话恢复期间（handler 尚未注册）只清凭据，随后的路由守卫会把用户送去 /login。
  */
 let unauthorizedHandler: (() => void) | null = null;
 

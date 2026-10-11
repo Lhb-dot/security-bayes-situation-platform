@@ -54,9 +54,19 @@ export const mapRiskEvent = (e: Record<string, unknown>): RiskEvent => ({
   risk_level: (e.risk_level as RiskEvent['risk_level']) ?? 'LOW',
   risk_score: Number(e.risk_score ?? 0),
   occurred_at: String(e.occurred_at ?? ''),
+  // 舰面调度场景的故障点坐标（其余场景后端恒为 null）。此前漏映射 →
+  // 详情页的「故障位置 X/Y」两个 v-if 永远不成立，后端有值也显示不出来。
+  fault_position_x: e.fault_position_x == null ? undefined : Number(e.fault_position_x),
+  fault_position_y: e.fault_position_y == null ? undefined : Number(e.fault_position_y),
   status: (STATUS_LABEL[String(e.status)] ?? String(e.status ?? '待处置')) as RiskEvent['status'],
   raw_features: (e.raw_features ?? {}) as Record<string, unknown>,
   description: String(e.description ?? ''),
+  // 来源名称只有详情接口下发（列表不带）→ 缺省保持 undefined，前端回退显示 ID
+  dataset_name: e.dataset_name == null ? undefined : String(e.dataset_name),
+  algorithm_name: e.algorithm_name == null ? undefined : String(e.algorithm_name),
+  creator_name: e.creator_name == null ? undefined : String(e.creator_name),
+  // 处置方法同样只有详情接口下发（列表不带）→ 缺省 null，详情页据此决定「处置信息」区块内容
+  handling_comment: e.handling_comment == null ? null : String(e.handling_comment),
 });
 
 /** 场景态势（真实统计 + 近期风险事件） */

@@ -7,6 +7,9 @@
 import request, { unwrapData } from '@/utils/request';
 import type { RiskEvent, ScenarioId } from '@/types/security';
 
+/** 后端处置状态枚举（前端展示用中文，边界处转换见 riskEventStore） */
+export type RiskEventStatus = 'PENDING' | 'PROCESSING' | 'RESOLVED';
+
 /** 风险事件列表（GET /risk-events，场景用户仅本人事件；管理员可按场景/状态过滤） */
 export const getRiskEventList = async (params?: {
   scenario_id?: ScenarioId;
@@ -57,10 +60,16 @@ export const getRiskEventPage = async (params?: {
 export const getRiskEventDetail = async (eventId: string): Promise<RiskEvent> =>
   unwrapData(await request.get(`/api/v1/risk-events/${eventId}`));
 
-/** 处置风险事件（PUT /risk-events/{event_id}/handle，更新状态并写入处置记录） */
+/**
+ * 处置风险事件（PUT /risk-events/{event_id}/handle，更新状态并写入处置记录）。
+ *
+ * `new_status` 是后端英文枚举（不是前端展示用的中文口径）—— 原先这里错标成
+ * `RiskEvent['status']`，逼得 store 侧打了一个假断言才编得过，现按后端口径改正。
+ * `comment` 为流转到「已处置」时填写的处置方法。
+ */
 export const updateRiskEventStatus = async (
   eventId: string,
-  params: { new_status: RiskEvent['status']; comment?: string }
+  params: { new_status: RiskEventStatus; comment?: string }
 ): Promise<RiskEvent> => unwrapData(await request.put(`/api/v1/risk-events/${eventId}/handle`, params));
 
 /**

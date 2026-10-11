@@ -219,6 +219,13 @@ const compareIds = ref<number[]>([]);
 /** 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞 */
 const compareCache = new Map<number, BackendModelVersion>();
 
+/** 选择模式：开启后卡片可点选；已选项跨分页 / 跨筛选保留，只有「取消」才清空 */
+const compareMode = ref(false);
+/** 对比结果弹窗 */
+const compareVisible = ref(false);
+
+const isPicked = (id: number) => compareIds.value.includes(id);
+
 const toggleCompare = (m: BackendModelVersion) => {
   const idx = compareIds.value.indexOf(m.id);
   if (idx >= 0) {
@@ -234,48 +241,125 @@ const toggleCompare = (m: BackendModelVersion) => {
   }
 };
 
+/** 全选 / 反选只作用于当前页（已选项可能散在别的页，不跨页拉全量） */
+const selectAllOnPage = () => {
+  let blocked = false;
+  for (const model of models.value) {
+    if (isPicked(model.id)) continue;
+    if (compareIds.value.length >= MAX_COMPARE_MODELS) {
+      blocked = true;
+      break;
+    }
+    compareIds.value.push(model.id);
+    compareCache.set(model.id, model);
+  }
+  if (blocked) ElMessage.warning(`最多选择 ${MAX_COMPARE_MODELS} 个模型进行对比`);
+};
+
+const invertSelection = () => {
+  let blocked = false;
+  for (const model of models.value) {
+    const idx = compareIds.value.indexOf(model.id);
+    if (idx >= 0) {
+      compareIds.value.splice(idx, 1);
+      compareCache.delete(model.id);
+      continue;
+    }
+    if (compareIds.value.length >= MAX_COMPARE_MODELS) {
+      blocked = true;
+      continue;
+    }
+    compareIds.value.push(model.id);
+    compareCache.set(model.id, model);
+  }
+  if (blocked) ElMessage.warning(`最多选择 ${MAX_COMPARE_MODELS} 个模型进行对比`);
+};
+
+/** 工具栏「对比」：首次点击进入选择模式，再次点击打开对比弹窗 */
+const handleCompareClick = () => {
+  if (!compareMode.value) {
+    compareMode.value = true;
+    return;
+  }
+  if (compareIds.value.length < 2) return;
+  compareVisible.value = true;
+};
+
+/** 「取消」：退出选择模式并清空已选 */
+const cancelCompare = () => {
+  compareMode.value = false;
+  compareVisible.value = false;
+  compareIds.value = [];
+  compareCache.clear();
+};
+
+const closeCompare = () => {
+  compareVisible.value = false;
+};
+
 const compareList = computed(() =>
   compareIds.value
     .map((id) => compareCache.get(id))
     .filter((m): m is BackendModelVersion => Boolean(m))
 );
 
-const clearCompare = () => {
-  compareIds.value = [];
-  compareCache.clear();
-};
+interface MetricRow {
+  label: string;
+  key: keyof EvaluationMetrics;
+  /** 仅管理员可见的内部指标（场景用户只看前 6 项） */
+  adminOnly?: boolean;
+  /** 最优方向：CV Std 越小越好，其余越大越好 */
+  better: 'max' | 'min';
+}
 
 /**
  * 指标列定义（对比表与模型卡片共用同一份，顺序即 README 的
  * Accuracy/Recall/Precision/Specificity/F1/G-mean）。
- * adminOnly = 仅管理员可见的内部指标（场景用户只看前 6 项）。
  */
-const allMetricRows: Array<{ label: string; key: keyof EvaluationMetrics; adminOnly?: boolean }> = [
-  { label: 'Accuracy', key: 'accuracy' },
-  { label: 'Recall', key: 'recall' },
-  { label: 'Precision', key: 'precision' },
-  { label: 'Specificity', key: 'specificity' },
-  { label: 'F1', key: 'f1' },
-  { label: 'G-mean', key: 'g_mean' },
-  { label: 'Risk Recall', key: 'risk_recall', adminOnly: true },
-  { label: 'Risk F1', key: 'risk_f1', adminOnly: true },
-  { label: 'CV Mean', key: 'cv_mean', adminOnly: true },
-  { label: 'CV Std', key: 'cv_std', adminOnly: true },
+const allMetricRows: MetricRow[] = [
+  { label: 'Accuracy', key: 'accuracy', better: 'max' },
+  { label: 'Recall', key: 'recall', better: 'max' },
+  { label: 'Precision', key: 'precision', better: 'max' },
+  { label: 'Specificity', key: 'specificity', better: 'max' },
+  { label: 'F1', key: 'f1', better: 'max' },
+  { label: 'G-mean', key: 'g_mean', better: 'max' },
+  { label: 'Risk Recall', key: 'risk_recall', adminOnly: true, better: 'max' },
+  { label: 'Risk F1', key: 'risk_f1', adminOnly: true, better: 'max' },
+  { label: 'CV Mean', key: 'cv_mean', adminOnly: true, better: 'max' },
+  { label: 'CV Std', key: 'cv_std', adminOnly: true, better: 'min' },
 ];
 
 const visibleMetricRows = computed(() =>
   allMetricRows.filter((row) => isManagement.value || !row.adminOnly)
 );
 
-/** 判断某模型在某指标上是否为最优（高亮） */
-const isBest = (m: BackendModelVersion, key: keyof EvaluationMetrics) => {
-  if (compareList.value.length < 2) return false;
-  const value = Number(m.evaluation_metrics?.[key]);
-  if (!Number.isFinite(value)) return false;
+/** 某指标在已选模型里的最优值（比的是原始值）；不足 2 个模型或全无数据时返回 null */
+const bestValueOf = (row: MetricRow): number | null => {
+  if (compareList.value.length < 2) return null;
   const values = compareList.value
-    .map((x) => Number(x.evaluation_metrics?.[key]))
+    .map((x) => Number(x.evaluation_metrics?.[row.key]))
     .filter((x) => Number.isFinite(x));
-  return values.length > 0 && value === Math.max(...values);
+  if (!values.length) return null;
+  return row.better === 'min' ? Math.min(...values) : Math.max(...values);
+};
+
+/** 判断某模型在某指标上是否为最优（高亮）。原始值相等才算并列，显示成同一个数但底层不同不算 */
+const isBest = (m: BackendModelVersion, row: MetricRow) => {
+  const best = bestValueOf(row);
+  if (best === null) return false;
+  const value = Number(m.evaluation_metrics?.[row.key]);
+  return Number.isFinite(value) && value === best;
+};
+
+/** 与最优值的差距（百分点，带正负号）；最优项、无数据、四舍五入后为 0 的都返回 null */
+const metricDelta = (m: BackendModelVersion, row: MetricRow) => {
+  const best = bestValueOf(row);
+  if (best === null) return null;
+  const value = Number(m.evaluation_metrics?.[row.key]);
+  if (!Number.isFinite(value) || value === best) return null;
+  const diff = (value - best) * 100;
+  if (Math.abs(diff) < 0.05) return null;
+  return `${diff > 0 ? '+' : '-'}${Math.abs(diff).toFixed(1)}`;
 };
 
 const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) => {
@@ -479,8 +563,8 @@ const exportModelEvaluation = () => {
 };
 
 /** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
-watch(evaluationTarget, (target) => {
-  document.body.style.overflow = target ? 'hidden' : '';
+watch([evaluationTarget, compareVisible], ([target, comparing]) => {
+  document.body.style.overflow = target || comparing ? 'hidden' : '';
 });
 
 /** 切换视角时按需拉取该视角的评价：后端两份产物分别存储，不会互相覆盖。 */
@@ -490,7 +574,9 @@ watch(evaluationAudience, (audience) => {
 });
 
 const handleEvaluationKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape' && evaluationTarget.value) closeModelEvaluation();
+  if (event.key !== 'Escape') return;
+  if (evaluationTarget.value) closeModelEvaluation();
+  else if (compareVisible.value) closeCompare();
 };
 
 window.addEventListener('keydown', handleEvaluationKeydown);
@@ -553,9 +639,27 @@ onMounted(async () => {
           <option value="disabled">禁用中</option>
         </select>
       </div>
-      <span class="model-center__count">
-        共 <strong>{{ total }}</strong> 个模型版本
-      </span>
+      <div class="model-center__toolbar-right">
+        <span class="model-center__count">
+          共 <strong>{{ total }}</strong> 个模型版本
+          <template v-if="compareMode"> · 已选 <strong>{{ compareIds.length }}</strong> 个</template>
+        </span>
+        <div class="model-center__actions">
+          <template v-if="compareMode">
+            <button class="tool-btn" type="button" @click="cancelCompare">取消</button>
+            <button class="tool-btn" type="button" @click="selectAllOnPage">全选</button>
+            <button class="tool-btn" type="button" @click="invertSelection">反选</button>
+          </template>
+          <button
+            class="tool-btn tool-btn--primary"
+            type="button"
+            :disabled="compareMode && compareIds.length < 2"
+            @click="handleCompareClick"
+          >
+            对比
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- 模型级评价：点击「AI 评价」以弹窗展示，不依赖样本、不创建推理记录，按当前角色返回不同内容。 -->
@@ -677,6 +781,75 @@ onMounted(async () => {
       </div>
     </Teleport>
 
+    <!-- 模型版本对比结果（需求 6.2 P1） -->
+    <Teleport to="body">
+      <div v-if="compareVisible" class="compare-modal" @click.self="closeCompare">
+        <div class="compare-modal__card">
+          <div class="compare-modal__head">
+            <div>
+              <p class="eyebrow">Model Compare</p>
+              <h3>模型版本对比</h3>
+            </div>
+            <div class="compare-modal__head-actions">
+              <button
+                class="compare-modal__close"
+                type="button"
+                aria-label="关闭"
+                title="关闭"
+                @click="closeCompare"
+              >✕</button>
+            </div>
+          </div>
+
+          <div class="compare-modal__body">
+            <div class="compare-table-wrap">
+              <table class="compare-table">
+                <thead>
+                  <tr>
+                    <th>编号</th>
+                    <th v-for="m in compareList" :key="m.id">#{{ m.id }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>算法</td>
+                    <td v-for="m in compareList" :key="'algo-' + m.id">{{ m.algorithm_name || algoName(String(m.algorithm_id)) }}</td>
+                  </tr>
+                  <tr>
+                    <td>数据集</td>
+                    <td v-for="m in compareList" :key="'ds-' + m.id">{{ m.dataset_name || m.dataset_logical_id || m.dataset_id }} v{{ m.dataset_version || '—' }}</td>
+                  </tr>
+                  <tr>
+                    <td>状态</td>
+                    <td v-for="m in compareList" :key="'st-' + m.id">{{ statusLabel[m.status] ?? m.status }}</td>
+                  </tr>
+                  <tr v-for="row in visibleMetricRows" :key="row.key">
+                    <td>{{ row.label }}</td>
+                    <td
+                      v-for="m in compareList"
+                      :key="'m-' + row.key + '-' + m.id"
+                      :class="{ 'compare-best': isBest(m, row) }"
+                    >
+                      <span>{{ metricValue(m, row.key) }}</span>
+                      <span v-if="metricDelta(m, row)" class="compare-cell__delta">{{ metricDelta(m, row) }}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>训练时间</td>
+                    <td v-for="m in compareList" :key="'t-' + m.id">{{ m.trained_at }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="compare-modal__foot">
+            <button class="op-btn op-btn--quiet" type="button" @click="closeCompare">关闭</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 首屏加载：列表还是空的才用整块状态卡，翻页走列表内的局部遮罩 -->
     <section v-if="loading && !models.length" class="state-card">
       <div class="loader"></div>
@@ -694,55 +867,7 @@ onMounted(async () => {
       <p>当前筛选范围内暂无模型版本</p>
     </section>
 
-    <!-- 对比面板与模型列表并存：勾满 2 个模型后还要能继续勾（上限 5 个）。
-         原先用 v-else-if 分支，选到第 2 个模型列表就整块消失，3~5 个模型永远选不到。 -->
     <template v-else>
-    <!-- 模型版本对比（需求 6.2 P1） -->
-    <div v-if="compareList.length >= 2" class="compare-panel card">
-      <div class="compare-panel__head">
-        <h4>模型版本对比</h4>
-        <button class="compare-clear" @click="clearCompare">清空对比</button>
-      </div>
-      <div class="compare-table-wrap">
-        <table class="compare-table">
-          <thead>
-            <tr>
-              <th>指标</th>
-              <th v-for="m in compareList" :key="m.id">{{ m.id }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>算法</td>
-              <td v-for="m in compareList" :key="'algo-' + m.id">{{ algoName(String(m.algorithm_id)) }}</td>
-            </tr>
-            <tr>
-              <td>数据集</td>
-              <td v-for="m in compareList" :key="'ds-' + m.id">{{ m.dataset_name || m.dataset_logical_id || m.dataset_id }} v{{ m.dataset_version || '—' }}</td>
-            </tr>
-            <tr>
-              <td>状态</td>
-              <td v-for="m in compareList" :key="'st-' + m.id">{{ statusLabel[m.status] ?? m.status }}</td>
-            </tr>
-            <tr v-for="row in visibleMetricRows" :key="row.key">
-              <td>{{ row.label }}</td>
-              <td
-                v-for="m in compareList"
-                :key="'m-' + row.key + '-' + m.id"
-                :class="{ 'compare-best': isBest(m, row.key) }"
-              >
-                {{ metricValue(m, row.key) }}
-              </td>
-            </tr>
-            <tr>
-              <td>训练时间</td>
-              <td v-for="m in compareList" :key="'t-' + m.id">{{ m.trained_at }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
     <!-- 模型卡片列表 -->
     <div ref="listRef" class="model-center__list">
       <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
@@ -750,9 +875,17 @@ onMounted(async () => {
         v-for="model in models"
         :key="model.id"
         class="model-card card"
+        :class="{ 'is-selectable': compareMode, 'is-selected': compareMode && isPicked(model.id) }"
+        @click="compareMode && toggleCompare(model)"
       >
         <div class="model-card__header">
           <div class="model-card__titles">
+            <span
+              v-if="compareMode"
+              class="model-card__check"
+              :class="{ 'is-on': isPicked(model.id) }"
+              aria-hidden="true"
+            >✓</span>
             <h3 class="model-card__id">模型 #{{ model.id }}</h3>
             <span class="model-card__scenario-tag">{{ model.scenario_name || scenarioLabel[model.scenario_code || ''] || model.scenario_code || model.scenario_id }}</span>
             <span
@@ -761,14 +894,7 @@ onMounted(async () => {
             >默认推荐</span>
           </div>
           <div class="model-card__header-right">
-            <button
-              class="compare-btn"
-              :class="{ 'is-on': compareIds.includes(model.id) }"
-              @click="toggleCompare(model)"
-            >
-              对比
-            </button>
-            <button class="compare-btn" @click="openModelEvaluation(model)">AI 评价</button>
+            <button class="card-chip-btn" @click.stop="openModelEvaluation(model)">AI 评价</button>
             <span
               class="model-card__status"
               :class="`model-status--${model.status}`"
@@ -831,7 +957,7 @@ onMounted(async () => {
         <!-- 管理员操作区 -->
         <div v-if="isManagement" class="model-card__footer">
           <template v-if="model.status === 'DRAFT' && canPublish(model)">
-            <button class="op-btn op-btn--publish" @click="handlePublish(model)">发布模型</button>
+            <button class="op-btn op-btn--publish" @click.stop="handlePublish(model)">发布模型</button>
           </template>
           <template v-else-if="model.status === 'DRAFT'">
             <span class="model-card__failed-tip">仅训练人可发布</span>
@@ -841,15 +967,15 @@ onMounted(async () => {
               class="op-btn"
               :disabled="model.is_default"
               :title="model.is_default ? '当前已是默认推荐模型' : ''"
-              @click="handleSetDefault(model)"
+              @click.stop="handleSetDefault(model)"
             >
               设为默认推荐
             </button>
-            <button class="op-btn op-btn--danger" @click="handleDisable(model)">禁用</button>
+            <button class="op-btn op-btn--danger" @click.stop="handleDisable(model)">禁用</button>
           </template>
           <template v-else-if="model.status === 'DISABLED'">
-            <button class="op-btn op-btn--publish" @click="handleEnable(model)">重新启用</button>
-            <button class="op-btn op-btn--danger" @click="handleDelete(model)">删除</button>
+            <button class="op-btn op-btn--publish" @click.stop="handleEnable(model)">重新启用</button>
+            <button class="op-btn op-btn--danger" @click.stop="handleDelete(model)">删除</button>
           </template>
           <span v-if="model.status === 'FAILED'" class="model-card__failed-tip">训练失败，不可发布</span>
           <span v-if="model.status === 'TRAINING'" class="model-card__failed-tip">训练中...</span>
@@ -928,6 +1054,13 @@ onMounted(async () => {
   color: #e8f1ff;
 }
 
+.model-center__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .model-center__count {
   font-size: 0.88rem;
   color: rgba(220, 234, 255, 0.6);
@@ -936,6 +1069,49 @@ onMounted(async () => {
 
 .model-center__count strong {
   color: #9ad6ff;
+}
+
+.model-center__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 高度与同一行的 .model-filter-select 对齐（36px，全局 border-box） */
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid rgba(125, 201, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(8, 17, 31, 0.6);
+  color: rgba(200, 222, 255, 0.85);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.tool-btn:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.16);
+  color: #e8f1ff;
+}
+
+.tool-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tool-btn--primary {
+  border-color: rgba(91, 166, 255, 0.5);
+  background: rgba(91, 166, 255, 0.14);
+  color: #9ad6ff;
+  font-weight: 600;
+}
+
+.tool-btn--primary:hover:not(:disabled) {
+  background: rgba(91, 166, 255, 0.28);
+  color: #fff;
 }
 
 .model-center__list {
@@ -996,6 +1172,39 @@ onMounted(async () => {
 
 .model-card {
   padding: 20px 24px;
+}
+
+/* 选择模式下整卡可点：边框 + 底色 + 左上角勾选圈三重提示，避免只靠颜色区分 */
+.model-card.is-selectable {
+  cursor: pointer;
+}
+
+.model-card.is-selected {
+  border-color: rgba(91, 166, 255, 0.7);
+  background: linear-gradient(180deg, rgba(26, 58, 104, 0.9), rgba(10, 24, 44, 0.94));
+  box-shadow: 0 0 0 1px rgba(91, 166, 255, 0.32), 0 18px 60px rgba(20, 60, 120, 0.34);
+}
+
+.model-card__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(125, 201, 255, 0.42);
+  border-radius: 50%;
+  background: rgba(8, 17, 31, 0.7);
+  color: transparent;
+  font-size: 0.76rem;
+  line-height: 1;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+
+.model-card__check.is-on {
+  border-color: #5ba6ff;
+  background: #3f7fd4;
+  color: #fff;
 }
 
 .model-card__header {
@@ -1193,7 +1402,7 @@ onMounted(async () => {
   gap: 10px;
 }
 
-.compare-btn {
+.card-chip-btn {
   padding: 4px 12px;
   border: 1px solid rgba(125, 201, 255, 0.28);
   border-radius: 999px;
@@ -1204,61 +1413,110 @@ onMounted(async () => {
   transition: background 0.2s, color 0.2s;
 }
 
-.compare-btn:hover {
+.card-chip-btn:hover {
   background: rgba(91, 166, 255, 0.15);
 }
 
-.compare-btn.is-on {
-  background: rgba(91, 166, 255, 0.2);
-  color: #fff;
-  border-color: rgba(91, 166, 255, 0.55);
-}
-
-/* 对比面板 */
-.compare-panel {
-  padding: 20px 24px;
-  margin-bottom: 18px;
-}
-
-.compare-panel__head {
+/* 对比弹窗 */
+.compare-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
   display: flex;
   align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background: rgba(3, 8, 16, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.compare-modal__card {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  max-height: min(86vh, 940px);
+  border-radius: 14px;
+  border: 1px solid rgba(91, 166, 255, 0.28);
+  /* 纯色：固定首列的单元格背景要跟卡片完全一致，渐变对不上 */
+  background: #0c1a2d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.compare-modal__head {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 14px;
+  gap: 16px;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid rgba(125, 201, 255, 0.1);
 }
 
-.compare-panel__head h4 {
+.compare-modal__head h3 {
   margin: 0;
-  font-size: 1.05rem;
-  color: #d9e8ff;
+  color: #e8f1ff;
+  font-size: 1.12rem;
 }
 
-.compare-clear {
-  padding: 6px 14px;
-  border: 1px solid rgba(125, 201, 255, 0.25);
-  border-radius: 8px;
+.compare-modal__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.compare-modal__close {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
   background: transparent;
-  color: #9ad6ff;
-  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.6);
+  font-size: 1rem;
+  line-height: 1;
   cursor: pointer;
+  transition: background 0.2s, color 0.2s;
 }
 
-.compare-clear:hover {
-  background: rgba(91, 166, 255, 0.12);
+.compare-modal__close:hover {
+  background: rgba(91, 166, 255, 0.16);
+  color: #e8f1ff;
+}
+
+/* 横向滚动条挂在表格这一层：它才会常驻在可视区底部，
+   而不是跟着纵向内容一起被推到最下面 */
+.compare-modal__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  padding: 8px 24px 16px;
+}
+
+.compare-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 24px;
+  border-top: 1px solid rgba(125, 201, 255, 0.1);
 }
 
 .compare-table-wrap {
-  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
+/* border-collapse 必须 separate，collapse 下 sticky 单元格的背景会漏 */
 .compare-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.85rem;
 }
 
 .compare-table th {
-  text-align: left;
+  text-align: center;
   padding: 10px 12px;
   color: rgba(154, 214, 255, 0.85);
   font-weight: 600;
@@ -1267,10 +1525,20 @@ onMounted(async () => {
 }
 
 .compare-table td {
+  text-align: center;
   padding: 10px 12px;
   color: rgba(217, 232, 255, 0.9);
   border-bottom: 1px solid rgba(125, 201, 255, 0.06);
   white-space: nowrap;
+}
+
+/* 首列钉在左侧：横向滚动时始终看得到这一行是什么 */
+.compare-table th:first-child,
+.compare-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #0c1a2d;
 }
 
 .compare-table tbody tr td:first-child {
@@ -1280,6 +1548,14 @@ onMounted(async () => {
 .compare-best {
   color: #53e5c8 !important;
   font-weight: 700;
+}
+
+/* 与最优值的差距（百分点，带正负号），仅非最优项显示 */
+.compare-cell__delta {
+  margin-left: 8px;
+  color: #ff6b6b;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 /* AI 评价弹窗 */
@@ -1578,6 +1854,18 @@ onMounted(async () => {
   .model-evaluation-modal__head,
   .model-evaluation-modal__body,
   .model-evaluation-modal__foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .compare-modal {
+    padding: 16px 12px;
+  }
+  .compare-modal__card {
+    max-height: 90vh;
+  }
+  .compare-modal__head,
+  .compare-modal__body,
+  .compare-modal__foot {
     padding-left: 16px;
     padding-right: 16px;
   }

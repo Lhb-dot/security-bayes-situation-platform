@@ -862,7 +862,8 @@ class ReportService(ServiceBase):
         )
         algos = report_info.get("algorithms") or []
         if algos:
-            parts.append("涉及算法：" + "、".join(f"{a['name']}({a['code']})" for a in algos) + "。")
+            # display_name 本身已带 (CODE) 后缀，这里不能再拼一次 code
+            parts.append("涉及算法：" + "、".join(a['name'] for a in algos) + "。")
         no_view = [m for m in model_analysis if not m["has_views"]]
         if no_view:
             parts.append(

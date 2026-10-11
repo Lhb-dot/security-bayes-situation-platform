@@ -182,9 +182,9 @@ const handleDownload = async (report: Report) => {
 
 /** 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告） */
 const handleRegenerate = async (report: Report) => {
-  // 历史报告可能没有场景（report.scenario_id 允许 NULL）：拿不到场景就没法重新生成，
-  // 这里直接拦住，别把空场景丢给 resolveScenarioId 报「场景不存在: 」。
-  if (!report.scenario_id) {
+  // 无场景 = 超管的全平台聚合报告，重新生成即再出一份全平台报告；
+  // 场景角色遇到无场景报告（历史数据）仍拦住，别把空场景丢给 resolveScenarioId 报「场景不存在: 」。
+  if (!report.scenario_id && !isSuperAdmin.value) {
     ElMessage.error('该报告未绑定场景，无法重新生成');
     return;
   }
@@ -192,7 +192,7 @@ const handleRegenerate = async (report: Report) => {
   try {
     // 不带 scheduled：重新生成只产出一份快照，不复制定时任务（否则每次点一下多一条定时）
     const receipt = await submitReportGenerateJob({
-      scenario_id: report.scenario_id,
+      scenario_id: report.scenario_id || null,
       title: report.title,
       scope: canUseAggregateScope.value ? 'all' : 'self',
       format: report.format,
@@ -240,10 +240,16 @@ const openScheduleList = async () => {
 };
 
 // ===================== 生成报告（需求 6.2 P1） =====================
+/**
+ * 超管「全部场景」哨兵：选中它即不限定场景，后端按全平台聚合（下发 scenario_id = null）。
+ * 与 ScenarioSelector 的 'all' 约定一致，避免再造一个取值。
+ */
+const ALL_SCENARIOS = 'all' as const;
+
 const genVisible = ref(false);
 const genForm = ref({
   title: '',
-  scenario_id: '' as ScenarioId | '',
+  scenario_id: ALL_SCENARIOS as ScenarioId | '' | typeof ALL_SCENARIOS,
   scope: 'self' as 'self' | 'all',
   format: 'markdown' as 'markdown' | 'html' | 'pdf',
   scheduled: false,
@@ -253,9 +259,17 @@ const genForm = ref({
 const viewVisible = ref(false);
 const viewTarget = ref<Report | null>(null);
 
-/** 打开生成弹窗；勾上「定时生成」即为创建定时报告 */
+/** 打开生成弹窗；勾上「定时生成」即为创建定时报告。
+ *  超管默认「全部场景」（全平台聚合）；场景角色固定为本人绑定场景，不出下拉。 */
 const openGenerate = () => {
-  genForm.value = { title: '', scenario_id: isSuperAdmin.value ? '' : (currentUser.value?.scenario_code ?? ''), scope: canUseAggregateScope.value ? 'all' : 'self', format: 'markdown', scheduled: false, interval_days: 7 };
+  genForm.value = {
+    title: '',
+    scenario_id: isSuperAdmin.value ? ALL_SCENARIOS : (currentUser.value?.scenario_code ?? ''),
+    scope: canUseAggregateScope.value ? 'all' : 'self',
+    format: 'markdown',
+    scheduled: false,
+    interval_days: 7,
+  };
   genVisible.value = true;
 };
 
@@ -277,9 +291,13 @@ const submitGenerate = async () => {
   // 完成后由 store 弹通知并刷新列表 —— 这里只等 POST 这一个来回。
   submittingGenerate.value = true;
   const title = genForm.value.title.trim();
+  // 「全部场景」= 不限定场景，下发 null，后端按全平台聚合
+  const scenarioId = genForm.value.scenario_id === ALL_SCENARIOS
+    ? null
+    : (genForm.value.scenario_id as ScenarioId);
   try {
     const receipt = await submitReportGenerateJob({
-      scenario_id: genForm.value.scenario_id as ScenarioId,
+      scenario_id: scenarioId,
       title,
       scope: genForm.value.scope,
       format: genForm.value.format,
@@ -312,6 +330,10 @@ const scenarioLabel: Record<string, string> = {
 const scenarioOptions = computed(() =>
   scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
 );
+
+/** 报告列表 / 详情的场景文案：无场景 = 超管的全平台聚合报告 */
+const scenarioText = (scenarioId: string): string =>
+  scenarioId ? (scenarioLabel[scenarioId] ?? scenarioId) : '全部场景';
 
 const formatLabel: Record<string, string> = {
   markdown: 'Markdown',
@@ -517,7 +539,7 @@ watch(
 
         <el-table-column label="所属场景" min-width="120" align="center">
           <template #default="{ row }: { row: Report }">
-            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? (row.scenario_id || '—') }}</span>
+            <span class="report-table__scenario-tag">{{ scenarioText(row.scenario_id) }}</span>
           </template>
         </el-table-column>
 
@@ -613,7 +635,7 @@ watch(
         <div v-if="isSuperAdmin" class="gen-field">
           <label class="gen-field__label">报告场景<span class="required">*</span></label>
           <select v-model="genForm.scenario_id" class="gen-field__input">
-            <option value="" disabled>-- 请选择场景 --</option>
+            <option :value="ALL_SCENARIOS">全部场景</option>
             <option v-for="sc in scenarioOptions" :key="sc.value" :value="sc.value">{{ sc.label }}</option>
           </select>
         </div>
@@ -680,7 +702,7 @@ watch(
         </el-table-column>
         <el-table-column label="所属场景" width="100" align="center">
           <template #default="{ row }: { row: Report }">
-            <span class="report-table__scenario-tag">{{ scenarioLabel[row.scenario_id] ?? (row.scenario_id || '—') }}</span>
+            <span class="report-table__scenario-tag">{{ scenarioText(row.scenario_id) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="格式" width="120" align="center">
@@ -734,7 +756,7 @@ watch(
           <div class="info-grid">
             <span class="info-item"><b>报告期</b>{{ viewReportData.report_info.report_period ?? '—' }}</span>
             <span class="info-item"><b>生成者</b>{{ viewReportData.report_info.generated_by }}</span>
-            <span class="info-item"><b>场景</b>{{ viewReportData.report_info.scenario_name ?? '—' }}</span>
+            <span class="info-item"><b>场景</b>{{ viewReportData.report_info.scenario_name || '全部场景' }}</span>
             <span class="info-item"><b>数据范围</b>{{ viewReportData.report_info.data_scope }}</span>
             <span class="info-item"><b>涉及算法</b>{{ viewReportData.report_info.algorithms.map((a) => a.name).join('、') || '—' }}</span>
             <span class="info-item"><b>生成时间</b>{{ viewReportData.report_info.generated_at }}</span>

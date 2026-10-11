@@ -64,14 +64,14 @@ describe('application session initialization and routing', () => {
     expect(host.querySelector('[data-page="reports"]')).not.toBeNull();
   });
 
-  it.each(['401', 'timeout', 'network'])('mounts after %s and retains the original redirect', async (kind) => {
+  it.each(['401', 'timeout', 'network'])('mounts after %s and goes straight to login', async (kind) => {
     vi.mocked(getMe).mockRejectedValueOnce(kind === '401' ? new RequestError('expired', { status: 401 })
       : new RequestError('transport error', { code: kind === 'timeout' ? 'ECONNABORTED' : 'ERR_NETWORK' }));
     await startApplication(app, router, store);
     await router.isReady();
     await flush();
     expect(router.currentRoute.value.path).toBe('/login');
-    expect(router.currentRoute.value.query.redirect).toBe('/reports?scope=mine');
+    expect(router.currentRoute.value.query.redirect).toBeUndefined();
     expect(host.querySelector('.login-form')).not.toBeNull();
     if (kind === '401') expect(host.querySelector('.login-error')).toBeNull();
     else expect(host.querySelector('.login-error')?.textContent).toContain('重新登录或刷新重试');
@@ -95,7 +95,7 @@ describe('application session initialization and routing', () => {
     expect(store.users).toEqual([]);
     expect(getCsrfToken()).toBeNull();
     expect(router.currentRoute.value.path).toBe('/login');
-    expect(router.currentRoute.value.query.redirect).toBe('/reports?scope=mine');
+    expect(router.currentRoute.value.query.redirect).toBeUndefined();
     expect(getMe).toHaveBeenCalledOnce();
   });
 });

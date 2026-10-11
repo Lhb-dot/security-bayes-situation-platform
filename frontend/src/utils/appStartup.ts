@@ -16,7 +16,7 @@ export const startApplication = async (
     // 错误登录的 401 交给表单；已登录会话失效时先清 Store，避免守卫重新落到首页。
     if (userStore.currentUser) userStore.expireSession();
     if (current.path === '/login') return;
-    void router.replace({ path: '/login', query: { redirect: current.fullPath } });
+    void router.replace('/login');
   });
   app.mount('#app');
 };

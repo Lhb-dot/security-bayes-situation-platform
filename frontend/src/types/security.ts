@@ -82,7 +82,10 @@ export interface DatasetField {
 export interface Dataset {
   dataset_id: string;
   name: string;
-  /** 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。数据集中心名称列展示它。 */
+  /**
+   * 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。
+   * 仅作源文件溯源用，**不参与展示** —— 全平台数据集名一律显示 name（= 内部编码 logical_id）。
+   */
   file_name?: string;
   description: string;
   scenario_id: ScenarioId;
@@ -173,6 +176,17 @@ export interface RiskEvent {
   status: '待处置' | '处理中' | '已处置';
   raw_features: Record<string, unknown>;
   description: string;
+  /** 来源数据集展示名（= logical_id）；仅详情接口下发，列表没有 */
+  dataset_name?: string;
+  /** 来源算法显示名；仅详情接口下发 */
+  algorithm_name?: string;
+  /** 创建者用户名；仅详情接口下发 */
+  creator_name?: string;
+  /**
+   * 流转到「已处置」时填写的处置方法（来源 handling_record，status_after=RESOLVED 的最新一条）。
+   * 仅详情接口下发；功能上线前已处置的历史事件没有该记录，为 null —— 详情页保留位置、内容留空。
+   */
+  handling_comment?: string | null;
 }
 
 /** 态势分析数据 */
@@ -350,7 +364,8 @@ export interface ReportData {
 export interface Report {
   report_id: string;
   title: string;
-  /** 场景编码；后端 scenario_id 为 NULL、或不在映射表内时是空串，渲染侧显示 — */
+  /** 场景编码；后端 scenario_id 为 NULL（超管全平台聚合报告）、或不在映射表内时是空串，
+   *  报告中心渲染侧显示「全部场景」 */
   scenario_id: ScenarioId | '';
   scenario_name: string;
   content?: string;

@@ -87,31 +87,8 @@ watch(() => props.data.scenario_id, loadAll);
 onMounted(loadAll);
 
 /* ------------------------------------------------------------------ */
-/* 通用：展示名与中文映射                                               */
+/* 通用：中文映射                                                   */
 /* ------------------------------------------------------------------ */
-
-/**
- * 数据集展示名去重。
- *
- * `dataset_display_name_of` 取的是上传文件名，同源重复的记录（如 carrier_track_company_v1
- * 与 Feature2_Cleaning_lisan 指向同一份内容）会得到**完全相同的展示名**，
- * 列表里就会出现多行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
- */
-const displayNames = computed(() => {
-  const counts = new Map<string, number>();
-  props.data.datasets.forEach((item) => {
-    const raw = item.name || item.logical_id;
-    counts.set(raw, (counts.get(raw) ?? 0) + 1);
-  });
-  const map = new Map<string, string>();
-  props.data.datasets.forEach((item) => {
-    const raw = item.name || item.logical_id;
-    map.set(item.logical_id, (counts.get(raw) ?? 0) > 1 ? `${raw}（${item.logical_id}）` : raw);
-  });
-  return map;
-});
-
-const nameOf = (logicalId: string) => displayNames.value.get(logicalId) ?? logicalId;
 
 /** 编码形态中文映射（契约 §8.3：numeric/interval/paired/unknown） */
 const ENCODING_TEXT: Record<string, string> = {
@@ -217,7 +194,7 @@ const familyColumns: DashColumn[] = [
 const familyRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.encoding_family.map((row) => ({
     logical_id: row.logical_id,
-    name: nameOf(row.logical_id),
+    name: row.logical_id,
     // 组名查不到时退回原始 key（同组同值，不丢信息）；空串由 DashTable 渲染成「—」
     source_group: groupLabels.value.get(row.source_group) ?? row.source_group,
     encoding: ENCODING_TEXT[row.encoding] ?? '未知',
@@ -274,10 +251,10 @@ const redundancyKpis = computed(() => {
   ];
 });
 
-/** 每个同源组一根柱 = 组内物理文件数；标签用组内展示名连接，便于核对是哪几份文件同源 */
+/** 每个同源组一根柱 = 组内物理文件数；标签用组内 logical_id 连接，便于核对是哪几份文件同源 */
 const groupBars = computed(() =>
   props.data.groups.map((group) => ({
-    value: group.datasets.map((id) => nameOf(id)).join(' / '),
+    value: group.datasets.join(' / '),
     count: group.file_count,
   })),
 );
@@ -300,13 +277,12 @@ const modelStats = computed(() => {
 
 /**
  * 数据集基底行：S2（资产明细）与 S3（建模覆盖）共用的**唯一一次** datasets 遍历。
- * 展示名与模型覆盖在这里各算一次，下游只做投影 —— 避免同一份 datasets 被多个 computed
- * 各扫一遍、也避免展示名在两处各算一次而出现口径漂移。
+ * 模型覆盖在这里算一次，下游只做投影 —— 避免同一份 datasets 被多个 computed 各扫一遍。
  */
 const datasetRows = computed(() =>
   props.data.datasets.map((item) => ({
     item,
-    name: nameOf(item.logical_id),
+    name: item.logical_id,
     model: modelStats.value.get(item.logical_id),
   })),
 );

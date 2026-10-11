@@ -155,32 +155,8 @@ const overviewKpis = computed(() => [
 ]);
 
 /* ------------------------------------------------------------------ */
-/* 展示名与枚举映射                                                     */
+/* 枚举映射                                                         */
 /* ------------------------------------------------------------------ */
-
-/**
- * 数据集展示名去重。
- *
- * `dataset_display_name_of` 取的是上传文件名，同源重复的两条记录（如 NF-UNSW-NB15-v2 与
- * net_flow_company_v1 都指向同一份 arff）会得到**完全相同的展示名**，
- * 列表里就会出现两行一模一样的名字、看不出差别。重名时补上 logical_id 以区分。
- * D1/D2/S2/S3 全部复用这一份映射，保证同一数据集在四张表里叫同一个名字。
- */
-const displayNames = computed(() => {
-  const names = props.data.datasets.map((item) => item.name || item.logical_id);
-  const counts = new Map<string, number>();
-  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
-  return new Map(
-    props.data.datasets.map((item, index) => [
-      item.logical_id,
-      (counts.get(names[index]) ?? 0) > 1 ? `${names[index]}（${item.logical_id}）` : names[index],
-    ]),
-  );
-});
-
-/** logical_id → 展示名；优先去重表，其次后端行内的 name，最后回退 logical_id */
-const nameOf = (logicalId: string, fallback?: string) =>
-  displayNames.value.get(logicalId) ?? fallback ?? logicalId;
 
 /** 可见性中文映射 */
 const VISIBILITY_TEXT: Record<string, string> = {
@@ -235,7 +211,7 @@ const caliberRows = computed<Array<Record<string, unknown>>>(() =>
     const positives = item.positive_labels ?? [];
     return {
       logical_id: item.logical_id,
-      name: nameOf(item.logical_id, item.name),
+      name: item.logical_id,
       label_field: item.label_field,
       // 未登记正类 → 不猜、不推断，直接写「未登记」（显式登记表缺项）
       positive_labels: positives.length ? positives.join(LIST_SEPARATOR) : '未登记',
@@ -276,7 +252,7 @@ const dimensionRows = computed<Array<Record<string, unknown>>>(() =>
     return {
       key: item.key,
       dimension: item.dimension,
-      datasets: ids.length ? ids.map((logicalId) => nameOf(logicalId)).join(LIST_SEPARATOR) : '—',
+      datasets: ids.length ? ids.join(LIST_SEPARATOR) : '—',
       coverage: ids.length,
       coverage_status: coverageCell(ids.length),
     };
@@ -309,7 +285,7 @@ const datasetColumns: DashColumn[] = [
 const datasetRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.datasets.map((item) => ({
     logical_id: item.logical_id,
-    name: nameOf(item.logical_id, item.name),
+    name: item.logical_id,
     record_count: fmtInt(item.record_count),
     risk_rate: fmtPercent(item.risk_rate),
     attribute_count: item.attribute_count,
@@ -324,12 +300,12 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
 
 /** 每个数据集一根柱 = 模型版本总数；为 0 即「数据白躺」 */
 const modelingBars = computed(() =>
-  props.data.modeling.map((item) => ({ value: nameOf(item.logical_id), count: item.total })),
+  props.data.modeling.map((item) => ({ value: item.logical_id, count: item.total })),
 );
 
 /** 白躺数据集（有数据、无任何模型版本）—— 单独点名，柱状图看不出「0 根柱」 */
 const whiteLying = computed(() =>
-  props.data.modeling.filter((item) => item.total === 0).map((item) => nameOf(item.logical_id)),
+  props.data.modeling.filter((item) => item.total === 0).map((item) => item.logical_id),
 );
 
 /** 已发布 / 草稿合计（DashBars 只渲染 count，逐数据集明细在 S2 的「已发布模型数」列） */

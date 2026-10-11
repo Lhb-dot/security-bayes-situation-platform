@@ -128,8 +128,12 @@ const metricText = (key: MetricKey) => {
 };
 
 // ===================== 2 数据来源 =====================
-type SourceTab = 'sample' | 'manual' | 'batch';
-const sourceTab = ref<SourceTab>('sample');
+/** 两类来源：手工录入（自己输入 / 批量上传）、样本库（勾选若干项 / 前 N 项） */
+type SourceTab = 'manual' | 'sample';
+const sourceTab = ref<SourceTab>('manual');
+/** 手工录入内部的两种方式 */
+type ManualMode = 'input' | 'upload';
+const manualMode = ref<ManualMode>('input');
 
 /** 手工录入：字段与取值 */
 const inputFields = ref<DatasetField[]>([]);
@@ -141,8 +145,47 @@ const sampleLoading = ref(false);
 const sampleTotal = ref(0);
 const samplePage = ref(1);
 const SAMPLE_PAGE_SIZE = 50;
-const selectedSampleIndex = ref<number | null>(null);
+/** 已勾选的样本：键是全局序号（1 起），值是整行取值 —— 跨页勾选也能带全数据 */
+const selectedSamples = ref<Record<number, Record<string, string | number>>>({});
+const selectedCount = computed(() => Object.keys(selectedSamples.value).length);
 let sampleSequence = 0;
+
+/** 第 index 行（当前页）对应的全局序号 */
+const ordinalOf = (index: number) => (samplePage.value - 1) * SAMPLE_PAGE_SIZE + index + 1;
+const isRowSelected = (index: number) => ordinalOf(index) in selectedSamples.value;
+const pageAllSelected = computed(
+  () => samples.value.length > 0 && samples.value.every((_, i) => isRowSelected(i))
+);
+
+/** 勾选 / 取消一行（整行取值一起带走，翻页后仍能提交） */
+const toggleSample = (index: number) => {
+  const row = samples.value[index];
+  if (!row) return;
+  const ordinal = ordinalOf(index);
+  if (ordinal in selectedSamples.value) delete selectedSamples.value[ordinal];
+  else selectedSamples.value[ordinal] = { ...row };
+};
+
+/** 表头全选：勾中 / 取消当前页 */
+const toggleSelectPage = () => {
+  if (pageAllSelected.value) {
+    samples.value.forEach((_, i) => { delete selectedSamples.value[ordinalOf(i)]; });
+  } else {
+    samples.value.forEach((row, i) => { selectedSamples.value[ordinalOf(i)] = { ...row }; });
+  }
+};
+
+/** 反选：当前页内已选的取消、未选的勾上 */
+const invertSelection = () => {
+  samples.value.forEach((row, i) => {
+    const ordinal = ordinalOf(i);
+    if (ordinal in selectedSamples.value) delete selectedSamples.value[ordinal];
+    else selectedSamples.value[ordinal] = { ...row };
+  });
+};
+
+/** 清空全部勾选（含其它页） */
+const clearSelection = () => { selectedSamples.value = {}; };
 
 const totalSamplePages = computed(() =>
   Math.max(1, Math.ceil(sampleTotal.value / SAMPLE_PAGE_SIZE))
@@ -156,11 +199,14 @@ const labelField = computed(
   () => inputFields.value.find((f) => f.field_role === FIELD_ROLE_LABEL)?.field_name ?? ''
 );
 
-/** 批量导入 */
+/** 批量研判：样本库的「前 N 项 / 勾选项」与手工录入的「上传 CSV」共用这套状态 */
 const batchLimit = ref(DEFAULT_BATCH_LIMIT);
 const batchResult = ref<BatchInferenceResult | null>(null);
 /** 提交请求在途（按钮立刻置灰，避免连点提交两批） */
 const batchSubmitting = ref(false);
+/** 正在跑的是哪个批量入口（进度文案只显示在对应的按钮上） */
+type BatchAction = 'head' | 'selected' | 'upload';
+const batchAction = ref<BatchAction | null>(null);
 
 // ===== 批量研判任务（数据源在 store：离开页面后台照样跑，完成时全局通知） =====
 // 进度取自 store 里最近登记的那条任务；完成通知与超时兜底都在 store，不随组件卸载。
@@ -172,6 +218,14 @@ const batchProgressText = computed(() => {
   return job?.total ? `研判中… ${job.processed}/${job.total}` : '研判中…';
 });
 const uploadFile = ref<File | null>(null);
+/** 隐藏的原生 file input：由云上传图标按钮触发 */
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const pickCsvFile = () => {
+  const input = fileInputRef.value;
+  if (!input) return;
+  input.value = ''; // 清空后重选同一个文件也能触发 change
+  input.click();
+};
 
 // ===================== 3 单条推理结果 =====================
 const inferResult = ref<PredictResult | null>(null);
@@ -244,6 +298,9 @@ const fieldGroups = computed<FieldGroup[]>(() => {
   return matched;
 });
 
+/** 只有一个分组时，折叠头（「全部字段」）不带信息，直接平铺字段 */
+const singleFieldGroup = computed(() => fieldGroups.value.length === 1);
+
 const expandedGroups = ref<string[]>([]);
 const expandAll = () => { expandedGroups.value = fieldGroups.value.map((g) => g.name); };
 const collapseAll = () => { expandedGroups.value = []; };
@@ -279,13 +336,35 @@ const resetExplanation = () => {
   explanationController = null;
 };
 
-/** 丢弃上一轮结果（单条 / 批量 / AI 分析 / 样本选中） */
-const resetResults = () => {
+/**
+ * 结果的归属标签：只展示在"发起它的那一类"里。
+ *
+ * 切换标签（含手工录入内部的两种方式）会把 resultScope 清空，所以上一类的结果
+ * 不会残留在页面下方；后台跑完的批量任务回填时也要先过这一关。
+ */
+const resultScope = ref<SourceTab | null>(null);
+
+/** 结果区是否展示：结果归属当前标签，且确有内容 */
+const resultVisible = computed(
+  () => resultScope.value === sourceTab.value && Boolean(batchResult.value || inferResult.value)
+);
+
+/** 丢弃当前展示的结果（单条 / 批量 / AI 分析），不动勾选状态 */
+const clearResultState = () => {
   inferResult.value = null;
   batchResult.value = null;
-  selectedSampleIndex.value = null;
+  resultScope.value = null;
   resetExplanation();
 };
+
+/** 丢弃上一轮结果与勾选（换场景 / 换数据集 / 换模型时用） */
+const resetResults = () => {
+  clearResultState();
+  selectedSamples.value = {};
+};
+
+// 切换标签：上一类的结果立即作废，不再残留
+watch([sourceTab, manualMode], () => { clearResultState(); });
 
 /** 换场景 / 换数据集 / 换模型时统一清空输入区（字段、取值、样本，并丢弃上一轮结果） */
 const resetInputState = () => {
@@ -313,6 +392,35 @@ const captureSelection = (level: 'scenario' | 'dataset' | 'model') => {
     && (level !== 'model' || modelId === selectedModelId.value);
 };
 
+/**
+ * 默认选中哪个数据集：优先挑第一个「有已发布模型」的。
+ *
+ * 场景下的第一个数据集不一定有已发布模型（本地库里 nf_unsw_nb15_v2 就没有），
+ * 直接取第一个会让用户照样得手点一次，所以这里并发探一遍；一个都没有才退回第一个。
+ */
+const pickDatasetWithPublishedModel = async (
+  candidates: Dataset[],
+  isCurrent: () => boolean,
+): Promise<string | null> => {
+  const scenarioNumeric = scenarios.value.find((s) => s.code === selectedScenario.value)?.id;
+  const hits = await Promise.all(
+    candidates.map(async (ds) => {
+      try {
+        const list = await getModelVersionList({
+          scenario_id: scenarioNumeric,
+          dataset_id: ds.dataset_id,
+          page_size: MODEL_LIST_PAGE_SIZE,
+        });
+        return list.some((m) => m.status === MODEL_STATUS_PUBLISHED) ? ds.dataset_id : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  if (!isCurrent()) return null;
+  return hits.find((id) => id !== null) ?? null;
+};
+
 watch([selectedScenario, () => userStore.currentUser?.user_id], async ([scenario, owner], _, onCleanup) => {
   let active = true;
   onCleanup(() => { active = false; });
@@ -329,7 +437,15 @@ watch([selectedScenario, () => userStore.currentUser?.user_id], async ([scenario
   loadingDatasets.value = true;
   try {
     const list = await datasetStore.fetchDatasets(scenario, { isCurrent });
-    if (isCurrent()) datasets.value = list;
+    if (!isCurrent()) return;
+    datasets.value = list;
+    const candidates = datasetOptions.value;
+    if (candidates.length) {
+      // 数据集没必要让用户每次手点：默认落在有已发布模型的那个上
+      const preferred = await pickDatasetWithPublishedModel(candidates, isCurrent);
+      if (!isCurrent()) return;
+      selectedDatasetId.value = preferred ?? candidates[0].dataset_id;
+    }
   } catch {
     if (isCurrent()) datasets.value = [];
   } finally {
@@ -357,8 +473,9 @@ watch(selectedDatasetId, async (datasetId, _, onCleanup) => {
     });
     if (!isCurrent()) return;
     modelVersions.value = list;
-    const def = publishedModels.value.find((m) => m.is_default);
-    selectedModelId.value = def ? def.model_version_id : '';
+    // 有默认推荐的用默认，否则取第一个 —— 同样省掉用户手点
+    const preferred = publishedModels.value.find((m) => m.is_default) ?? publishedModels.value[0];
+    selectedModelId.value = preferred ? preferred.model_version_id : '';
   } catch {
     // 拉取失败必须清空：留着上一个数据集的模型列表会按旧列表自动选中模型
     if (isCurrent()) modelVersions.value = [];
@@ -413,7 +530,6 @@ const loadSamples = async (page: number) => {
     samples.value = preview.rows;
     sampleTotal.value = preview.total;
     samplePage.value = preview.page;
-    selectedSampleIndex.value = null;
   } catch {
     if (isCurrent()) {
       samples.value = [];
@@ -438,38 +554,7 @@ const changeSamplePage = (target: number) => {
   }, samplePaneRef.value, () => sequence === sampleSequence && selectionIsCurrent());
 };
 
-/** 点样本行 → 把该行取值填进输入表单 */
-const applySample = (index: number) => {
-  selectedSampleIndex.value = index;
-  const row = samples.value[index];
-  if (!row) return;
-  const next: Record<string, string | number> = { ...inputData.value };
-  for (const field of inputFields.value) {
-    const value = row[field.field_name];
-    if (value === undefined || value === null || value === '') continue;
-    if (isNumericField(field)) {
-      const n = Number(value);
-      next[field.field_name] = Number.isFinite(n) ? n : value;
-    } else {
-      next[field.field_name] = value;
-    }
-  }
-  inputData.value = next;
-  // 换了样本，上一轮结果与 AI 分析都作废（在途的流式请求一并中止）
-  inferResult.value = null;
-  resetExplanation();
-};
-
 // ===================== 执行单条推理 =====================
-/** 执行条上的状态反馈（不是提示文案，是当前选择的结果） */
-const actionHint = computed(() => {
-  // 手工录入 tab 的特征数已经在字段区工具栏显示，这里不再重复
-  if (sourceTab.value !== 'sample') return '';
-  if (selectedSampleIndex.value === null) return '未选择样本';
-  const ordinal = (samplePage.value - 1) * SAMPLE_PAGE_SIZE + selectedSampleIndex.value + 1;
-  return `已选第 ${ordinal} 条样本`;
-});
-
 /** 未选已发布模型时的统一拦截（单条推理 / 批量研判 / 上传 CSV 三个入口共用） */
 const ensureModelSelected = () => {
   if (selectedModelId.value) return true;
@@ -485,16 +570,18 @@ const handleInfer = async () => {
       return;
     }
   }
+  const scope = sourceTab.value;
   inferring.value = true;
-  inferResult.value = null;
-  batchResult.value = null;
-  // 新一轮推理：上一轮的 AI 分析作废（含在途的流式请求）
-  resetExplanation();
+  // 新一轮推理：上一轮结果与它的 AI 分析一并作废（含在途的流式请求）
+  clearResultState();
+  resultScope.value = scope;
   try {
     const result = await predictInference({
       model_version_id: selectedModelId.value,
       input_features: { ...inputData.value },
     });
+    // 请求期间切了标签：这一轮结果不再展示（resultScope 已被清空）
+    if (resultScope.value !== scope) return;
     inferResult.value = result;
     await scrollToResult();
     if (result.is_risk_event) {
@@ -511,6 +598,12 @@ const handleInfer = async () => {
 const canBatch = computed(
   () => Boolean(selectedModelId.value) && !batchRunning.value && !batchSubmitting.value
 );
+/** 任一批量入口在途（提交中或后台跑着） */
+const batchBusy = computed(() => batchRunning.value || batchSubmitting.value);
+/** 进度文案只显示在真正触发的那个按钮上 */
+const busyOn = (action: BatchAction) => batchBusy.value && batchAction.value === action;
+// 任务收尾（完成 / 失败）后清掉"正在跑哪个入口"，按钮恢复常态文案
+watch(batchBusy, (busy) => { if (!busy) batchAction.value = null; });
 
 /** 批量研判完成（可能在别的页面）：结果表由 store 的 lastResult 驱动回填 */
 const showBatchResult = async (res: BatchInferenceResult) => {
@@ -522,16 +615,18 @@ const showBatchResult = async (res: BatchInferenceResult) => {
  * 提交后的公共收尾：提交 → 登记到 store → 立刻返回。
  *
  * 轮询、完成通知、超时兜底都在 batchJobStore 里 —— 那里不随组件卸载，所以用户
- * 离开本页任务照跑、完成时照样弹通知，回到页面还能看到结果表。
+ * 离开本页任务照跑、完成时照样弹通知。结果要不要展示由 resultScope 决定：
+ * 提交后切过标签就不再回填。
  */
 const runBatchJob = async (
+  action: BatchAction,
   submit: () => Promise<{ job_id: string; total: number }>,
   title: string,
 ) => {
-  batchResult.value = null;
-  inferResult.value = null;
   // 批量开始：单条结果与它的 AI 分析一并作废
-  resetExplanation();
+  clearResultState();
+  resultScope.value = sourceTab.value;
+  batchAction.value = action;
   batchSubmitting.value = true;
   try {
     const receipt = await submit();
@@ -542,11 +637,13 @@ const runBatchJob = async (
   }
 };
 
-// 批量研判完成：store 记下结果，这里回填结果表并滚入视口（模型没换才展示）
+// 批量研判完成：store 记下结果，这里回填结果表并滚入视口
 watch(
   [() => batchJobStore.lastResult, selectedModelId],
   async ([payload]) => {
     if (!payload || batchResult.value) return;
+    // 结果只回填到"发起它的那一类"：切换过标签就不再展示
+    if (resultScope.value !== sourceTab.value) return;
     if (String(payload.modelVersionId) !== String(selectedModelId.value)) return;
     await showBatchResult(payload.result);
   },
@@ -556,18 +653,52 @@ watch(
 const batchJobTitle = () =>
   selectedModel.value ? modelLabel(selectedModel.value) : `模型版本 #${selectedModelId.value}`;
 
-const handleBatch = async () => {
-  if (!ensureModelSelected()) return;
+/** 批量入口的公共外壳：统一拦截未选模型、统一错误提示，返回是否提交成功 */
+const runBatchAction = async (
+  action: BatchAction,
+  submit: () => Promise<{ job_id: string; total: number }>,
+  failureText: string,
+) => {
+  if (!ensureModelSelected()) return false;
   try {
-    await runBatchJob(() => submitInferenceBatch({
-      model_version_id: selectedModelId.value,
-      source: 'dataset',
-      offset: 0,
-      limit: batchLimit.value,
-    }), batchJobTitle());
+    await runBatchJob(action, submit, batchJobTitle());
+    return true;
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '批量研判失败');
+    ElMessage.error(err instanceof Error ? err.message : failureText);
+    return false;
   }
+};
+
+/** 样本库：研判数据集前 N 项 */
+const handleBatchHead = async () => {
+  const raw = Math.floor(Number(batchLimit.value));
+  const limit = Math.max(1, Math.min(MAX_BATCH_LIMIT, Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_BATCH_LIMIT));
+  batchLimit.value = limit;
+  await runBatchAction('head', () => submitInferenceBatch({
+    model_version_id: selectedModelId.value,
+    source: 'dataset',
+    offset: 0,
+    limit,
+  }), '批量研判失败');
+};
+
+/** 样本库：研判勾选的若干项 */
+const handleBatchSelected = async () => {
+  const rows = Object.values(selectedSamples.value);
+  if (!rows.length) {
+    ElMessage.warning('请先勾选要研判的样本');
+    return;
+  }
+  if (rows.length > MAX_BATCH_LIMIT) {
+    ElMessage.warning(`一次最多研判 ${MAX_BATCH_LIMIT} 条`);
+    return;
+  }
+  const submitted = await runBatchAction('selected', () => submitInferenceBatch({
+    model_version_id: selectedModelId.value,
+    source: 'samples',
+    samples: rows,
+  }), '批量研判失败');
+  if (submitted) selectedSamples.value = {};
 };
 
 const onFileChange = (event: Event) => {
@@ -575,20 +706,16 @@ const onFileChange = (event: Event) => {
   uploadFile.value = input.files?.[0] ?? null;
 };
 
+/** 手工录入：上传 CSV 批量研判 */
 const handleUpload = async () => {
-  if (!ensureModelSelected()) return;
   if (!uploadFile.value) {
     ElMessage.warning('请先选择 CSV 文件');
     return;
   }
-  try {
-    await runBatchJob(() => submitInferenceBatchUpload({
-      model_version_id: selectedModelId.value,
-      file: uploadFile.value as File,
-    }), batchJobTitle());
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'CSV 批量研判失败');
-  }
+  await runBatchAction('upload', () => submitInferenceBatchUpload({
+    model_version_id: selectedModelId.value,
+    file: uploadFile.value as File,
+  }), 'CSV 批量研判失败');
 };
 
 // ===================== 结果展示辅助 =====================
@@ -806,153 +933,259 @@ onUnmounted(() => {
       <div class="source-tabs">
         <button
           class="source-tab"
-          :class="{ 'is-active': sourceTab === 'sample' }"
-          @click="sourceTab = 'sample'"
-        >样本库</button>
-        <button
-          class="source-tab"
           :class="{ 'is-active': sourceTab === 'manual' }"
           @click="sourceTab = 'manual'"
         >手工录入</button>
         <button
           class="source-tab"
-          :class="{ 'is-active': sourceTab === 'batch' }"
-          @click="sourceTab = 'batch'"
-        >批量导入</button>
+          :class="{ 'is-active': sourceTab === 'sample' }"
+          @click="sourceTab = 'sample'"
+        >样本库</button>
       </div>
 
-      <!-- 样本库 -->
-      <div v-if="sourceTab === 'sample'" ref="samplePaneRef" class="pane">
-        <template v-if="samples.length">
-          <div class="sample-table__wrap">
-            <div v-if="sampleLoading" class="pane-loading"><div class="loader"></div></div>
-            <table class="sample-table">
-              <thead>
-                <tr>
-                  <th class="sample-table__pick"></th>
-                  <th class="sample-table__idx">序号</th>
-                  <th v-if="labelField">{{ labelField }}</th>
-                  <th v-for="col in sampleColumns" :key="col">{{ col }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(row, index) in samples"
-                  :key="index"
-                  :class="{ 'is-selected': selectedSampleIndex === index }"
-                  @click="applySample(index)"
-                >
-                  <td class="sample-table__pick">
-                    <input type="radio" :checked="selectedSampleIndex === index" tabindex="-1" />
-                  </td>
-                  <td class="sample-table__idx">{{ (samplePage - 1) * SAMPLE_PAGE_SIZE + index + 1 }}</td>
-                  <td v-if="labelField">{{ row[labelField] }}</td>
-                  <td v-for="col in sampleColumns" :key="col">{{ row[col] }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <!-- 翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
-          <div v-if="totalSamplePages > 1" class="sample-pager">
-            <button
-              class="ghost-btn"
-              :disabled="sampleLoading || samplePage <= 1"
-              @click="changeSamplePage(samplePage - 1)"
-            >上一页</button>
-            <span class="sample-pager__info">{{ samplePage }} / {{ totalSamplePages }}</span>
-            <button
-              class="ghost-btn"
-              :disabled="sampleLoading || samplePage >= totalSamplePages"
-              @click="changeSamplePage(samplePage + 1)"
-            >下一页</button>
-          </div>
-        </template>
-        <div v-else-if="sampleLoading" class="pane-status">正在读取样本…</div>
-        <div v-else class="pane-status">该数据集没有可读取的样本</div>
-      </div>
-
-      <!-- 手工录入 -->
-      <div v-else-if="sourceTab === 'manual'" class="pane">
-        <div class="pane-toolbar">
-          <span class="pane-toolbar__count">共 {{ inputFields.length }} 个输入特征</span>
-          <button class="ghost-btn" @click="expandAll">展开全部</button>
-          <button class="ghost-btn" @click="collapseAll">收起全部</button>
+      <!-- 手工录入：自己输入数据 / 批量上传 -->
+      <div v-if="sourceTab === 'manual'" class="source-body">
+        <div class="sub-tabs">
+          <button
+            class="sub-tab"
+            :class="{ 'is-active': manualMode === 'input' }"
+            @click="manualMode = 'input'"
+          >输入数据</button>
+          <button
+            class="sub-tab"
+            :class="{ 'is-active': manualMode === 'upload' }"
+            @click="manualMode = 'upload'"
+          >批量上传</button>
         </div>
-        <el-collapse v-model="expandedGroups" class="field-collapse">
-          <el-collapse-item v-for="group in fieldGroups" :key="group.name" :name="group.name">
-            <template #title>
-              <span class="field-group-title">{{ group.name }}（{{ group.fields.length }} 字段）</span>
-            </template>
-            <div v-if="expandedGroups.includes(group.name)" class="field-group-body">
-              <div v-for="field in group.fields" :key="field.field_name" class="form-group">
-                <label class="form-label">
-                  {{ field.field_name }}
-                  <span v-if="field.description" class="form-label__hint">{{ field.description }}</span>
-                </label>
-                <input
-                  v-if="isNumericField(field)"
-                  v-model.number="inputData[field.field_name]"
-                  type="number"
-                  :step="field.field_type === FIELD_TYPE_FLOAT ? FLOAT_INPUT_STEP : INT_INPUT_STEP"
-                  class="form-input"
-                  :placeholder="stripArffQuotes(field.sample_value)"
-                />
-                <select
-                  v-else-if="field.enum_values && field.enum_values.length > 0"
-                  v-model="inputData[field.field_name]"
-                  class="form-input"
-                >
-                  <option value="" disabled>请选择</option>
-                  <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ stripArffQuotes(opt) }}</option>
-                </select>
-                <input
-                  v-else
-                  v-model="inputData[field.field_name]"
-                  type="text"
-                  class="form-input"
-                  :placeholder="stripArffQuotes(field.sample_value)"
-                />
-              </div>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
 
-      <!-- 批量导入 -->
-      <div v-else class="pane">
-        <div class="batch-grid">
-          <div class="batch-row">
-            <label class="form-label">数据集样本条数</label>
-            <input v-model.number="batchLimit" type="number" min="1" :max="MAX_BATCH_LIMIT" class="form-input batch-row__num" />
-            <button class="infer-btn" :disabled="!canBatch" @click="handleBatch">
-              <span v-if="batchRunning" class="btn-spinner"></span>
-              {{ batchRunning ? batchProgressText : '批量研判' }}
-            </button>
+        <!-- 自己输入数据 -->
+        <div v-if="manualMode === 'input'" class="pane">
+          <div class="pane-toolbar">
+            <span class="pane-toolbar__count">共 {{ inputFields.length }} 个输入特征</span>
+            <template v-if="!singleFieldGroup">
+              <button class="ghost-btn" @click="expandAll">展开全部</button>
+              <button class="ghost-btn" @click="collapseAll">收起全部</button>
+            </template>
           </div>
+
+          <!-- 只有一个分组：直接平铺，不要那行没有信息量的折叠头 -->
+          <div v-if="singleFieldGroup" class="field-group-body">
+            <div v-for="field in fieldGroups[0].fields" :key="field.field_name" class="form-group">
+              <label class="form-label">
+                {{ field.field_name }}
+                <span v-if="field.description" class="form-label__hint">{{ field.description }}</span>
+              </label>
+              <input
+                v-if="isNumericField(field)"
+                v-model.number="inputData[field.field_name]"
+                type="number"
+                :step="field.field_type === FIELD_TYPE_FLOAT ? FLOAT_INPUT_STEP : INT_INPUT_STEP"
+                class="form-input"
+                :placeholder="stripArffQuotes(field.sample_value)"
+              />
+              <select
+                v-else-if="field.enum_values && field.enum_values.length > 0"
+                v-model="inputData[field.field_name]"
+                class="form-input"
+              >
+                <option value="" disabled>请选择</option>
+                <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ stripArffQuotes(opt) }}</option>
+              </select>
+              <input
+                v-else
+                v-model="inputData[field.field_name]"
+                type="text"
+                class="form-input"
+                :placeholder="stripArffQuotes(field.sample_value)"
+              />
+            </div>
+          </div>
+
+          <el-collapse v-else v-model="expandedGroups" class="field-collapse">
+            <el-collapse-item v-for="group in fieldGroups" :key="group.name" :name="group.name">
+              <template #title>
+                <span class="field-group-title">{{ group.name }}（{{ group.fields.length }} 字段）</span>
+              </template>
+              <div v-if="expandedGroups.includes(group.name)" class="field-group-body">
+                <div v-for="field in group.fields" :key="field.field_name" class="form-group">
+                  <label class="form-label">
+                    {{ field.field_name }}
+                    <span v-if="field.description" class="form-label__hint">{{ field.description }}</span>
+                  </label>
+                  <input
+                    v-if="isNumericField(field)"
+                    v-model.number="inputData[field.field_name]"
+                    type="number"
+                    :step="field.field_type === FIELD_TYPE_FLOAT ? FLOAT_INPUT_STEP : INT_INPUT_STEP"
+                    class="form-input"
+                    :placeholder="stripArffQuotes(field.sample_value)"
+                  />
+                  <select
+                    v-else-if="field.enum_values && field.enum_values.length > 0"
+                    v-model="inputData[field.field_name]"
+                    class="form-input"
+                  >
+                    <option value="" disabled>请选择</option>
+                    <option v-for="opt in field.enum_values" :key="opt" :value="opt">{{ stripArffQuotes(opt) }}</option>
+                  </select>
+                  <input
+                    v-else
+                    v-model="inputData[field.field_name]"
+                    type="text"
+                    class="form-input"
+                    :placeholder="stripArffQuotes(field.sample_value)"
+                  />
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+
+        <!-- 批量上传 -->
+        <div v-else class="batch-grid">
           <div class="batch-row">
             <label class="form-label">上传 CSV</label>
-            <input type="file" accept=".csv" class="batch-row__file" @change="onFileChange" />
-            <button class="infer-btn" :disabled="!canBatch || !uploadFile" @click="handleUpload">
-              <span v-if="batchRunning" class="btn-spinner"></span>
-              {{ batchRunning ? batchProgressText : '上传并研判' }}
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept=".csv"
+              class="batch-row__file-input"
+              @change="onFileChange"
+            />
+            <button
+              class="upload-icon-btn"
+              type="button"
+              aria-label="选择 CSV 文件"
+              @click="pickCsvFile"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 13v8" />
+                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                <path d="m8 17 4-4 4 4" />
+              </svg>
+            </button>
+            <span
+              class="batch-file-name"
+              :class="{ 'is-empty': !uploadFile }"
+              :title="uploadFile?.name"
+            >{{ uploadFile ? uploadFile.name : '未选择文件' }}</span>
+            <button class="infer-btn infer-btn--sm" :disabled="!canBatch || !uploadFile" @click="handleUpload">
+              <span v-if="busyOn('upload')" class="btn-spinner"></span>
+              {{ busyOn('upload') ? batchProgressText : '上传并研判' }}
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- 样本库：勾选若干项 / 直接前 N 项 -->
+      <div v-else class="source-body">
+        <div class="sample-toolbar">
+          <div class="sample-toolbar__left">
+            <span class="sample-toolbar__count">已选 {{ selectedCount }} 项</span>
+            <button class="ghost-btn" :disabled="!samples.length" @click="invertSelection">反选</button>
+            <button class="ghost-btn" :disabled="selectedCount === 0" @click="clearSelection">清空</button>
+          </div>
+          <div class="sample-toolbar__right">
+            <span class="sample-toolbar__head">
+              <span class="sample-toolbar__label">前</span>
+              <input
+                v-model.number="batchLimit"
+                type="number"
+                min="1"
+                :max="MAX_BATCH_LIMIT"
+                class="form-input sample-toolbar__num"
+              />
+              <span class="sample-toolbar__label">项</span>
+            </span>
+            <button class="infer-btn infer-btn--sm" :disabled="!canBatch" @click="handleBatchHead">
+              <span v-if="busyOn('head')" class="btn-spinner"></span>
+              {{ busyOn('head') ? batchProgressText : '研判' }}
+            </button>
+            <button
+              class="infer-btn infer-btn--sm"
+              :disabled="!canBatch || selectedCount === 0"
+              @click="handleBatchSelected"
+            >
+              <span v-if="busyOn('selected')" class="btn-spinner"></span>
+              {{ busyOn('selected') ? batchProgressText : '研判选中项' }}
+            </button>
+          </div>
+        </div>
+
+        <div ref="samplePaneRef" class="pane">
+          <template v-if="samples.length">
+            <div class="sample-table__wrap">
+              <div v-if="sampleLoading" class="pane-loading"><div class="loader"></div></div>
+              <table class="sample-table">
+                <thead>
+                  <tr>
+                    <th class="sample-table__pick">
+                      <input type="checkbox" :checked="pageAllSelected" @change="toggleSelectPage" />
+                    </th>
+                    <th class="sample-table__idx">序号</th>
+                    <th v-if="labelField">{{ labelField }}</th>
+                    <th v-for="col in sampleColumns" :key="col">{{ col }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(row, index) in samples"
+                    :key="index"
+                    :class="{ 'is-selected': isRowSelected(index) }"
+                    @click="toggleSample(index)"
+                  >
+                    <td class="sample-table__pick">
+                      <input type="checkbox" :checked="isRowSelected(index)" tabindex="-1" />
+                    </td>
+                    <td class="sample-table__idx">{{ ordinalOf(index) }}</td>
+                    <td v-if="labelField">{{ row[labelField] }}</td>
+                    <td v-for="col in sampleColumns" :key="col">{{ row[col] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <!-- 翻页期间常驻（只置灰），否则条本身消失，指针下方会空掉 -->
+            <div v-if="totalSamplePages > 1" class="sample-pager">
+              <button
+                class="ghost-btn"
+                :disabled="sampleLoading || samplePage <= 1"
+                @click="changeSamplePage(samplePage - 1)"
+              >上一页</button>
+              <span class="sample-pager__info">{{ samplePage }} / {{ totalSamplePages }}</span>
+              <button
+                class="ghost-btn"
+                :disabled="sampleLoading || samplePage >= totalSamplePages"
+                @click="changeSamplePage(samplePage + 1)"
+              >下一页</button>
+            </div>
+          </template>
+          <div v-else-if="sampleLoading" class="pane-status">正在读取样本…</div>
         </div>
       </div>
     </section>
 
     <!-- 执行条：必须放在 .card 外面 —— .card 有 backdrop-filter，
          它会让 position: fixed 改为相对卡片定位，fixed 就失效了。 -->
-    <div v-if="selectedModelId && sourceTab !== 'batch'" class="action-bar">
-      <span class="action-bar__hint">{{ actionHint }}</span>
+    <div
+      v-if="selectedModelId && sourceTab === 'manual' && manualMode === 'input'"
+      class="action-bar"
+    >
       <button class="infer-btn" :disabled="inferring" @click="handleInfer">
         <span v-if="inferring" class="btn-spinner"></span>
         {{ inferring ? '推理中…' : '执行风险推理' }}
       </button>
     </div>
 
-    <!-- ============ 3 结果 ============ -->
-    <section v-if="batchResult || inferResult" ref="resultRef" class="card result-card">
+    <!-- ============ 3 结果（只属于发起它的那一类，切标签即消失） ============ -->
+    <section v-if="resultVisible" ref="resultRef" class="card result-card">
       <!-- 批量结果 -->
       <template v-if="batchResult">
         <div class="section-heading">
@@ -1254,6 +1487,45 @@ select.form-input option {
   font-weight: 500;
 }
 
+/* 标签下的内容区（手工录入 / 样本库各自一块） */
+.source-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* 二级切换：手工录入内部「输入数据 / 批量上传」 */
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(8, 17, 31, 0.4);
+  border: 1px solid rgba(125, 201, 255, 0.1);
+  width: fit-content;
+}
+
+.sub-tab {
+  border: 0;
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: rgba(220, 234, 255, 0.6);
+  background: transparent;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sub-tab:hover {
+  background: rgba(91, 166, 255, 0.1);
+  color: #fff;
+}
+
+.sub-tab.is-active {
+  background: rgba(91, 166, 255, 0.16);
+  color: #fff;
+}
+
 .pane {
   display: grid;
   gap: 12px;
@@ -1287,6 +1559,46 @@ select.form-input option {
   margin-right: auto;
   font-size: 0.8rem;
   color: rgba(220, 234, 255, 0.55);
+}
+
+/* 样本库工具栏：左「已选 + 反选 / 清空」，右「前 N 项 + 两个批量入口」 */
+.sample-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sample-toolbar__left,
+.sample-toolbar__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sample-toolbar__count {
+  font-size: 0.78rem;
+  color: rgba(220, 234, 255, 0.5);
+}
+
+.sample-toolbar__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sample-toolbar__label {
+  font-size: 0.78rem;
+  color: rgba(220, 234, 255, 0.55);
+}
+
+.sample-toolbar__num {
+  width: 52px;
+  padding: 5px 6px;
+  font-size: 0.8rem;
+  text-align: center;
+  border-radius: 7px;
 }
 
 /* 样本表 */
@@ -1374,15 +1686,14 @@ select.form-input option {
   gap: 14px;
 }
 
-/* 批量导入 */
-/* 两行共用一套列宽（标签 / 输入 / 按钮各占一列），按钮才不会一行靠左一行靠右。
+/* 批量上传：标签 / 云上传图标 / 文件名 / 按钮各占一列。
    .batch-row 自己不生成盒子（display: contents），子元素直接落进 .batch-grid 的列里。 */
 .batch-grid {
   display: grid;
-  grid-template-columns: max-content max-content max-content;
+  grid-template-columns: max-content max-content max-content max-content;
   justify-content: start;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .batch-row {
@@ -1393,14 +1704,47 @@ select.form-input option {
   min-width: 120px;
 }
 
-.batch-row__num {
-  width: 110px;
+/* 原生 file input 藏起来，由云上传图标按钮代它触发（见 pickCsvFile） */
+.batch-row__file-input {
+  display: none;
 }
 
-.batch-row__file {
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.7);
-  max-width: 320px;
+.upload-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px dashed rgba(91, 166, 255, 0.35);
+  background: rgba(91, 166, 255, 0.07);
+  color: #9ad6ff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.upload-icon-btn:hover {
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.55);
+}
+
+.upload-icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.batch-file-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: rgba(220, 234, 255, 0.65);
+}
+
+.batch-file-name.is-empty {
+  color: rgba(220, 234, 255, 0.35);
 }
 
 /* 执行条：固定在视口底部，字段再多也不用滚到底找按钮。
@@ -1414,16 +1758,11 @@ select.form-input option {
   z-index: 40;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 16px;
   padding: 12px 30px;
   background: rgba(9, 18, 32, 0.97);
   border-top: 1px solid rgba(125, 201, 255, 0.16);
-}
-
-.action-bar__hint {
-  margin-right: auto;
-  font-size: 0.82rem;
-  color: rgba(220, 234, 255, 0.6);
 }
 
 /* ---------- 3 结果 ---------- */
@@ -1707,6 +2046,23 @@ select.form-input option {
 .infer-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* 小一号：样本库工具栏里的两个批量入口，和输入框同高、颜色压轻 */
+.infer-btn--sm {
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  border-radius: 7px;
+  background: rgba(91, 166, 255, 0.16);
+  border: 1px solid rgba(91, 166, 255, 0.3);
+  color: #9ad6ff;
+}
+
+.infer-btn--sm:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(91, 166, 255, 0.26);
+  border-color: rgba(91, 166, 255, 0.45);
 }
 
 .ghost-btn {

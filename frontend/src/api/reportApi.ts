@@ -84,7 +84,8 @@ export const getReportDetail = async (reportId: string): Promise<Report> =>
 
 /** 生成入参（同步接口与后台任务提交共用） */
 export interface ReportGenerateParams {
-  scenario_id: ScenarioId;
+  /** 场景编码；null = 全部场景（仅超管，后端按全平台聚合） */
+  scenario_id: ScenarioId | null;
   title: string;
   scope: 'self' | 'all';
   format?: Report['format'];
@@ -92,10 +93,11 @@ export interface ReportGenerateParams {
   interval_days?: number;
 }
 
-/** 场景 code → 后端整型 scenario_id，并补齐默认值。两个生成入口共用这一条组装。 */
+/** 场景 code → 后端整型 scenario_id，并补齐默认值。两个生成入口共用这一条组装。
+ *  scenario_id 为 null 时原样下发：后端把「无场景」解释为超管的全平台聚合范围。 */
 const buildGeneratePayload = async (params: ReportGenerateParams) => ({
   title: params.title,
-  scenario_id: await resolveScenarioId(params.scenario_id),
+  scenario_id: params.scenario_id == null ? null : await resolveScenarioId(params.scenario_id),
   scope: params.scope,
   format: params.format ?? 'markdown',
   scheduled: params.scheduled ?? false,

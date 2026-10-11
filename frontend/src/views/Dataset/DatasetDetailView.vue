@@ -95,7 +95,7 @@ watch([datasetId, () => userStore.currentUser?.user_id], async ([id, owner], _, 
       <section class="card dataset-detail__head">
         <div>
           <p class="eyebrow">Dataset Detail</p>
-          <h2>{{ dataset.file_name || dataset.name }}</h2>
+          <h2>{{ dataset.name }}</h2>
           <p class="dataset-detail__meta">
             {{ scenarioName }} · {{ dataset.data_format.toUpperCase() }} · 版本 {{ dataset.dataset_version }}
             · {{ dataset.record_count.toLocaleString() }} 样本 · {{ dataset.field_count }} 字段

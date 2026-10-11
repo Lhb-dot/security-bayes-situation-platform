@@ -32,6 +32,7 @@ from app.services.constants import (
     DATASET_VISIBILITY_COMPANY,
     DATASET_VISIBILITY_PLATFORM,
     RISK_EVENT_STATUS_PENDING,
+    RISK_EVENT_STATUS_RESOLVED,
     RISK_LEVEL_HIGH,
     RISK_LEVEL_LOW,
     RISK_LEVEL_MEDIUM,
@@ -42,6 +43,7 @@ from app.services.constants import (
     RISK_TYPE_POWER,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
+    dataset_display_name_of,
 )
 from app.utils.common import get_logger, paginate, row_to_dict
 
@@ -446,16 +448,52 @@ class RiskEventService(ServiceBase):
         result["items"] = risk_view.view_events(result["items"], thresholds)
         return ok(data=result)
 
+    def _resolved_comment(self, event_id: int) -> str | None:
+        """取「流转到已处置」时填写的处置方法。
+
+        来源是 handling_record 里 ``status_after = RESOLVED`` 的最新一条（处置动作是审计留痕，
+        只读不改）。功能上线前已处置的历史事件没有这条记录，返回 None —— 前端保留位置、
+        内容留空，不回填、不虚构。
+        """
+        comment = self.db.scalar(
+            select(HandlingRecord.comment)
+            .where(
+                HandlingRecord.risk_event_id == event_id,
+                HandlingRecord.status_after == RISK_EVENT_STATUS_RESOLVED,
+            )
+            .order_by(HandlingRecord.created_at.desc())
+            .limit(1)
+        )
+        text = (comment or "").strip()
+        return text or None
+
     @service_call
     def get(self, current_user, event_id: int):
         """风险事件详情（按角色与数据边界校验）。
 
         risk_level 按**查看者**的阈值重算（同 list）。
+        额外下发来源名称（数据集 / 算法 / 创建者）：详情页要显示人能看懂的名字，
+        而 risk_event 表里存的是内部外键 ID；这里用已有的 relationship 补，
+        不让前端拿着 ID 再去猜名字（前端拉数据集/算法/用户列表还受权限过滤）。
+        只在详情补，列表不补 —— 列表 200 条会触发大量懒加载。
+
+        另下发 ``handling_comment``：流转到「已处置」时填写的处置方法，
+        只随详情走（列表不带），供详情页的「处置信息」区块展示。
         """
         event = self._get(event_id)
         self._require_event_access(current_user, event)
         thresholds = risk_view.load_thresholds(self.db, current_user)
-        return ok(data=risk_view.view_of(event, thresholds))
+        data = risk_view.view_of(event, thresholds)
+        data.update(
+            {
+                "dataset_name": dataset_display_name_of(event.dataset),
+                "algorithm_name": event.algorithm.display_name if event.algorithm else None,
+                "algorithm_code": event.algorithm.code if event.algorithm else None,
+                "creator_name": event.creator.username if event.creator else None,
+                "handling_comment": self._resolved_comment(event.id),
+            }
+        )
+        return ok(data=data)
 
     # ------------------------------------------------------------------
     # 处置状态流转（需求 5.2：新事件默认"待处置"，可变为"处理中"或"已处置"）

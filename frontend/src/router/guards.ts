@@ -45,9 +45,10 @@ export const setupRouterGuards = (router: Router): void => {
     if (to.path === '/login') {
       return user ? roleLanding(user) : true;
     }
-    // 未登录访问业务路由 → 跳登录页并记录原路径（需求 1.1.1）
+    // 未登录访问任何业务路由 → 一律去登录页。
+    // 不再挂 redirect 原路径：全站没有消费方，只会让地址栏多一截噪音。
     if (!user) {
-      return { path: '/login', query: { redirect: to.fullPath } };
+      return '/login';
     }
     // 角色白名单：声明了 meta.roles 的路由只有名单内角色可进（越权 → 落地页）。
     // 与 App.vue 的 navItems.roles 同源，避免「导航里隐藏了、手敲地址却进得去」。
