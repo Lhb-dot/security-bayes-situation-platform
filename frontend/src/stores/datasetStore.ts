@@ -114,6 +114,7 @@ export const useDatasetStore = defineStore('dataset', () => {
       field_count: created.field_count,
       fields: created.fields,
       uploaded_by: created.uploaded_by,
+      uploader_name: created.uploader_name,
       uploaded_at: created.uploaded_at,
       enabled: created.enabled,
       referenced: created.referenced,

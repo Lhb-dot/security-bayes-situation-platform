@@ -5,7 +5,10 @@
 上传新数据集 → 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）；
 修改版本/停用/删除 → 仅 ADMIN。
 """
+import json
+
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_scenario_admin
@@ -13,7 +16,8 @@ from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.schemas.common import ResponseModel
-from app.schemas.dataset import DatasetCreate, DatasetUpdate
+from app.schemas.dataset import DatasetAnalysisRequest, DatasetCreate, DatasetUpdate
+from app.services.dataset_analysis_service import DatasetAnalysisService
 from app.services.dataset_service import DatasetService
 
 router = APIRouter(prefix="/datasets", tags=["数据集管理"])
@@ -181,6 +185,60 @@ def disable_dataset(
 ):
     return unwrap(
         DatasetService(db).disable(current_user=current_user, dataset_id=dataset_id)
+    )
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.get(
+    "/{dataset_id}/ai-analysis",
+    response_model=ResponseModel,
+    summary="读取已保存的数据集 AI 解析结果（登录用户，按数据集可见性）",
+)
+def get_dataset_ai_analysis(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """没有历史结果时返回 available=false，由前端显示空状态，不触发 AI。"""
+    return unwrap(
+        DatasetAnalysisService(db).get_analysis(
+            current_user=current_user, dataset_id=dataset_id
+        )
+    )
+
+
+@router.post(
+    "/{dataset_id}/ai-analysis/stream",
+    summary="流式生成数据集算法适配解析（登录用户，按数据集可见性）",
+)
+def stream_dataset_ai_analysis(
+    dataset_id: int,
+    payload: DatasetAnalysisRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    """按数据集字段形态推荐可用算法，AI 只对已算好的事实做排序与措辞。"""
+    service = DatasetAnalysisService(db)
+    access = service.check_access(current_user, dataset_id)
+    if access.code != 0:
+        return unwrap(access)
+    regenerate = bool(payload.regenerate) if payload else False
+
+    def generate():
+        for event, data in service.stream(current_user, dataset_id, regenerate):
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

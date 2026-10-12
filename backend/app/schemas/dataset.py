@@ -37,3 +37,12 @@ class DatasetUpdate(BaseModel):
         None, description="字段结构定义"
     )
     label_field: Optional[str] = Field(None, max_length=64, description="标签字段名")
+
+
+class DatasetAnalysisRequest(BaseModel):
+    """数据集 AI 解析请求。
+
+    regenerate=false 且已保存结果仍然有效时直接下发缓存；true 时忽略缓存重新解析。
+    """
+
+    regenerate: bool = Field(False, description="是否忽略已保存结果，重新调用 AI 解析")

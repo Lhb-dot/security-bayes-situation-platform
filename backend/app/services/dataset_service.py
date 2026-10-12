@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import joinedload
 from app.paths import PROJECT_ROOT
 from app.models.dataset import Dataset
 from app.models.model_version import ModelVersion
@@ -134,6 +135,9 @@ class DatasetService(ServiceBase):
         data["record_count"] = self._count_records(dataset.file_path)
         data["referenced"] = self._is_referenced(dataset.id)
         data["enabled"] = dataset.status == DATASET_STATUS_ACTIVE
+        # 上传人展示名：前端列表/版本管理只认名字，不再显示 uploaded_by 编号
+        # （与 model_version_service 的 trained_by_name / published_by_name 同款做法）。
+        data["uploader_name"] = dataset.uploader.username if dataset.uploader else None
         if getattr(dataset, "scenario", None) is not None:
             data["scenario_code"] = dataset.scenario.code
             data["scenario_name"] = dataset.scenario.name
@@ -189,7 +193,7 @@ class DatasetService(ServiceBase):
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
-        stmt = select(Dataset)
+        stmt = select(Dataset).options(joinedload(Dataset.uploader))
         if scenario_id is not None:
             stmt = stmt.where(Dataset.scenario_id == scenario_id)
         if role == ROLE_SCENARIO_ADMIN:

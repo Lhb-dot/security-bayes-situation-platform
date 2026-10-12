@@ -14,7 +14,8 @@ export const field = (name = 'L4_DST_PORT'): DatasetField => ({
 export const dataset = (id = '1', scenario: ScenarioId = 'network_security'): Dataset => ({
   dataset_id: id, name: `数据集${id}`, description: '', scenario_id: scenario, record_count: 150,
   field_count: 1, fields: [field()], created_at: '2026-10-11 00:00:00', data_format: 'csv',
-  dataset_version: 'v1', uploaded_by: 'tester', uploaded_at: '2026-10-11 00:00:00', enabled: true, referenced: true,
+  dataset_version: 'v1', uploaded_by: 'tester', uploader_name: 'tester', uploaded_at: '2026-10-11 00:00:00',
+  enabled: true, referenced: true,
 });
 export const preview = (page = 1, value = page * 100): DataPreview => ({
   total: 150, page, page_size: 50, rows: [{ L4_DST_PORT: value }], label_field: '',

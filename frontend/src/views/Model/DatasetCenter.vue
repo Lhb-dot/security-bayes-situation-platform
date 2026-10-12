@@ -5,9 +5,11 @@
  * 全平台数据集统一管理
  * 支持按场景筛选、数据集列表展示、数据集字段预览
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import type { Dataset, DatasetField, DatasetVersion, ScenarioId } from '@/types/security';
 import {
   getDatasetList,
@@ -17,6 +19,8 @@ import {
   createDatasetVersion,
   disableDatasetVersion,
   deleteDatasetVersion,
+  getDatasetAiAnalysis,
+  streamDatasetAiAnalysis,
 } from '@/api/datasetApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 import { useUserStore } from '@/stores/userStore';
@@ -241,15 +245,22 @@ const versionDialogVisible = ref(false);
 const versionDialogTitle = ref('');
 const versionTarget = ref<Dataset | null>(null);
 const versionList = ref<DatasetVersion[]>([]);
+const versionLoading = ref(false);
 
 const openVersionDialog = async (dataset: Dataset) => {
   versionTarget.value = dataset;
   versionDialogTitle.value = `版本管理 - ${dataset.name}`;
+  // 先清空上一次的版本数据：否则打开瞬间会闪出上一个数据集的样本数/字段数，
+  // 数字随请求返回再跳变，看着像「眼睛跳动」。
+  versionList.value = [];
+  versionLoading.value = true;
   versionDialogVisible.value = true;
   try {
     versionList.value = await getDatasetVersions(dataset.dataset_id);
   } catch {
     versionList.value = [];
+  } finally {
+    versionLoading.value = false;
   }
 };
 
@@ -330,6 +341,137 @@ const closeFieldPreview = () => {
   fieldDialogFields.value = [];
 };
 
+// ===================== AI 解析（算法适配，需求：判断数据集适合的算法） =====================
+/** 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done。 */
+const aiDialogVisible = ref(false);
+const aiDialogTitle = ref('');
+const aiDialogLoading = ref(false);
+/** 已尝试读取过历史结果（含「确实没有」），避免重复请求。 */
+const aiDialogLoaded = ref(false);
+const aiDialogStatus = ref('');
+const aiDialogError = ref('');
+const aiDialogReasoning = ref('');
+const aiDialogMarkdown = ref('');
+const aiDialogDatasetId = ref<string | number>('');
+const aiBodyRef = ref<HTMLElement | null>(null);
+const aiReasoningRef = ref<HTMLElement | null>(null);
+let aiAbort: AbortController | null = null;
+
+const aiDialogHtml = computed(() =>
+  aiDialogMarkdown.value
+    ? DOMPurify.sanitize(marked.parse(aiDialogMarkdown.value, { async: false }) as string)
+    : ''
+);
+
+/** 生成期间把可滚动容器钉在底部，让最新的思考链 / 正文始终可见。 */
+const stickAiToBottom = () => {
+  if (!aiDialogLoading.value) return;
+  void nextTick(() => {
+    // 弹窗本体固定，滚动落在 el-dialog__body 上，这里取它的滚动容器。
+    const body = aiBodyRef.value?.closest('.el-dialog__body') as HTMLElement | null;
+    for (const el of [body, aiReasoningRef.value]) {
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+};
+
+watch([aiDialogReasoning, aiDialogMarkdown], stickAiToBottom);
+
+/** 打开弹窗时读取已保存的解析结果，不触发 AI；没有历史则留给空状态呈现。 */
+const loadAiAnalysis = async () => {
+  if (!aiDialogDatasetId.value || aiDialogLoaded.value) return;
+  aiDialogStatus.value = '';
+  aiDialogError.value = '';
+  try {
+    const response = await getDatasetAiAnalysis(aiDialogDatasetId.value);
+    if (response.available && response.markdown) {
+      aiDialogMarkdown.value = response.markdown;
+      aiDialogReasoning.value = '';
+    }
+  } catch (err) {
+    aiDialogError.value = err instanceof Error ? err.message : '读取解析结果失败';
+  } finally {
+    aiDialogLoaded.value = true;
+  }
+};
+
+const runAiAnalysis = async (regenerate = false) => {
+  if (!aiDialogDatasetId.value || aiDialogLoading.value) return;
+  aiAbort?.abort();
+  const controller = new AbortController();
+  aiAbort = controller;
+  aiDialogLoading.value = true;
+  aiDialogError.value = '';
+  aiDialogReasoning.value = '';
+  if (regenerate) aiDialogMarkdown.value = '';
+  aiDialogStatus.value = regenerate ? '正在重新解析数据集...' : '正在解析数据集...';
+  try {
+    await streamDatasetAiAnalysis(
+      aiDialogDatasetId.value,
+      {
+        onStart: (data) => {
+          aiDialogStatus.value = String(data.status ?? '正在解析数据集...');
+        },
+        // 推理型模型的思维链只用于「正在生成」的反馈，不并入正文。
+        onReasoning: (content) => {
+          aiDialogReasoning.value += content;
+        },
+        onDelta: (content) => {
+          // 正文一到就清空思考链：它只负责让用户看到「确实在生成」，不留在结果里。
+          if (aiDialogReasoning.value) aiDialogReasoning.value = '';
+          aiDialogMarkdown.value += content;
+        },
+        onError: (message) => {
+          aiDialogError.value = message;
+        },
+        onDone: () => {
+          // 生成结束即清空状态条，正文自己会呈现结果。
+          aiDialogStatus.value = '';
+          aiDialogLoaded.value = true;
+          stickAiToBottom();
+        },
+      },
+      controller.signal,
+    );
+  } catch (err) {
+    if ((err as { name?: string })?.name === 'AbortError') return;
+    aiDialogError.value = err instanceof Error ? err.message : 'AI 解析失败';
+    aiDialogStatus.value = '';
+    aiDialogReasoning.value = '';
+  } finally {
+    if (aiAbort === controller) {
+      aiDialogLoading.value = false;
+      aiAbort = null;
+    }
+  }
+};
+
+const openAiAnalysis = (dataset: Dataset) => {
+  aiAbort?.abort();
+  aiAbort = null;
+  aiDialogTitle.value = `AI 解析 - ${dataset.name}`;
+  aiDialogDatasetId.value = dataset.dataset_id;
+  aiDialogLoading.value = false;
+  aiDialogLoaded.value = false;
+  aiDialogStatus.value = '';
+  aiDialogError.value = '';
+  aiDialogReasoning.value = '';
+  aiDialogMarkdown.value = '';
+  aiDialogVisible.value = true;
+  void loadAiAnalysis();
+};
+
+const closeAiAnalysis = () => {
+  aiAbort?.abort();
+  aiAbort = null;
+  aiDialogLoading.value = false;
+};
+
+onBeforeUnmount(() => {
+  aiAbort?.abort();
+  aiAbort = null;
+});
+
 /** 跳转数据集详情页（数据内容预览，需求 2.4） */
 const goDatasetDetail = (dataset: Dataset) => {
   router.push({ path: `/datasets/${dataset.dataset_id}` });
@@ -393,7 +535,7 @@ onMounted(async () => {
         <el-table-column
           prop="name"
           label="数据集名称"
-          min-width="240"
+          min-width="190"
           show-overflow-tooltip
         >
           <template #default="{ row }: { row: Dataset }">
@@ -440,7 +582,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="260" align="center" fixed="right">
+        <el-table-column label="操作" width="360" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
               <el-button size="small" plain @click="openFieldPreview(row)">
@@ -448,6 +590,9 @@ onMounted(async () => {
               </el-button>
               <el-button size="small" plain @click="goDatasetDetail(row)">
                 数据预览
+              </el-button>
+              <el-button size="small" plain @click="openAiAnalysis(row)">
+                AI解析
               </el-button>
               <el-button v-if="isManagement" size="small" plain @click="openVersionDialog(row)">
                 版本管理
@@ -530,6 +675,48 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+    </el-dialog>
+
+    <!-- AI 解析弹窗（算法适配；样式对齐字段预览弹窗，append-to-body 防 topbar 遮挡） -->
+    <el-dialog
+      v-model="aiDialogVisible"
+      :title="aiDialogTitle"
+      width="760px"
+      top="6vh"
+      append-to-body
+      class="ai-analysis-dialog"
+      :close-on-click-modal="false"
+      @close="closeAiAnalysis"
+    >
+      <div ref="aiBodyRef" class="ai-analysis">
+        <div v-if="aiDialogError" class="ai-analysis__notice ai-analysis__notice--error">
+          {{ aiDialogError }}
+        </div>
+        <div v-if="aiDialogStatus" class="ai-analysis__status">{{ aiDialogStatus }}</div>
+
+        <div v-if="aiDialogReasoning" class="ai-analysis__reasoning">
+          <div class="ai-analysis__reasoning-label">模型推理中</div>
+          <div ref="aiReasoningRef" class="ai-analysis__reasoning-text">{{ aiDialogReasoning }}</div>
+        </div>
+
+        <div v-if="aiDialogHtml" class="ai-analysis__markdown" v-html="aiDialogHtml"></div>
+        <div
+          v-else-if="!aiDialogLoading && !aiDialogReasoning && !aiDialogStatus"
+          class="ai-analysis__empty"
+        >
+          暂无解析。点击「解析」调用 AI，判断该数据集适合使用的算法。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">关闭</el-button>
+        <el-button
+          type="primary"
+          :disabled="aiDialogLoading"
+          @click="runAiAnalysis(Boolean(aiDialogMarkdown))"
+        >
+          {{ aiDialogMarkdown ? '重新解析' : '解析' }}
+        </el-button>
+      </template>
     </el-dialog>
 
     <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3；append-to-body 防 topbar 遮挡） -->
@@ -629,13 +816,12 @@ onMounted(async () => {
     <el-dialog
       v-model="versionDialogVisible"
       :title="versionDialogTitle"
-      width="720px"
+      width="880px"
       top="6vh"
       append-to-body
       :close-on-click-modal="false"
     >
       <div class="version-dialog-toolbar">
-        <span class="version-dialog-toolbar__tip">修改已用数据集时将创建新版本并保留旧版本</span>
         <el-button
           v-if="versionTarget"
           class="version-create-button"
@@ -652,29 +838,33 @@ onMounted(async () => {
         stripe
         max-height="62vh"
         style="width: 100%"
-        empty-text="暂无版本记录"
+        :empty-text="versionLoading ? '加载中…' : '暂无版本记录'"
       >
-        <el-table-column prop="dataset_version" label="版本" width="70" align="center">
+        <el-table-column prop="dataset_version" label="版本" min-width="80" align="center">
           <template #default="{ row }: { row: DatasetVersion }">
             <span class="version-badge" :class="row.enabled ? 'version-badge--on' : 'version-badge--off'">
               {{ row.dataset_version }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="record_count" label="样本数" width="90" align="right">
+        <el-table-column prop="record_count" label="样本数" min-width="100" align="right">
           <template #default="{ row }: { row: DatasetVersion }">
             {{ row.record_count.toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column prop="field_count" label="字段数" width="70" align="center" />
-        <el-table-column prop="uploaded_by" label="上传人" width="80" align="center" />
-        <el-table-column prop="uploaded_at" label="上传时间" min-width="150" />
-        <el-table-column prop="referenced" label="引用" width="70" align="center">
+        <el-table-column prop="field_count" label="字段数" min-width="90" align="center" />
+        <el-table-column prop="uploader_name" label="上传人" min-width="110" align="center">
+          <template #default="{ row }: { row: DatasetVersion }">
+            {{ row.uploader_name || '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="uploaded_at" label="上传时间" min-width="180" />
+        <el-table-column prop="referenced" label="引用" min-width="90" align="center">
           <template #default="{ row }: { row: DatasetVersion }">
             <span :class="row.referenced ? 'text-active' : 'text-muted'">{{ row.referenced ? '是' : '否' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" align="center" fixed="right">
+        <el-table-column label="操作" min-width="140" align="center" fixed="right">
           <template #default="{ row }: { row: DatasetVersion }">
             <div class="dataset-ops">
               <el-button
@@ -698,7 +888,6 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
-      <p class="version-tip">已被模型引用的数据集版本只能停用，不能物理删除；停用后不得用于新的模型训练。</p>
     </el-dialog>
   </div>
 </template>
@@ -802,6 +991,79 @@ onMounted(async () => {
 .dialog-loading p {
   margin: 0;
   color: rgba(220, 234, 255, 0.65);
+}
+
+/* AI 解析弹窗（与模型评价正文同款排版） */
+.ai-analysis__status,
+.ai-analysis__notice,
+.ai-analysis__empty {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: rgba(91, 166, 255, 0.08);
+  color: rgba(220, 234, 255, 0.72);
+  font-size: 0.84rem;
+}
+
+.ai-analysis__notice--error {
+  background: rgba(255, 123, 114, 0.1);
+  color: #ffaaa3;
+}
+
+.ai-analysis__reasoning {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 201, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 22, 40, 0.5);
+}
+
+.ai-analysis__reasoning-label {
+  margin-bottom: 6px;
+  color: rgba(154, 214, 255, 0.72);
+  font-size: 0.78rem;
+}
+
+.ai-analysis__reasoning-text {
+  max-height: 200px;
+  overflow: auto;
+  color: rgba(196, 214, 240, 0.66);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-analysis__markdown {
+  padding-top: 4px;
+  color: rgba(232, 241, 255, 0.88);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.ai-analysis__markdown :deep(h1),
+.ai-analysis__markdown :deep(h2),
+.ai-analysis__markdown :deep(h3) {
+  margin: 16px 0 8px;
+  color: #d9e8ff;
+  font-size: 1rem;
+}
+
+.ai-analysis__markdown :deep(p),
+.ai-analysis__markdown :deep(ul),
+.ai-analysis__markdown :deep(ol) {
+  margin: 7px 0;
+}
+
+.ai-analysis__markdown :deep(code) {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(8, 17, 31, 0.65);
+  color: #9ad6ff;
+}
+
+.ai-analysis__markdown :deep(strong) {
+  color: #eaf3ff;
 }
 
 /* 字段角色标签 */
@@ -1063,14 +1325,9 @@ onMounted(async () => {
 .version-dialog-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   margin-bottom: 12px;
-}
-
-.version-dialog-toolbar__tip {
-  font-size: 0.8rem;
-  color: rgba(220, 234, 255, 0.55);
 }
 </style>
 
@@ -1131,6 +1388,26 @@ onMounted(async () => {
 
 .dataset-center .el-dialog__body {
   padding: 20px 24px !important;
+}
+
+/* AI 解析弹窗（append-to-body，不在 .dataset-center 内）：弹窗本体固定不滚动，只有正文区域滚动 */
+.ai-analysis-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+  margin-bottom: 0 !important;
+  overflow: hidden;
+}
+
+.ai-analysis-dialog .el-dialog__header,
+.ai-analysis-dialog .el-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.ai-analysis-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Element Plus 按钮暗色 */

@@ -97,6 +97,7 @@ export interface Dataset {
   // ========== v2.0：数据集版本与状态（需求 2.3） ==========
   dataset_version: string;   // 最新版本号，如 v1
   uploaded_by: string;       // 上传人账号
+  uploader_name: string;     // 上传人展示名（用户名，非编号）
   uploaded_at: string;       // 上传时间
   enabled: boolean;          // 启用状态
   referenced: boolean;       // 是否已被模型版本引用（引用后只能停用，不能物理删除）
@@ -115,6 +116,7 @@ export interface DatasetVersion {
   field_count: number;
   fields: DatasetField[];
   uploaded_by: string;
+  uploader_name: string;        // 上传人展示名（用户名，非编号）
   uploaded_at: string;
   enabled: boolean;             // 启用状态（停用后不得用于新训练）
   referenced: boolean;          // 是否被模型版本引用

@@ -4,7 +4,7 @@
  * 将数据库返回结构映射为前端 Dataset / DatasetField / DataPreview 契约，
  * 供数据集中心、详情页、字段预览与数据预览使用。
  */
-import request, { unwrapData } from '@/utils/request';
+import request, { getCsrfToken, unwrapData } from '@/utils/request';
 import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
 import type {
   DataPreview,
@@ -27,6 +27,7 @@ interface ApiDataset {
   label_field: string;
   visibility?: string;
   uploaded_by: number | string;
+  uploader_name?: string | null;
   uploaded_at: string;
   status: string;
   name?: string;
@@ -190,6 +191,7 @@ export const mapApiDataset = (item: ApiDataset): Dataset => {
     data_format: inferFormat(item.file_path, item.data_format),
     dataset_version: `v${item.version}`,
     uploaded_by: String(item.uploaded_by ?? ''),
+    uploader_name: item.uploader_name ?? '',
     uploaded_at: formatUploadedAt(item.uploaded_at),
     enabled: item.enabled ?? item.status === 'ACTIVE',
     referenced: Boolean(item.referenced),
@@ -210,6 +212,7 @@ export const mapApiDatasetVersion = (item: ApiDataset): DatasetVersion => {
     field_count: base.field_count,
     fields: base.fields,
     uploaded_by: base.uploaded_by,
+    uploader_name: base.uploader_name,
     uploaded_at: base.uploaded_at,
     enabled: base.enabled,
     referenced: base.referenced,
@@ -480,3 +483,100 @@ export const removeDataset = async (datasetId: string | number): Promise<void> =
 
 export const deleteDatasetVersion = async (versionId: string | number): Promise<void> =>
   removeDataset(versionId);
+
+
+/** 数据集 AI 解析结果（读缓存，不触发 AI） */
+export interface DatasetAnalysisResponse {
+  dataset_id: number;
+  name: string;
+  available: boolean;
+  source?: 'ai' | 'fallback' | 'cached' | null;
+  markdown?: string | null;
+  generated_at?: string | null;
+}
+
+/** 读取已保存的数据集 AI 解析结果；没有历史时 available=false，由前端显示空状态。 */
+export const getDatasetAiAnalysis = async (
+  datasetId: string | number,
+): Promise<DatasetAnalysisResponse> => {
+  const pk = await resolveDatasetPk(datasetId);
+  return unwrapData(
+    await request.get(`/api/v1/datasets/${pk}/ai-analysis`)
+  ) as DatasetAnalysisResponse;
+};
+
+/** 数据集 AI 解析（算法适配）流式回调 */
+export interface DatasetAnalysisStreamHandlers {
+  onStart?: (data: Record<string, unknown>) => void;
+  /** 推理型模型的思维链，只用于展示「正在生成」 */
+  onReasoning?: (content: string) => void;
+  onDelta?: (content: string) => void;
+  onError?: (message: string) => void;
+  onDone?: (data: Record<string, unknown>) => void;
+}
+
+/**
+ * 流式生成数据集算法适配解析（POST /api/v1/datasets/{pk}/ai-analysis/stream）
+ *
+ * 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done，
+ * 期间可能先来一个 error 表示「AI 不可用，已降级规则模板」，其后仍会有正文与 done。
+ */
+export const streamDatasetAiAnalysis = async (
+  datasetId: string | number,
+  handlers: DatasetAnalysisStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> => {
+  const pk = await resolveDatasetPk(datasetId);
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+  const csrf = getCsrfToken();
+  const response = await fetch(`${baseUrl}/api/v1/datasets/${pk}/ai-analysis/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+    },
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    let message = `AI 解析请求失败（${response.status}）`;
+    try {
+      const payload = (await response.json()) as { message?: string };
+      if (payload?.message) message = String(payload.message);
+    } catch {
+      // 非 JSON 响应，保留默认文案
+    }
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (raw: string) => {
+    buffer += raw;
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? '';
+    for (const block of blocks) {
+      const event = block.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+      const dataText = block.match(/^data:\s*(.+)$/m)?.[1]?.trim();
+      if (!event || !dataText) continue;
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(dataText) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (event === 'start') handlers.onStart?.(data);
+      else if (event === 'reasoning' && typeof data.content === 'string') handlers.onReasoning?.(data.content);
+      else if (event === 'delta' && typeof data.content === 'string') handlers.onDelta?.(data.content);
+      else if (event === 'error') handlers.onError?.(String(data.message ?? 'AI 解析失败'));
+      else if (event === 'done') handlers.onDone?.(data);
+    }
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    consume(decoder.decode(value, { stream: true }));
+  }
+  consume(decoder.decode());
+};

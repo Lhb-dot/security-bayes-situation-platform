@@ -44,6 +44,9 @@ class Dataset(Base):
     )
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 数据集级 AI 解析产物（算法适配），与 model_version.ai_evaluation 同构：
+    # 按数据集缓存最近一次解析结果，打开弹窗时直接读，不重复调用 AI。
+    ai_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     scenario: Mapped["Scenario"] = relationship(back_populates="datasets")
     uploader: Mapped["AppUser"] = relationship(back_populates="datasets")
