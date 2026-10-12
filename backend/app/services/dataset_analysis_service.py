@@ -21,7 +21,12 @@ from app.models.dataset import Dataset
 from app.models.user_ai_setting import UserAISetting
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
-from app.services.constants import ALGORITHM_STATUS_AVAILABLE, dataset_display_name_of
+from app.services.constants import (
+    ALGORITHM_STATUS_AVAILABLE,
+    EVALUATION_AUDIENCE_MANAGEMENT,
+    dataset_display_name_of,
+    evaluation_audience,
+)
 from app.services.dataset_service import DatasetService
 from app.services.explanation_service import (
     _chunk_text,
@@ -290,7 +295,12 @@ def build_dataset_analysis_prompt(facts: dict[str, Any]) -> list[dict[str, str]]
 
 
 class DatasetAnalysisService(ServiceBase):
-    """数据集算法适配解析（登录用户可读，与数据集可见性一致）。"""
+    """数据集算法适配解析（登录用户可读，与数据集可见性一致）。
+
+    产物按受众分格（management / user），与研判解释、模型评价同一套机制：
+    场景用户重新生成时只覆盖 ``user`` 格，不会冲掉管理员看到的平台级解析。
+    产物记录 ``generated_by``，便于回溯是谁生成的。
+    """
 
     def _authorized_dataset(self, current_user, dataset_id: int) -> Dataset:
         self.require_login(current_user)
@@ -303,9 +313,15 @@ class DatasetAnalysisService(ServiceBase):
         return dataset
 
     @staticmethod
-    def _cached(dataset: Dataset) -> dict[str, Any]:
-        artifact = (getattr(dataset, "ai_analysis", None) or {}).get("latest")
-        return artifact if isinstance(artifact, dict) else {}
+    def _cached(dataset: Dataset, audience: str) -> dict[str, Any]:
+        """读取该受众那一格产物；历史单格 ``latest`` 视为管理层产物。"""
+        payload = getattr(dataset, "ai_analysis", None) or {}
+        if not isinstance(payload, dict):
+            return {}
+        slot = payload.get(audience)
+        if not isinstance(slot, dict) and audience == EVALUATION_AUDIENCE_MANAGEMENT:
+            slot = payload.get("latest")
+        return slot if isinstance(slot, dict) else {}
 
     @staticmethod
     def _is_current(artifact: dict[str, Any], facts: dict[str, Any]) -> bool:
@@ -315,19 +331,26 @@ class DatasetAnalysisService(ServiceBase):
     def _save(
         self,
         dataset: Dataset,
+        audience: str,
         markdown: str,
         source: str,
         facts: dict[str, Any],
+        *,
+        generated_by: int | None = None,
         ai_model: str | None = None,
     ) -> None:
         """整块 JSONB 读改写：先锁行再回写，避免并发解析互相覆盖。"""
         self.db.refresh(dataset, with_for_update=True)
         payload = dict(getattr(dataset, "ai_analysis", None) or {})
-        payload["latest"] = {
+        if audience == EVALUATION_AUDIENCE_MANAGEMENT:
+            # 写管理层产物时顺手清掉历史单格，避免遗留一份永不读取的旧数据。
+            payload.pop("latest", None)
+        payload[audience] = {
             "available": True,
             "markdown": markdown[:100_000],
             "source": source if source in {"ai", "fallback"} else "fallback",
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_by": generated_by,
             "model": ai_model,
             "prompt_version": DATASET_ANALYSIS_PROMPT_VERSION,
             "facts_snapshot": facts,
@@ -349,14 +372,16 @@ class DatasetAnalysisService(ServiceBase):
 
     @service_call
     def get_analysis(self, current_user, dataset_id: int):
-        """读取已保存的解析结果；没有则 available=false（前端据此显示空状态）。"""
+        """读取当前账号受众的已保存解析结果；没有则 available=false。"""
         dataset = self._authorized_dataset(current_user, dataset_id)
-        artifact = self._cached(dataset)
+        audience = evaluation_audience(getattr(current_user, "role", None))
+        artifact = self._cached(dataset, audience)
         markdown = artifact.get("markdown")
         return ok(
             data={
                 "dataset_id": dataset.id,
                 "name": dataset_display_name_of(dataset),
+                "audience": audience,
                 "available": bool(markdown),
                 "markdown": markdown or None,
                 "source": artifact.get("source"),
@@ -369,9 +394,11 @@ class DatasetAnalysisService(ServiceBase):
     ) -> Iterable[tuple[str, dict[str, Any]]]:
         """产出 SSE 事件：start → (reasoning | delta)* → done，error 表示已降级。"""
         dataset = self._authorized_dataset(current_user, dataset_id)
+        audience = evaluation_audience(getattr(current_user, "role", None))
+        generated_by = getattr(current_user, "id", None)
         facts = build_dataset_analysis_facts(self.db, dataset)
         yield "start", {"status": "开始解析数据集"}
-        cached = self._cached(dataset)
+        cached = self._cached(dataset, audience)
         # 事实未变且未要求重算时直接下发缓存，不再调用 AI。
         if not regenerate and self._is_current(cached, facts):
             for chunk in _chunk_text(str(cached["markdown"])):
@@ -381,7 +408,7 @@ class DatasetAnalysisService(ServiceBase):
         setting = self.db.get(UserAISetting, current_user.id)
         if setting is None or not setting.enabled:
             markdown = fallback_dataset_analysis(facts)
-            self._save(dataset, markdown, "fallback", facts)
+            self._save(dataset, audience, markdown, "fallback", facts, generated_by=generated_by)
             yield "error", {"message": "当前账号未配置可用的 AI 服务", "reason_code": "not_configured"}
             for chunk in _chunk_text(markdown):
                 yield "delta", {"content": chunk}
@@ -399,7 +426,15 @@ class DatasetAnalysisService(ServiceBase):
             markdown = "".join(parts).strip()
             if not markdown:
                 raise RuntimeError("empty AI response")
-            self._save(dataset, markdown, "ai", facts, ai_model=getattr(setting, "model", None))
+            self._save(
+                dataset,
+                audience,
+                markdown,
+                "ai",
+                facts,
+                generated_by=generated_by,
+                ai_model=getattr(setting, "model", None),
+            )
             yield "done", {"status": "数据集解析完成", "source": "ai"}
         except Exception as exc:  # noqa: BLE001
             reason_code, reason_message = _classify_ai_error(exc)
@@ -411,7 +446,15 @@ class DatasetAnalysisService(ServiceBase):
                 exc_info=(reason_code == "provider_error"),
             )
             markdown = fallback_dataset_analysis(facts)
-            self._save(dataset, markdown, "fallback", facts, ai_model=getattr(setting, "model", None))
+            self._save(
+                dataset,
+                audience,
+                markdown,
+                "fallback",
+                facts,
+                generated_by=generated_by,
+                ai_model=getattr(setting, "model", None),
+            )
             yield "error", {
                 "message": f"AI 解析未完成，已回退规则模板：{reason_message}",
                 "reason_code": reason_code,

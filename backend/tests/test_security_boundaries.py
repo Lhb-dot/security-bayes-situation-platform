@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from app.services.base import ServiceError
 from app.services.inference_record_service import InferenceRecordService
-from app.api.deps import get_current_session
+from app.api.deps import get_current_session, get_current_user
 from app.utils.auth import digest_token
 from app.services.explanation_service import AISettingService, _fernet
 
@@ -193,6 +193,46 @@ class AuthBoundaryTests(unittest.TestCase):
         self.assertEqual(response.code, 0)
         self.assertEqual(response.data["api_key_masked"], "sk-t...1234")
         self.assertNotIn("api_key", response.data)
+
+
+class RouteDependencyTests(unittest.TestCase):
+    """路由级门槛必须与服务层规则一致，否则会出现「服务层放行、路由层挡死」。"""
+
+    def test_inference_record_delete_is_open_to_any_logged_in_user(self):
+        import inspect
+
+        from app.api.v1.endpoints import inference_record_routes as module
+
+        dependency = inspect.signature(
+            module.delete_inference_record
+        ).parameters["current_user"].default
+        self.assertIs(dependency.dependency, get_current_user)
+
+    def test_adhoc_explanation_rejects_invisible_model(self):
+        from app.api.v1.endpoints.explanation_routes import stream_model_explanation
+        from app.schemas.explanation import ExplanationStreamRequest
+
+        class ModelDb:
+            def __init__(self, model):
+                self.model = model
+
+            def get(self, model_type, _identifier):
+                if getattr(model_type, "__name__", "") == "ModelVersion":
+                    return self.model
+                return None
+
+            def rollback(self):
+                pass
+
+        # 超管只能看自己训练的模型：该模型 trained_by 不是本人 → 403。
+        model = SimpleNamespace(id=5, scenario_id=2, trained_by=99, status="DRAFT", dataset_id=1)
+        payload = ExplanationStreamRequest(model_version_id=5)
+        response = stream_model_explanation(
+            payload,
+            current_user=user(7, "SUPER_ADMIN"),
+            db=ModelDb(model),
+        )
+        self.assertEqual(getattr(response, "status_code", None), 403)
 
 
 if __name__ == "__main__":

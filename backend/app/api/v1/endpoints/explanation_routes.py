@@ -16,6 +16,7 @@ from app.services.explanation_service import (
     stream_explanation,
 )
 from app.services.inference_record_service import InferenceRecordService
+from app.services.model_version_service import ModelVersionService
 
 router = APIRouter(tags=["模型解释"])
 
@@ -39,6 +40,14 @@ def stream_model_explanation(
             return unwrap(source_response)
         explanation = source_response.data
     else:
+        # 无推理记录时（临时样本）事实全来自请求体。若带了模型版本，
+        # 先校验调用者对该模型有查看权，避免绕过模型可见性去生成解释。
+        if payload.model_version_id is not None:
+            model_access = ModelVersionService(db).get(
+                current_user=current_user, model_id=payload.model_version_id
+            )
+            if model_access.code != 0:
+                return unwrap(model_access)
         scenario_payload = payload.scenario or {}
         scenario_code = scenario_payload.get("scenario_code") or scenario_payload.get("code")
         scenario = get_scenario_config(scenario_code)

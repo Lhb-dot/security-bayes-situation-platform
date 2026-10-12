@@ -2,12 +2,12 @@
 
 对应 Service：InferenceRecordService（backend/app/services/inference_record_service.py）。
 权限（需求 6.8/6.7.3）：执行推理 → 登录用户（仅 PUBLISHED 模型）；
-查看记录 → 登录用户（USER 仅本人）；删除 → 仅 ADMIN。
+查看记录 → 登录用户（USER 仅本人）；删除 → 能看见该记录的人都能删。
 """
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user
 from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
@@ -247,12 +247,12 @@ def get_inference_explain(
 @router.delete(
     "/{record_id}",
     response_model=ResponseModel,
-    summary="删除推理记录（仅平台超管 SUPER_ADMIN；已生成风险事件的记录禁止删除）",
+    summary="删除推理记录（能看见该记录的人都能删；已生成风险事件的记录禁止删除）",
 )
 def delete_inference_record(
     record_id: int,
     db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_admin),
+    current_user: AppUser = Depends(get_current_user),
 ):
     return unwrap(
         InferenceRecordService(db).delete(

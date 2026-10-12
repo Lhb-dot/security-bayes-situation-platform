@@ -65,8 +65,11 @@ const total = ref(0);
 /** 是否管理级（超管 ‖ 场景管理员），只用于描述文案 */
 const isManagement = computed(() => userStore.isManagement);
 
-/** 是否平台超管 —— 只有超管能删推理记录（后端走 require_admin，场景管理员会拿到 403） */
-const canDelete = computed(() => userStore.isSuperAdmin);
+/**
+ * 删除入口 —— 能看见该记录的人都能删（后端按记录可见性判定：超管/普通用户仅本人、
+ * 场景管理员本场景），所以登录用户一律显示。已生成风险事件的记录不展示入口。
+ */
+const canDelete = computed(() => !!userStore.currentUser);
 
 /** 场景数字 ID → 名称 */
 const SCENARIO_META: Record<number, { code: string; name: string }> = {
@@ -317,7 +320,7 @@ const goEventDetail = (r: InferenceRecordItem) => {
 const deletingId = ref<number | null>(null);
 
 /**
- * 删除推理记录（仅超管）。
+ * 删除推理记录（能看见该记录的人都能删）。
  *
  * 已生成风险事件的记录**不展示入口** —— 后端会直接拒绝（风险事件是审计对象，
  * 记录被删了事件就悬空了）。所以这里不是「点了才知道不行」，而是压根不给点。

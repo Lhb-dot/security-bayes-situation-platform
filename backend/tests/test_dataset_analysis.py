@@ -189,6 +189,37 @@ class DatasetAnalysisTests(unittest.TestCase):
         self.assertIn("### 不适用算法", markdown)
         self.assertIn("PMWNB", markdown)
 
+    def test_artifacts_are_split_by_audience(self):
+        """管理员与场景用户的产物互不覆盖，并各自记录生成者。"""
+        dataset = _dataset(NUMERIC_FIELDS)
+        db = FakeDb(dataset, algorithms=_algorithms())
+        admin = SimpleNamespace(id=7, role=ROLE_SCENARIO_ADMIN, scenario_id=3, status="ENABLED")
+        scene_user = SimpleNamespace(id=9, role="SCENARIO_USER", scenario_id=3, status="ENABLED")
+        with patch("app.services.dataset_service.DatasetService._count_records", return_value=0):
+            list(DatasetAnalysisService(db).stream(admin, 11))
+        self.assertIn("management", dataset.ai_analysis)
+        self.assertNotIn("user", dataset.ai_analysis)
+        admin_markdown = dataset.ai_analysis["management"]["markdown"]
+        with patch("app.services.dataset_service.DatasetService._count_records", return_value=0):
+            list(DatasetAnalysisService(db).stream(scene_user, 11))
+        self.assertEqual(dataset.ai_analysis["management"]["markdown"], admin_markdown)
+        self.assertTrue(dataset.ai_analysis["user"]["markdown"])
+        self.assertEqual(dataset.ai_analysis["user"]["generated_by"], 9)
+        self.assertEqual(dataset.ai_analysis["management"]["generated_by"], 7)
+
+    def test_legacy_latest_slot_reads_as_management_only(self):
+        """历史单格 latest 只对管理级账号可见，普通用户读不到。"""
+        dataset = _dataset(NUMERIC_FIELDS)
+        dataset.ai_analysis = {"latest": {"markdown": "旧产物", "source": "ai"}}
+        db = FakeDb(dataset, algorithms=_algorithms())
+        admin = SimpleNamespace(id=7, role=ROLE_SCENARIO_ADMIN, scenario_id=3, status="ENABLED")
+        scene_user = SimpleNamespace(id=9, role="SCENARIO_USER", scenario_id=3, status="ENABLED")
+        admin_view = DatasetAnalysisService(db).get_analysis(admin, 11)
+        self.assertTrue(admin_view.data["available"])
+        self.assertEqual(admin_view.data["markdown"], "旧产物")
+        user_view = DatasetAnalysisService(db).get_analysis(scene_user, 11)
+        self.assertFalse(user_view.data["available"])
+
 
 if __name__ == "__main__":
     unittest.main()
