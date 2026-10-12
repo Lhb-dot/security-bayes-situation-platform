@@ -3,7 +3,7 @@
  * ModelCenter - 模型中心
  *
  * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED）
- *  - 管理员：发布、禁用、删除、设置默认推荐模型
+ *  - 管理员：发布、禁用、删除、设置/取消推荐模型（推荐不唯一）
  *  - 场景用户：仅能看到已发布模型（需求 6.7.5）
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
@@ -18,7 +18,8 @@ import {
   enableModel,
   getModelVersionPage,
   publishModel,
-  setDefaultModel,
+  recommendModel,
+  unrecommendModel,
 } from '@/api/modelVersionApi';
 import type { BackendModelVersion } from '@/api/modelVersionApi';
 import {
@@ -200,13 +201,23 @@ const handleDelete = async (m: BackendModelVersion) => {
   }
 };
 
-const handleSetDefault = async (m: BackendModelVersion) => {
+const handleRecommend = async (m: BackendModelVersion) => {
   try {
-    await setDefaultModel(m.id);
-    ElMessage.success(`已将模型 ${m.id} 设为默认推荐模型`);
+    await recommendModel(m.id);
+    ElMessage.success(`已将模型 ${m.id} 设为推荐模型`);
     await loadModels();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '设置默认模型失败');
+    ElMessage.error(err instanceof Error ? err.message : '设为推荐模型失败');
+  }
+};
+
+const handleUnrecommend = async (m: BackendModelVersion) => {
+  try {
+    await unrecommendModel(m.id);
+    ElMessage.success(`已取消模型 ${m.id} 的推荐`);
+    await loadModels();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '取消推荐失败');
   }
 };
 
@@ -366,8 +377,6 @@ const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) =
   const value = Number(model.evaluation_metrics?.[key]);
   return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
 };
-
-const canPublish = (model: BackendModelVersion) => currentUser.value?.id === model.trained_by;
 
 // 模型评价独立于推理记录：先读模型快照，只有需要生成时才调用 AI。
 // 管理员视角与用户视角在后端是两份独立产物，前端按视角分桶缓存，切标签时互不覆盖。
@@ -889,9 +898,9 @@ onMounted(async () => {
             <h3 class="model-card__id">模型 #{{ model.id }}</h3>
             <span class="model-card__scenario-tag">{{ model.scenario_name || scenarioLabel[model.scenario_code || ''] || model.scenario_code || model.scenario_id }}</span>
             <span
-              v-if="model.is_default"
+              v-if="model.is_recommended"
               class="model-card__default-tag"
-            >默认推荐</span>
+            >推荐</span>
           </div>
           <div class="model-card__header-right">
             <button class="card-chip-btn" @click.stop="openModelEvaluation(model)">AI 评价</button>
@@ -956,20 +965,23 @@ onMounted(async () => {
 
         <!-- 管理员操作区 -->
         <div v-if="isManagement" class="model-card__footer">
-          <template v-if="model.status === 'DRAFT' && canPublish(model)">
+          <template v-if="model.status === 'DRAFT'">
             <button class="op-btn op-btn--publish" @click.stop="handlePublish(model)">发布模型</button>
-          </template>
-          <template v-else-if="model.status === 'DRAFT'">
-            <span class="model-card__failed-tip">仅训练人可发布</span>
           </template>
           <template v-else-if="model.status === 'PUBLISHED'">
             <button
+              v-if="!model.is_recommended"
               class="op-btn"
-              :disabled="model.is_default"
-              :title="model.is_default ? '当前已是默认推荐模型' : ''"
-              @click.stop="handleSetDefault(model)"
+              @click.stop="handleRecommend(model)"
             >
-              设为默认推荐
+              设为推荐
+            </button>
+            <button
+              v-else
+              class="op-btn"
+              @click.stop="handleUnrecommend(model)"
+            >
+              取消推荐
             </button>
             <button class="op-btn op-btn--danger" @click.stop="handleDisable(model)">禁用</button>
           </template>

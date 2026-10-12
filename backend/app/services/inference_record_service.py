@@ -32,8 +32,6 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     ADMIN_ROLES,
     DATASET_RISK_TYPES,
-    DATASET_VISIBILITY_COMPANY,
-    DATASET_VISIBILITY_PLATFORM,
     EVALUATION_AUDIENCE_MANAGEMENT,
     EVALUATION_AUDIENCE_USER,
     INFERENCE_ALLOWED_MODEL_STATUSES,
@@ -58,11 +56,6 @@ logger = get_logger("inference_record")
 
 #: fields_schema 里表示数值的 type 取值（与 dataset_file_reader 的约定一致）
 _NUMERIC_TYPES = {"numeric", "real", "float", "double", "integer", "int"}
-
-#: 管理级角色（场景管理员 / 推理记录查看）可用的数据集可见性口径。
-#: 与 constants.DATASET_VISIBILITY_* 同名同值，集中一处避免多处硬编码 "platform"/"company"。
-_INFERABLE_VISIBILITIES = (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
-
 
 def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
     """按字段类型把 CSV 里的字符串转成推理服务期望的类型。
@@ -245,22 +238,8 @@ class InferenceRecordService(ServiceBase):
         return result
 
     def _can_infer_from_model(self, current_user, model: ModelVersion, dataset: Dataset) -> bool:
-        """Enforce model scenario and dataset-visibility boundaries before inference."""
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SUPER_ADMIN:
-            return self.is_platform_visibility(dataset.visibility)
-        if role == ROLE_SCENARIO_ADMIN:
-            return (
-                model.scenario_id == getattr(current_user, "scenario_id", None)
-                and dataset.visibility in _INFERABLE_VISIBILITIES
-            )
-        return (
-            model.scenario_id == getattr(current_user, "scenario_id", None)
-            and (
-                dataset.visibility in _INFERABLE_VISIBILITIES
-                or dataset.uploaded_by == getattr(current_user, "id", None)
-            )
-        )
+        """推理前置校验：模型可见性走集中式策略（数据集参数保留以兼容签名）。"""
+        return self.authz.can_view_model(current_user, model)
 
     def _resolve_target(self, current_user, model_version_id: int) -> tuple:
         """解析并校验推理目标，返回 (model, dataset)。
@@ -762,33 +741,12 @@ class InferenceRecordService(ServiceBase):
     # 查询（需求 6.8：USER 仅本人；ADMIN 全部）
     # ------------------------------------------------------------------
     def _require_record_access(self, current_user, record: InferenceRecord) -> None:
-        """推理记录访问控制（需求 0.2 / 6.8）。
+        """推理记录访问控制（走集中式策略，需求 0.2 / 6.8）：
 
-        - SUPER_ADMIN：仅 platform 数据集派生模型的推理记录
-        - SCENARIO_ADMIN：仅绑定场景
-        - SCENARIO_USER：仅本人
+        SUPER_ADMIN / SCENARIO_USER 仅本人记录；SCENARIO_ADMIN 本场景全部。
         """
         self.require_login(current_user)
-        role = getattr(current_user, "role", None)
-        model = self.db.get(ModelVersion, record.model_version_id)
-        if model is None:
-            raise ServiceError(404, "关联模型不存在")
-        if role == ROLE_SUPER_ADMIN:
-            dataset = self.db.get(Dataset, model.dataset_id)
-            if dataset is None or not self.is_platform_visibility(dataset.visibility):
-                raise ServiceError(403, "无权限操作")
-            return
-        if role == ROLE_SCENARIO_ADMIN:
-            dataset = self.db.get(Dataset, model.dataset_id)
-            if (
-                model.scenario_id != getattr(current_user, "scenario_id", None)
-                or dataset is None
-                or dataset.visibility not in _INFERABLE_VISIBILITIES
-            ):
-                raise ServiceError(403, "无权限操作")
-            return
-        if record.user_id != getattr(current_user, "id", None):
-            raise ServiceError(403, "无权限操作")
+        self.authz.require_view_record(current_user, record)
 
     @service_call
     def get_list(
@@ -800,28 +758,13 @@ class InferenceRecordService(ServiceBase):
     ):
         """推理记录列表。
 
-        - SUPER_ADMIN：仅 platform 数据集派生记录；
-        - SCENARIO_ADMIN：自己场景全部记录；
-        - SCENARIO_USER：强制按 user_id 过滤（后端强制，需求 6.8.2）。
+        可见性一律由 :meth:`Authz.scope_records` 追加条件：
+        - SUPER_ADMIN / SCENARIO_USER：仅本人记录（需求 6.8.2）；
+        - SCENARIO_ADMIN：本场景全部记录。
         """
         self.require_login(current_user)
-        role = getattr(current_user, "role", None)
         stmt = select(InferenceRecord)
-        if role == ROLE_SUPER_ADMIN:
-            stmt = (
-                stmt.join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id)
-                .join(Dataset, Dataset.id == ModelVersion.dataset_id)
-                .where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
-            )
-        elif role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.join(
-                ModelVersion, ModelVersion.id == InferenceRecord.model_version_id
-            ).join(Dataset, Dataset.id == ModelVersion.dataset_id).where(
-                ModelVersion.scenario_id == getattr(current_user, "scenario_id", None),
-                Dataset.visibility.in_(_INFERABLE_VISIBILITIES),
-            )
-        else:
-            stmt = stmt.where(InferenceRecord.user_id == current_user.id)
+        stmt = self.authz.scope_records(stmt, current_user)
         if model_version_id is not None:
             stmt = stmt.where(InferenceRecord.model_version_id == model_version_id)
         stmt = stmt.order_by(InferenceRecord.executed_at.desc())
@@ -939,19 +882,15 @@ class InferenceRecordService(ServiceBase):
         })
 
     # ------------------------------------------------------------------
-    # 删除（仅平台超管 SUPER_ADMIN；已生成风险事件的记录禁止删除，保持可追溯）
+    # 删除（有权限看到即可删；已生成风险事件的记录禁止删除，保持可追溯）
     # ------------------------------------------------------------------
     @service_call
     def delete(self, current_user, record_id: int):
-        """删除推理记录（仅平台超管 SUPER_ADMIN）。
+        """删除推理记录（有权限看到的人都能删，2026-10 定稿）。
 
         已生成风险事件的推理记录禁止删除（风险事件依赖推理记录外键且需保持可追溯，
         需求 5.2 访问控制第 4 条）。
         """
-        # require_admin 只认 SUPER_ADMIN，所以 _require_record_access 里的 SCENARIO_ADMIN /
-        # 普通用户分支在删除路径上不可达 —— 它在 get / get_explain 等 5 个方法上共用，
-        # 那两个分支在别处是活的，不要因为这里读不到就把它们删掉。
-        self.require_admin(current_user)
         record = self._get(record_id)
         self._require_record_access(current_user, record)
         event_exists = self.db.scalar(

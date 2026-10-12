@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.schemas.common import fail
+from app.security.policy import Authz
 from app.services.constants import (
     DATASET_VISIBILITY_PLATFORM,
     ROLE_SCENARIO_ADMIN,
@@ -105,6 +106,8 @@ class ServiceBase:
 
     def __init__(self, db: Session):
         self.db = db
+        # 集中式鉴权判定器：所有数据可见性判定一律走 self.authz（见 app/security/policy.py）
+        self.authz = Authz(db)
 
     # ------------------------------------------------------------------
     # 权限检查（需求文档 6.5.2 权限矩阵 + 5.2 访问控制）
@@ -162,21 +165,14 @@ class ServiceBase:
 
         - SUPER_ADMIN：可访问全部场景元数据与平台预置数据相关能力；
         - SCENARIO_ADMIN / SCENARIO_USER：仅可访问本人绑定场景。
+
+        判定逻辑集中在 :meth:`Authz.can_access_scenario`（场景严格隔离）。
         """
-        self.require_login(user)
-        if getattr(user, "role", None) == ROLE_SUPER_ADMIN:
-            return
-        if getattr(user, "scenario_id", None) == scenario_id:
-            return
-        raise ServiceError(403, "无权限操作")
+        self.authz.require_scenario_access(user, scenario_id)
 
     def can_access_scenario(self, user: Optional[object], scenario_id: int) -> bool:
         """判断当前用户是否可访问指定场景（不抛异常）。"""
-        if user is None or getattr(user, "status", None) != USER_STATUS_ENABLED:
-            return False
-        if getattr(user, "role", None) == ROLE_SUPER_ADMIN:
-            return True
-        return getattr(user, "scenario_id", None) == scenario_id
+        return self.authz.can_access_scenario(user, scenario_id)
 
     @staticmethod
     def is_platform_visibility(visibility: Optional[str]) -> bool:

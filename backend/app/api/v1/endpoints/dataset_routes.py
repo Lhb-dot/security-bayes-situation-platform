@@ -16,7 +16,12 @@ from app.api.utils import unwrap
 from app.db import get_db
 from app.models.app_user import AppUser
 from app.schemas.common import ResponseModel
-from app.schemas.dataset import DatasetAnalysisRequest, DatasetCreate, DatasetUpdate
+from app.schemas.dataset import (
+    DatasetAnalysisRequest,
+    DatasetCreate,
+    DatasetRevisionRequest,
+    DatasetUpdate,
+)
 from app.services.dataset_analysis_service import DatasetAnalysisService
 from app.services.dataset_service import DatasetService
 
@@ -100,7 +105,7 @@ def get_dataset_preview(
 
 
 @router.post(
-    "", response_model=ResponseModel, summary="上传数据集（场景用户仅可上传个人数据，版本号自动生成）"
+    "", response_model=ResponseModel, summary="上传数据集（数据级别由上传者角色决定，版本号自动生成）"
 )
 def create_dataset(
     payload: DatasetCreate,
@@ -116,7 +121,6 @@ def create_dataset(
             file_path=payload.file_path,
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
-            visibility=payload.visibility,
         )
     )
 
@@ -132,7 +136,6 @@ async def upload_dataset(
     scenario_id: int = Form(..., description="所属场景 ID"),
     label_field: str = Form(..., description="标签字段名"),
     name: str | None = Form(None, description="数据集展示名（面向用户的中文名，可缺省）"),
-    visibility: str | None = Form(None, description="可见性 platform/company/personal"),
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):
@@ -146,7 +149,6 @@ async def upload_dataset(
             label_field=label_field,
             filename=file.filename or "",
             file_bytes=file_bytes,
-            visibility=visibility,
         )
     )
 
@@ -169,6 +171,74 @@ def update_dataset(
             file_path=payload.file_path,
             fields_schema=payload.fields_schema,
             label_field=payload.label_field,
+        )
+    )
+
+
+@router.post(
+    "/{dataset_id}/revisions",
+    response_model=ResponseModel,
+    summary="数据集迭代（仅管理员；是否新建版本由迭代类型与引用状态决定）",
+)
+def revise_dataset(
+    dataset_id: int,
+    payload: DatasetRevisionRequest,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    """统一迭代入口：字段变更 / 追加样本 / 元数据变更都走这里。
+
+    产物（原地更新 or 新建版本）由 DatasetService 按 dataset_iteration 策略决定。
+    """
+    return unwrap(
+        DatasetService(db).revise(
+            current_user=current_user,
+            dataset_id=dataset_id,
+            change_type=payload.change_type,
+            file_path=payload.file_path,
+            fields_schema=payload.fields_schema,
+            label_field=payload.label_field,
+            name=payload.name,
+            summary=payload.summary,
+        )
+    )
+
+
+@router.post(
+    "/{dataset_id}/revisions/append",
+    response_model=ResponseModel,
+    summary="追加样本（仅管理员；增量文件需与当前数据集同结构）",
+)
+async def append_dataset_rows(
+    dataset_id: int,
+    file: UploadFile = File(..., description="增量文件（.arff / .csv，与当前数据集同结构）"),
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(require_scenario_admin),
+):
+    file_bytes = await file.read()
+    return unwrap(
+        DatasetService(db).append_rows(
+            current_user=current_user,
+            dataset_id=dataset_id,
+            filename=file.filename or "",
+            file_bytes=file_bytes,
+        )
+    )
+
+
+@router.get(
+    "/{dataset_id}/revisions",
+    response_model=ResponseModel,
+    summary="数据集迭代历史（登录用户，按数据集可见性）",
+)
+def list_dataset_revisions(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
+):
+    return unwrap(
+        DatasetService(db).get_revisions(
+            current_user=current_user, dataset_id=dataset_id
         )
     )
 

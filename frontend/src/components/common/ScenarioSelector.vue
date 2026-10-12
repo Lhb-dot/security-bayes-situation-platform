@@ -56,11 +56,10 @@ const syncScenarios = () => {
 };
 
 /** 选项列表：默认"所有场景"为第一项 + 场景列表。
- * 管理员（SCENARIO_ADMIN）只显示自己场景，不显示"所有场景"。 */
+ * 只有系统管理员能跨场景筛选；场景管理员/用户只在自己场景内，不显示"所有场景"。 */
 const options = computed<{ value: ScenarioId | 'all'; label: string }[]>(() => {
-  const role = userStore.currentUser?.role;
   const list: { value: ScenarioId | 'all'; label: string }[] = [];
-  if (props.showAll !== false && role !== 'SCENARIO_ADMIN') {
+  if (props.showAll !== false && userStore.isSuperAdmin) {
     list.push({ value: 'all', label: '所有场景' });
   }
   if (props.showAll !== false) {

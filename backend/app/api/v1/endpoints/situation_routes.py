@@ -46,7 +46,7 @@ def get_my_situation(
 @router.get(
     "/global",
     response_model=ResponseModel,
-    summary="平台总览态势统计（仅管理员；仅 platform 派生事件）",
+    summary="平台总览态势统计（仅系统管理员；平台全量聚合，不含事件明细）",
 )
 def get_global_situation(
     db: Session = Depends(get_db),

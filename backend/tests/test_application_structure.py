@@ -8,7 +8,7 @@ from app.main import app
 
 
 class ApplicationStructureTests(unittest.TestCase):
-    def test_current_and_legacy_routes_are_registered(self):
+    def test_current_routes_are_registered(self):
         paths = app.openapi()["paths"]
         expected = {
             "/api/v1/auth/login",
@@ -19,14 +19,6 @@ class ApplicationStructureTests(unittest.TestCase):
             "/api/v1/risk-thresholds",
             "/api/v1/reports",
             "/api/v1/situation/global",
-            "/china-map.json",
-            "/api/model/dataset-list",
-            "/api/model/save-threshold",
-            "/api/model/train",
-            "/api/model/infer",
-            "/api/model/exp-records",
-            "/api/model/exp/{record_id}",
-            "/api/model/risk_statistics",
         }
         self.assertTrue(expected.issubset(paths))
 

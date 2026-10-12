@@ -23,10 +23,6 @@ class DatasetCreate(BaseModel):
         ..., min_length=1, description="字段结构定义（含 label 与至少一个 feature）"
     )
     label_field: str = Field(..., min_length=1, max_length=64, description="标签字段名")
-    visibility: Optional[str] = Field(
-        None,
-        description="可见性（数据所有权分级）：platform=平台（最外层）/ company=公司（场景管理员）/ personal=个人（场景用户）。缺省按上传者角色",
-    )
 
 
 class DatasetUpdate(BaseModel):
@@ -37,6 +33,30 @@ class DatasetUpdate(BaseModel):
         None, description="字段结构定义"
     )
     label_field: Optional[str] = Field(None, max_length=64, description="标签字段名")
+
+
+class DatasetRevisionRequest(BaseModel):
+    """数据集迭代请求（POST /api/v1/datasets/{dataset_id}/revisions）。
+
+    change_type 决定迭代语义与产物（见 app/services/dataset_iteration.py）：
+    - schema_change / label_change：破坏结构兼容，必然新建版本；
+    - append_rows / update_rows / resample / replace_file：兼容迭代，
+      未被模型引用时原地更新（版本号不变），已引用时新建版本冻结旧文件；
+    - metadata：仅改名称等元数据，不触碰数据文件（可见性由上传者角色固定，不可改）。
+    """
+
+    change_type: str = Field(
+        ..., min_length=1, max_length=24, description="迭代类型（见 dataset_iteration）"
+    )
+    file_path: Optional[str] = Field(
+        None, max_length=255, description="文件路径（文件类迭代）"
+    )
+    fields_schema: Optional[List[Dict[str, Any]]] = Field(
+        None, description="字段结构定义（结构类迭代）"
+    )
+    label_field: Optional[str] = Field(None, max_length=64, description="标签字段名")
+    name: Optional[str] = Field(None, max_length=128, description="数据集名称（元数据迭代）")
+    summary: Optional[str] = Field(None, max_length=255, description="迭代摘要")
 
 
 class DatasetAnalysisRequest(BaseModel):

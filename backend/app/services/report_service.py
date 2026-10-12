@@ -14,7 +14,7 @@ report 表承载，此处 ReportService 即"实验记录/报表"能力的实现�
 3. 场景用户（SCENARIO_USER）：只能统计本人的个人数据（scope 强制为 self）。
 4. 个人数据 = 当前账号自己产生的推理记录与风险事件（scope=self）。
 5. 报告不再包含模型版本评价（模型评价在模型中心单独查看/导出），避免把缓存的 AI 评价文本混入报告。
-6. 查看范围：普通用户只能看本人生成的报告；管理员看其管理范围内的报告。
+6. 查看范围：报告相互独立，所有角色都只能看**本人**生成的报告（2026-10 定稿）。
 7. 定时报告（scheduled=True）：报告本身就是定时任务的载体，跟随账号（generated_by）
    存在；创建时立刻产出第一份内容，之后由后台调度器按 next_run_at 原地重新生成，
    删除报告即删除定时任务。调度器见 app/services/report_scheduler.py。
@@ -22,7 +22,7 @@ report 表承载，此处 ReportService 即"实验记录/报表"能力的实现�
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import false, func, or_, select, type_coerce
+from sqlalchemy import func, select, type_coerce
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import load_only
 
@@ -136,13 +136,6 @@ class ReportService(ServiceBase):
                 data["scenario_code"] = scenario.code
                 data["scenario_name"] = scenario.name
         return data
-
-    @staticmethod
-    def _can_view(user, report: Report) -> bool:
-        return (
-            report.generated_by == user.id
-            or report.target_user_id == user.id
-        )
 
     def _resolve_generation_scope(
         self,
@@ -978,45 +971,27 @@ class ReportService(ServiceBase):
     ):
         """报告列表（按三级角色隔离）。
 
-        系统管理员：全部报告；
-        场景管理员：自己绑定场景下的报告；
-        场景用户：本人生成的报告。
+        报告相互独立：所有角色都只看到**本人**生成的报告（2026-10 定稿）。
         """
         self.require_login(current_user)
-        role = getattr(current_user, "role", None)
         stmt = select(Report)
-        if role == ROLE_SCENARIO_ADMIN:
-            scid = getattr(current_user, "scenario_id", None)
-            if scid is None:
-                stmt = stmt.where(false())  # 未绑定场景：看不到任何报告
-            else:
-                stmt = stmt.where(Report.scenario_id == scid)
-        elif role != ROLE_SUPER_ADMIN:
-            stmt = stmt.where(
-                or_(
-                    Report.generated_by == current_user.id,
-                    Report.target_user_id == current_user.id,
-                )
-            )
+        stmt = self.authz.scope_reports(stmt, current_user)
         stmt = stmt.order_by(Report.generated_at.desc())
         result = paginate(self.db, stmt, page, page_size)
         result["items"] = [self._serialize(r, include_summary=False) for r in result["items"]]
         return ok(data=result)
 
     def _load_visible(self, current_user, report_id: int):
-        """按三级角色取一条可见的报告，不可见则抛 403（详情与导出共用）。"""
+        """取一条本人可见的报告，不可见则抛 403（详情与导出共用）。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and not self._can_view(current_user, report):
+        if not self.authz.can_view_report(current_user, report):
             raise ServiceError(403, "无权限操作")
         return report
 
     @service_call
     def get(self, current_user, report_id: int):
-        """报告详情（普通用户仅本人生成或定向给自己的报告）。"""
+        """报告详情（仅本人生成的报告）。"""
         report = self._load_visible(current_user, report_id)
         return ok(data=self._serialize(report, include_report_data=True))
 
@@ -1216,10 +1191,7 @@ class ReportService(ServiceBase):
         """
         self.require_login(current_user)
         report = self._get(report_id)
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and report.generated_by != current_user.id:
+        if report.generated_by != current_user.id:
             raise ServiceError(403, "只有报告创建者可以修改定时配置")
         if scheduled and (interval_days is None or interval_days < 1):
             raise ServiceError(400, "定时生成需指定有效周期（至少 1 天）")
@@ -1335,17 +1307,14 @@ class ReportService(ServiceBase):
         return nxt
 
     # ------------------------------------------------------------------
-    # 删除（生成者本人或 ADMIN）
+    # 删除（仅生成者本人）
     # ------------------------------------------------------------------
     @service_call
     def delete(self, current_user, report_id: int):
-        """删除报告：生成者本人或管理员。"""
+        """删除报告：仅生成者本人（报告相互独立）。"""
         self.require_login(current_user)
         report = self._get(report_id)
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SCENARIO_ADMIN and report.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        if role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN) and report.generated_by != current_user.id:
+        if report.generated_by != current_user.id:
             raise ServiceError(403, "无权限操作")
         self.db.delete(report)
         self.commit()

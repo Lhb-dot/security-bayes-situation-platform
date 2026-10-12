@@ -62,11 +62,11 @@ class SecurityBoundaryTests(unittest.TestCase):
             service._require_record_access(user(9, "SCENARIO_ADMIN", 11), self.record)
         self.assertEqual(ctx.exception.code, 403)
 
-    def test_super_admin_cannot_read_company_dataset_records(self):
+    def test_super_admin_can_only_read_own_records(self):
         service = self.service(self.platform_dataset)
-        service._require_record_access(user(1, "SUPER_ADMIN"), self.record)
+        service._require_record_access(user(7, "SUPER_ADMIN"), self.record)
         with self.assertRaises(ServiceError) as ctx:
-            self.service(self.company_dataset)._require_record_access(user(1, "SUPER_ADMIN"), self.record)
+            service._require_record_access(user(1, "SUPER_ADMIN"), self.record)
         self.assertEqual(ctx.exception.code, 403)
 
     def test_disabled_or_missing_user_is_rejected(self):

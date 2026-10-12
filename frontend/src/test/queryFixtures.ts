@@ -27,5 +27,5 @@ export const user = (id = 'a'): UserAccount => ({
 export const model = (id = 1, datasetId = 1, extras: Partial<BackendModelVersion> = {}): BackendModelVersion => ({
   id, model_version_id: id, scenario_id: 1, dataset_id: datasetId, dataset_version: 1,
   algorithm_id: 1, algorithm_name: `算法${id}`, training_parameters: {}, evaluation_metrics: {},
-  trained_by: 1, trained_at: '2026-10-11 00:00:00', status: 'PUBLISHED', is_default: false, ...extras,
+  trained_by: 1, trained_at: '2026-10-11 00:00:00', status: 'PUBLISHED', is_recommended: false, ...extras,
 });

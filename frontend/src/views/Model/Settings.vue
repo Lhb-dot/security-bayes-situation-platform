@@ -31,7 +31,7 @@ const settingsStore = useSettingsStore();
 const router = useRouter();
 /** 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据） */
 const currentUser = computed<UserAccount | null>(() => userStore.currentUser);
-const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN');
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 /** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
 const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
 

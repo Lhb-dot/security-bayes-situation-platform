@@ -1,7 +1,9 @@
 """模型版本表 model_version —— 记录每次训练生成的模型版本。
 
-对应《数据库设计文档v2》2.5。包含部分唯一索引 uk_mv_default：
-同一（scenario_id, dataset_id）最多一条 is_default = true。
+对应《数据库设计文档v2》2.5。
+
+推荐模型：`is_recommended` 仅表示「这是本场景推荐使用的模型」，与「默认」无关，
+不设唯一约束 —— 同一（scenario_id, dataset_id）可以同时推荐多个模型（2026-10 定稿）。
 """
 from datetime import datetime
 
@@ -10,9 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
-    Index,
     String,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,15 +22,6 @@ from app.db import Base
 
 class ModelVersion(Base):
     __tablename__ = "model_version"
-    __table_args__ = (
-        Index(
-            "uk_mv_default",
-            "scenario_id",
-            "dataset_id",
-            unique=True,
-            postgresql_where=text("is_default"),
-        ),
-    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     scenario_id: Mapped[int] = mapped_column(
@@ -59,7 +50,7 @@ class ModelVersion(Base):
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_recommended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     scenario: Mapped["Scenario"] = relationship(back_populates="model_versions")
     dataset: Mapped["Dataset"] = relationship(back_populates="model_versions")

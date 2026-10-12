@@ -297,8 +297,8 @@ class DatasetAnalysisService(ServiceBase):
         dataset = self.db.get(Dataset, dataset_id)
         if dataset is None:
             raise ServiceError(404, "数据集不存在")
-        # 复用数据集自身的可见性规则，避免两处口径漂移。
-        if not DatasetService(self.db)._can_view_dataset(current_user, dataset):
+        # 复用集中式可见性规则，避免两处口径漂移。
+        if not self.authz.can_view_dataset(current_user, dataset):
             raise ServiceError(403, "无权限操作")
         return dataset
 

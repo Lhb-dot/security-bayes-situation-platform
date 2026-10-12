@@ -2,8 +2,9 @@
 
 对应 Service：RiskEventService（backend/app/services/risk_event_service.py）。
 权限（需求 5.2/6.5.2）：查看/处置 → 登录用户（普通用户仅本人事件，后端强制按
-created_by_user_id 过滤）；删除 → 禁止（历史事件必须保持可追溯，Service 返回 400）；
-隐藏 → 软删除（POST /{id}/hide、/{id}/unhide），数据一行不动，只切可见性。
+created_by_user_id 过滤；场景管理员可见本场景全部）；**不提供删除**（历史事件必须
+保持可追溯，需求 5.2）；隐藏 → 软隐藏（POST /{id}/hide、/{id}/unhide），
+数据一行不动，只切可见性。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -104,21 +105,6 @@ def comment_risk_event(
             event_id=event_id,
             comment=payload.comment,
         )
-    )
-
-
-@router.delete(
-    "/{event_id}",
-    response_model=ResponseModel,
-    summary="删除风险事件（禁止：历史事件必须保持可追溯，需求 5.2）",
-)
-def delete_risk_event(
-    event_id: int,
-    db: Session = Depends(get_db),
-    current_user: AppUser = Depends(get_current_user),
-):
-    return unwrap(
-        RiskEventService(db).delete(current_user=current_user, event_id=event_id)
     )
 
 

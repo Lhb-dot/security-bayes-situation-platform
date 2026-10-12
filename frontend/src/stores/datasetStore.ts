@@ -125,6 +125,12 @@ export const useDatasetStore = defineStore('dataset', () => {
     await fetchVersions(datasetId);
     return version;
   };
+  /** 追加样本：增量文件与当前数据集同结构；是否新开版本由后端迭代策略决定。 */
+  const appendRows = async (datasetId: string, file: File): Promise<DatasetVersion> => {
+    const version = await datasetApi.appendDatasetRows(datasetId, file);
+    await fetchVersions(datasetId);
+    return version;
+  };
   const disableVersion = async (versionId: string): Promise<void> => {
     await datasetApi.disableDatasetVersion(versionId);
     await fetchVersions();
@@ -135,5 +141,6 @@ export const useDatasetStore = defineStore('dataset', () => {
   };
 
   return { datasets, fields, versions, preview, queries, loading, datasetsByScenario, resetQueries,
-    fetchDatasets, fetchFields, fetchPreview, fetchVersions, uploadDataset, createVersion, disableVersion, removeVersion };
+    fetchDatasets, fetchFields, fetchPreview, fetchVersions, uploadDataset, createVersion, appendRows,
+    disableVersion, removeVersion };
 });

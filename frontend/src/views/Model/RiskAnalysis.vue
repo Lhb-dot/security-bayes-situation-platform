@@ -38,8 +38,8 @@ const userStore = useUserStore();
 // 直接读 store getter，不再在 onMounted 里拷一份 ref 快照：快照只有在
 // 「main.ts 先 await bootstrap() 再装路由」这条隐式顺序成立时才对，
 // 顺序一旦变化（或组件在别处被提前挂载）就会把管理员误判成场景用户。
-const currentUser = computed(() => userStore.currentUser);
 const isManagement = computed(() => userStore.isManagement);
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
 // ===================== 场景（数据库） =====================
 const scenarios = ref<ScenarioRow[]>([]);
@@ -282,7 +282,7 @@ onMounted(async () => {
 
         <!-- 业务场景（数据库注册）：系统管理员可选全部；场景管理员的场景由账号绑定，不显示 -->
         <div
-          v-if="currentUser?.role !== 'SCENARIO_ADMIN' && scenarioOptions.length"
+          v-if="isSuperAdmin && scenarioOptions.length"
           class="train-section"
         >
           <span class="section-label">业务场景</span>

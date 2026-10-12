@@ -101,6 +101,15 @@ export interface Dataset {
   uploaded_at: string;       // 上传时间
   enabled: boolean;          // 启用状态
   referenced: boolean;       // 是否已被模型版本引用（引用后只能停用，不能物理删除）
+  // ========== v3.x：数据集迭代元数据（见后端 dataset_iteration） ==========
+  /** 本版本的产生方式：create / schema_change / append_rows / metadata … */
+  change_type?: string | null;
+  /** 迭代类型中文名，由后端下发，前端直接展示 */
+  change_type_label?: string | null;
+  /** 是否破坏结构兼容（旧模型能否复用本版本） */
+  is_breaking?: boolean;
+  /** 血缘：本版本从哪一版迭代而来（初次登记为 null） */
+  base_version_id?: number | null;
 }
 
 /** 数据集版本（需求 2.3.4） */
@@ -120,6 +129,14 @@ export interface DatasetVersion {
   uploaded_at: string;
   enabled: boolean;             // 启用状态（停用后不得用于新训练）
   referenced: boolean;          // 是否被模型版本引用
+  /** 本版本的产生方式（迭代类型） */
+  change_type?: string | null;
+  /** 迭代类型中文名 */
+  change_type_label?: string | null;
+  /** 是否破坏结构兼容 */
+  is_breaking?: boolean;
+  /** 血缘：从哪一版迭代而来 */
+  base_version_id?: number | null;
 }
 
 /** 模型生命周期状态（需求 6.7.2） */

@@ -52,9 +52,6 @@ from app.services.constants import (
     DATASET_POSITIVE_LABELS,
     DATASET_RISK_TYPES,
     DATASET_STATUS_ACTIVE,
-    DATASET_VISIBILITY_COMPANY,
-    DATASET_VISIBILITY_PERSONAL,
-    DATASET_VISIBILITY_PLATFORM,
     dataset_display_name_of,
     is_risk_label,
     MODEL_STATUS_PUBLISHED,
@@ -66,7 +63,6 @@ from app.services.constants import (
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
-    ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
@@ -1004,27 +1000,11 @@ def _effective_counts(reader: _DatasetReader, datasets: list[Dataset]) -> tuple[
 # ---------------------------------------------------------------------------
 
 
-def _event_scope(stmt, current_user, scenario_id: int | None = None):
-    """按角色限定风险事件可见范围（需求 6.5.2 权限矩阵）。"""
-    role = getattr(current_user, "role", None)
-    if role == ROLE_SUPER_ADMIN:
-        stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
-            Dataset.visibility == DATASET_VISIBILITY_PLATFORM
-        )
-        if scenario_id is not None:
-            stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
-    elif role == ROLE_SCENARIO_ADMIN:
-        bound = getattr(current_user, "scenario_id", None)
-        if scenario_id is not None and scenario_id != bound:
-            raise ServiceError(403, "无权限操作")
-        stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
-            RiskEvent.scenario_id == bound,
-            Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
-        )
-    else:
-        stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
-        if scenario_id is not None:
-            stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
+def _event_scope(authz, stmt, current_user, scenario_id: int | None = None):
+    """**统计口径**的风险事件范围（只用于聚合计数，见 Authz.scope_event_stats）。"""
+    stmt = authz.scope_event_stats(stmt, current_user)
+    if scenario_id is not None:
+        stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
     return stmt
 
 
@@ -1129,9 +1109,9 @@ class DashboardService(ServiceBase):
 
         scenarios = self.db.scalars(select(Scenario).order_by(Scenario.id)).all()
         datasets = self.db.scalars(
-            select(Dataset)
-            .where(Dataset.status == DATASET_STATUS_ACTIVE, Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
-            .order_by(Dataset.id)
+            self.authz.scope_datasets(
+                select(Dataset).where(Dataset.status == DATASET_STATUS_ACTIVE), current_user
+            ).order_by(Dataset.id)
         ).all()
 
         # 全平台去重口径
@@ -1145,7 +1125,7 @@ class DashboardService(ServiceBase):
         ) or 0
         inference_count = self.db.scalar(select(func.count()).select_from(InferenceRecord)) or 0
         user_count = self.db.scalar(select(func.count()).select_from(AppUser)) or 0
-        events = self.db.scalars(_event_scope(select(RiskEvent), current_user)).all()
+        events = self.db.scalars(_event_scope(self.authz, select(RiskEvent), current_user)).all()
 
         # 逐场景的模型 / 已发布模型 / 推理记录计数：各用一次分组查询取回，
         # 避免在下面的场景循环里对每个场景各发 3 次 count（N+1）。
@@ -1252,7 +1232,6 @@ class DashboardService(ServiceBase):
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
         bound = getattr(current_user, "scenario_id", None)
-        user_id = getattr(current_user, "id", None)
 
         # ---- 可见场景 ----
         scenario_stmt = select(Scenario).order_by(Scenario.id)
@@ -1277,24 +1256,9 @@ class DashboardService(ServiceBase):
         scenarios = self.db.scalars(scenario_stmt).all()
 
         # ---- 可见数据集 ----
-        shared_visibility = (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
-        dataset_stmt = select(Dataset).where(Dataset.status == DATASET_STATUS_ACTIVE)
-        if role == ROLE_SUPER_ADMIN:
-            dataset_stmt = dataset_stmt.where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
-        elif role == ROLE_SCENARIO_ADMIN:
-            dataset_stmt = dataset_stmt.where(
-                Dataset.scenario_id == bound,
-                Dataset.visibility.in_(shared_visibility),
-            )
-        else:
-            dataset_stmt = dataset_stmt.where(
-                Dataset.scenario_id == bound,
-                Dataset.visibility.in_(shared_visibility)
-                | (
-                    (Dataset.visibility == DATASET_VISIBILITY_PERSONAL)
-                    & (Dataset.uploaded_by == user_id)
-                ),
-            )
+        dataset_stmt = self.authz.scope_datasets(
+            select(Dataset).where(Dataset.status == DATASET_STATUS_ACTIVE), current_user
+        )
         datasets = self.db.scalars(dataset_stmt.order_by(Dataset.id)).all()
 
         # ---- 已发布模型版本（一次分组查询，避免逐场景 N+1）----
@@ -1306,7 +1270,7 @@ class DashboardService(ServiceBase):
         published_by_scenario = {scenario_id: count for scenario_id, count in published_rows}
 
         reader = _DatasetReader()
-        events = self.db.scalars(_event_scope(select(RiskEvent), current_user)).all()
+        events = self.db.scalars(_event_scope(self.authz, select(RiskEvent), current_user)).all()
         # 等级计数按当前账号阈值重算；level_of 内部按每条事件的 scenario_id 取本人该场景阈值
         thresholds = risk_view.load_thresholds(self.db, current_user)
 
@@ -1383,10 +1347,7 @@ class DashboardService(ServiceBase):
             Dataset.scenario_id == scenario_id,
             Dataset.status == DATASET_STATUS_ACTIVE,
         )
-        if getattr(current_user, "role", None) == ROLE_SUPER_ADMIN:
-            stmt = stmt.where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
-        else:
-            stmt = stmt.where(Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)))
+        stmt = self.authz.scope_datasets(stmt, current_user)
         datasets = self.db.scalars(stmt.order_by(Dataset.id)).all()
 
         reader = _DatasetReader()
@@ -2030,8 +1991,10 @@ class DashboardService(ServiceBase):
         if scenario is None:
             raise ServiceError(404, "场景不存在")
 
-        stmt = _event_scope(
-            select(RiskEvent).where(RiskEvent.scenario_id == scenario_id), current_user, scenario_id
+        # 工作台要下发明细（recent_events），因此用明细口径：
+        # SUPER 仅本人、SCENARIO_ADMIN 本场景、SCENARIO_USER 本人。
+        stmt = self.authz.scope_events(
+            select(RiskEvent).where(RiskEvent.scenario_id == scenario_id), current_user
         )
         events = self.db.scalars(stmt.order_by(RiskEvent.occurred_at.desc())).all()
         # 风险等级/高风险计数按当前账号在该场景的阈值判定
@@ -2042,13 +2005,13 @@ class DashboardService(ServiceBase):
         # 地质工作台的同源兄弟集合。不用 dataset.scenario.datasets —— 那条 relationship
         # 绕过可见性收窄，会把他人 personal 数据集元信息泄漏进 dataset_prior。
         visible_datasets = self.db.scalars(
-            select(Dataset)
-            .where(
-                Dataset.scenario_id == scenario_id,
-                Dataset.status == DATASET_STATUS_ACTIVE,
-                Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)),
-            )
-            .order_by(Dataset.id)
+            self.authz.scope_datasets(
+                select(Dataset).where(
+                    Dataset.scenario_id == scenario_id,
+                    Dataset.status == DATASET_STATUS_ACTIVE,
+                ),
+                current_user,
+            ).order_by(Dataset.id)
         ).all()
         dataset = visible_datasets[0] if visible_datasets else None
         risk_type = events[0].risk_type if events else (DATASET_RISK_TYPES.get(dataset.logical_id) if dataset else None)
@@ -2085,7 +2048,7 @@ class DashboardService(ServiceBase):
         today = datetime.now(timezone.utc).date()
         start = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(), tzinfo=timezone.utc)
         stmt = select(InferenceRecord).where(InferenceRecord.executed_at >= start)
-        if getattr(current_user, "role", None) == ROLE_SCENARIO_USER:
+        if getattr(current_user, "role", None) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_USER):
             stmt = stmt.where(InferenceRecord.user_id == current_user.id)
         elif dataset is not None:
             stmt = stmt.join(ModelVersion, ModelVersion.id == InferenceRecord.model_version_id).where(

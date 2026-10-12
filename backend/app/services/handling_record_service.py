@@ -12,18 +12,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.models.dataset import Dataset
 from app.models.handling_record import HandlingRecord
 from app.models.risk_event import RiskEvent
 from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
-    DATASET_VISIBILITY_PLATFORM,
     HANDLING_ACTIONS,
     RISK_EVENT_STATUS_TRANSITIONS,
-    ROLE_SCENARIO_ADMIN,
-    ROLE_SCENARIO_USER,
-    ROLE_SUPER_ADMIN,
 )
 from app.utils.common import paginate, row_to_dict, validate_enum
 
@@ -38,21 +33,8 @@ class HandlingRecordService(ServiceBase):
         return record
 
     def _can_access_event(self, current_user, event: RiskEvent) -> bool:
-        """Apply the same platform/scenario/personal boundary as risk events."""
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SUPER_ADMIN:
-            dataset = self.db.get(Dataset, event.dataset_id)
-            return bool(dataset) and self.is_platform_visibility(dataset.visibility)
-        if role == ROLE_SCENARIO_ADMIN:
-            dataset = self.db.get(Dataset, event.dataset_id)
-            return (
-                event.scenario_id == getattr(current_user, "scenario_id", None)
-                and bool(dataset)
-                and dataset.visibility in ("platform", "company")
-            )
-        if role == ROLE_SCENARIO_USER:
-            return event.created_by_user_id == getattr(current_user, "id", None)
-        return False
+        """处置记录跟随父事件可见性（集中式策略，不另立口径）。"""
+        return self.authz.can_view_event(current_user, event)
 
     def _can_access_record(self, current_user, record: HandlingRecord) -> bool:
         """Check the parent event before exposing a handling/audit record."""
@@ -134,24 +116,11 @@ class HandlingRecordService(ServiceBase):
     ):
         """处置记录列表。普通用户仅可见**本人风险事件**上的处置记录。"""
         self.require_login(current_user)
-        stmt = select(HandlingRecord)
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SUPER_ADMIN:
-            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).join(
-                Dataset, Dataset.id == RiskEvent.dataset_id
-            ).where(
-                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
-            )
-        elif role == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).where(
-                RiskEvent.scenario_id == getattr(current_user, "scenario_id", None)
-            ).join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
-                Dataset.visibility.in_(("platform", "company"))
-            )
-        else:
-            stmt = stmt.join(RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id).where(
-                RiskEvent.created_by_user_id == current_user.id
-            )
+        # 处置记录跟随父事件可见性：join 到 RiskEvent 后套用同一套事件范围条件。
+        stmt = select(HandlingRecord).join(
+            RiskEvent, RiskEvent.id == HandlingRecord.risk_event_id
+        )
+        stmt = self.authz.scope_events(stmt, current_user)
         if risk_event_id is not None:
             stmt = stmt.where(HandlingRecord.risk_event_id == risk_event_id)
         stmt = stmt.order_by(HandlingRecord.created_at.desc())
@@ -168,21 +137,3 @@ class HandlingRecordService(ServiceBase):
             raise ServiceError(403, "无权限操作")
         return ok(data=row_to_dict(record))
 
-    # ------------------------------------------------------------------
-    # 删除（仅 ADMIN；处置记录为审计性质，删除需谨慎）
-    # ------------------------------------------------------------------
-    @service_call
-    def delete(self, current_user, record_id: int):
-        """删除处置记录（仅 SUPER_ADMIN，且受与查询一致的数据边界约束）。
-
-        处置记录是审计凭据，这里刻意与 ``get`` / ``get_list`` 用同一套边界
-        （:meth:`_can_access_record`）：否则「读不到的记录却能删」会成为绕过审计的旁路。
-        注意：删除本身不写审计（本表无删除留痕字段），调用方需自行评估可追溯性。
-        """
-        self.require_admin(current_user)
-        record = self._get(record_id)
-        if not self._can_access_record(current_user, record):
-            raise ServiceError(403, "无权限操作")
-        self.db.delete(record)
-        self.commit()
-        return ok(message="处置记录已删除")

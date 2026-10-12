@@ -140,7 +140,8 @@ const buildDailyTrend = (events: RiskEvent[]): TrendPoint[] => {
  * 场景卡片与平台合计**全部来自后端 `/scenarios/overview`**（`DashboardService.get_scenario_overview`），
  * 与场景中心共用同一套去重口径（carrier 同源三份只计 1 个数据集）—— 前端不再自行
  * `datasets.filter(scenario_id === code)` 计数（那条路径没有去重，会和场景中心对不上）。
- * SUPER_ADMIN 的风险事件由后端强制过滤为 platform 派生事件（见 risk_event_service.get_list）。
+ * SUPER_ADMIN 的风险事件明细由后端限制为本人事件（见 Authz.scope_events）；
+ * 平台级统计走 `/situation/global` 的聚合口径，两者不是同一份数据。
  */
 export const getGlobalOverview = async (): Promise<GlobalOverview> => {
   const [overview, rawEvents] = await Promise.all([

@@ -83,13 +83,11 @@ class UserService(ServiceBase):
     ):
         """用户列表（管理级角色）。
 
-        SUPER_ADMIN 看全部用户（含所有场景管理员与普通用户）；
-        SCENARIO_ADMIN 只看自己场景的用户；SCENARIO_USER 无列表权限。
+        账号可见范围由集中式策略 :meth:`Authz.scope_users` 决定：
+        SUPER_ADMIN 只见 SCENARIO_ADMIN；SCENARIO_ADMIN 只见本场景 SCENARIO_USER。
         """
         self.require_scenario_admin(current_user)
         filters = []
-        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
-            filters.append(AppUser.scenario_id == getattr(current_user, "scenario_id", None))
         if keyword:
             filters.append(AppUser.username.ilike(f"%{keyword.strip()}%"))
         if role:
@@ -108,20 +106,17 @@ class UserService(ServiceBase):
         page = max(1, int(page or 1))
         page_size = min(max(1, int(page_size or 10)), 200)
 
-        count_stmt = select(func.count()).select_from(AppUser)
-        if filters:
-            count_stmt = count_stmt.where(*filters)
-        total = self.db.scalar(count_stmt) or 0
-
-        stmt = (
-            select(AppUser)
-            .options(joinedload(AppUser.scenario))
-            .order_by(AppUser.id)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+        count_stmt = self.authz.scope_users(
+            select(func.count()).select_from(AppUser), current_user
+        )
+        stmt = self.authz.scope_users(
+            select(AppUser).options(joinedload(AppUser.scenario)), current_user
         )
         if filters:
+            count_stmt = count_stmt.where(*filters)
             stmt = stmt.where(*filters)
+        total = self.db.scalar(count_stmt) or 0
+        stmt = stmt.order_by(AppUser.id).offset((page - 1) * page_size).limit(page_size)
         items = list(self.db.scalars(stmt).unique().all())
         return ok(
             data={
@@ -175,13 +170,9 @@ class UserService(ServiceBase):
         if scenario_id is not None and self.db.get(Scenario, scenario_id) is None:
             raise ServiceError(404, "绑定场景不存在")
 
-        creator_role = getattr(current_user, "role", None)
-        if creator_role == ROLE_SCENARIO_ADMIN:
-            # 场景管理员只能在自己场景内创建场景用户
-            if role != ROLE_SCENARIO_USER:
-                raise ServiceError(403, "场景管理员只能创建场景用户")
-            if getattr(current_user, "scenario_id", None) != scenario_id:
-                raise ServiceError(403, "场景管理员只能在自己场景内创建用户")
+        # 创建权限由集中式策略决定：SUPER 建 SCENARIO_ADMIN；SA 在本场景建 SCENARIO_USER。
+        if not self.authz.can_create_user(current_user, role, scenario_id):
+            raise ServiceError(403, "无权限创建该账号")
 
         exists = self.db.scalar(
             select(AppUser).where(AppUser.username == username)
@@ -213,11 +204,8 @@ class UserService(ServiceBase):
     ):
         """分配/修改用户绑定场景（管理级角色）。
 
-        SUPER_ADMIN 可改任意场景管理员/场景用户；SCENARIO_ADMIN 只能改自己场景的用户。
-
-        注意：路由层 `PUT /users/{id}/scenario` 已收紧为 `require_admin`（仅平台超管），
-        所以下面这条 SCENARIO_ADMIN 分支在 HTTP 入口上不可达；保留是因为本方法
-        在 service 层仍按「管理级角色」自洽，直接调用（含测试）时行为不变。
+        可管理对象由集中式策略 :meth:`Authz.can_manage_user` 决定：
+        SUPER_ADMIN 只能改 SCENARIO_ADMIN；SCENARIO_ADMIN 只能改本场景 SCENARIO_USER。
         """
         self.require_scenario_admin(current_user)
         user = self._get(user_id)
@@ -225,10 +213,13 @@ class UserService(ServiceBase):
             raise ServiceError(400, "最外层管理员不绑定场景，无需分配")
         if scenario_id is None:
             raise ServiceError(400, "场景管理员/场景用户必须绑定场景")
-        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
-            bound = getattr(current_user, "scenario_id", None)
-            if user.scenario_id != bound or scenario_id != bound:
-                raise ServiceError(403, "场景管理员只能管理自己场景的用户")
+        if not self.authz.can_manage_user(current_user, user):
+            raise ServiceError(403, "无权限操作")
+        if (
+            getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN
+            and scenario_id != getattr(current_user, "scenario_id", None)
+        ):
+            raise ServiceError(403, "场景管理员只能在自己场景内分配用户")
         scenario = self.db.get(Scenario, scenario_id)
         if scenario is None:
             raise ServiceError(404, "绑定场景不存在")
@@ -246,27 +237,16 @@ class UserService(ServiceBase):
         new_password: str,
         old_password: Optional[str] = None,
     ):
-        """修改密码：USER 仅本人；ADMIN 可重置任意用户（需求 6.2）。
+        """修改密码：本人可改自己；管理级角色可重置其可管理范围内的账号（需求 6.2）。
 
         - 本人改密（/me）：必须传 old_password 并校验正确（路由 PasswordChange 场景）；
         - 管理员重置（/reset-password）：不传 old_password，跳过旧密码校验。
         """
         self.require_login(current_user)
         user = self._get(user_id)
-        role = getattr(current_user, "role", None)
-        is_mgmt = role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
-        if not is_mgmt and getattr(current_user, "id", None) != user_id:
+        is_self = getattr(current_user, "id", None) == user_id
+        if not is_self and not self.authz.can_manage_user(current_user, user):
             raise ServiceError(403, "无权限操作")
-        # 场景管理员只能重置自己场景用户的密码
-        if role == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "无权限操作")
-        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
-        if (
-            user.role == ROLE_SCENARIO_ADMIN
-            and role != ROLE_SUPER_ADMIN
-            and getattr(current_user, "id", None) != user.id
-        ):
-            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
         err = validate_length(
             new_password, "new_password", PASSWORD_MAX_LEN, min_len=PASSWORD_MIN_LEN
         )
@@ -303,15 +283,8 @@ class UserService(ServiceBase):
         if err:
             raise ServiceError(400, err)
         user = self._get(user_id)
-        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "场景管理员只能管理自己场景的用户")
-        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
-        if (
-            user.role == ROLE_SCENARIO_ADMIN
-            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
-            and getattr(current_user, "id", None) != user.id
-        ):
-            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
+        if not self.authz.can_manage_user(current_user, user):
+            raise ServiceError(403, "无权限操作")
         if user.id == current_user.id and status != USER_STATUS_ENABLED:
             raise ServiceError(400, "不能禁用当前登录用户")
         user.status = status
@@ -330,15 +303,8 @@ class UserService(ServiceBase):
         """
         self.require_scenario_admin(current_user)
         user = self._get(user_id)
-        if getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN and user.scenario_id != getattr(current_user, "scenario_id", None):
-            raise ServiceError(403, "场景管理员只能管理自己场景的用户")
-        # 同级保护：场景管理员不能管理（改密 / 禁用 / 删除）其他场景管理员，改自己除外
-        if (
-            user.role == ROLE_SCENARIO_ADMIN
-            and getattr(current_user, "role", None) != ROLE_SUPER_ADMIN
-            and getattr(current_user, "id", None) != user.id
-        ):
-            raise ServiceError(403, "场景管理员不能管理其他场景管理员")
+        if not self.authz.can_manage_user(current_user, user):
+            raise ServiceError(403, "无权限操作")
         if user.id == current_user.id:
             raise ServiceError(400, "不能删除当前登录用户")
 

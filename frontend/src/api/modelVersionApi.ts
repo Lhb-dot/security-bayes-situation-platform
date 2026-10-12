@@ -2,7 +2,7 @@
  * modelVersionApi.ts — 模型版本接口（与后端 /api/v1/model-versions 对齐）
  *
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.7/6.5.2）：训练/发布/禁用/删除/默认推荐仅管理员。
+ * 权限边界由后端强制（需求 6.7/6.5.2）：训练/发布/禁用/删除/推荐仅管理级角色。
  */
 import request, { unwrapData } from '@/utils/request';
 import type { EvaluationMetrics, ModelStatus, ScenarioId } from '@/types/security';
@@ -31,7 +31,7 @@ export interface BackendModelVersion {
   published_by?: number | null;
   published_by_name?: string | null;
   published_at?: string | null;
-  is_default: boolean;
+  is_recommended: boolean;
   model_evaluation_available?: boolean;
   model_attributes?: Record<string, unknown>;
 }
@@ -92,7 +92,7 @@ export const publishModel = async (modelId: string | number): Promise<BackendMod
 export const disableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/disable`));
 
-/** 重新启用模型（POST /model-versions/{model_id}/enable，仅管理员；不自动恢复默认推荐状态） */
+/** 重新启用模型（POST /model-versions/{model_id}/enable，仅管理员；不自动恢复推荐状态） */
 export const enableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/enable`));
 
@@ -101,6 +101,10 @@ export const deleteModelVersion = async (modelId: number | string): Promise<void
   await unwrapData(await request.delete(`/api/v1/model-versions/${modelId}`));
 };
 
-/** 设为默认推荐模型（POST /model-versions/{model_id}/set-default，仅管理员） */
-export const setDefaultModel = async (modelId: string | number): Promise<BackendModelVersion> =>
-  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/set-default`));
+/** 设为推荐模型（POST /model-versions/{model_id}/recommend，仅管理员；推荐不唯一） */
+export const recommendModel = async (modelId: string | number): Promise<BackendModelVersion> =>
+  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/recommend`));
+
+/** 取消推荐状态（POST /model-versions/{model_id}/unrecommend，仅管理员） */
+export const unrecommendModel = async (modelId: string | number): Promise<BackendModelVersion> =>
+  unwrapData(await request.post(`/api/v1/model-versions/${modelId}/unrecommend`));

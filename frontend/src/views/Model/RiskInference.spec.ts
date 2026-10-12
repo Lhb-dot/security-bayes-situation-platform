@@ -39,7 +39,7 @@ beforeEach(() => {
     ? [dataset('3', 'power_system')] : [dataset('1'), dataset('2')]);
   vi.mocked(getModelVersionList).mockImplementation(async (params) => {
     const id = Number(params?.dataset_id);
-    return [model(id * 10 + 1, id, { is_default: true }), model(id * 10 + 2, id, { dataset_version: 2 })];
+    return [model(id * 10 + 1, id, { is_recommended: true }), model(id * 10 + 2, id, { dataset_version: 2 })];
   });
   vi.mocked(getDatasetFields).mockResolvedValue([field()]);
   vi.mocked(getDatasetPreview).mockImplementation(async (_, params) => preview(params.page));
@@ -84,12 +84,12 @@ describe('risk inference selection and pagination races', () => {
     await mount();
     await chooseDataset('1');
     await chooseDataset('2');
-    if (outcome === 'success') old.resolve([model(11, 1, { is_default: true })]);
+    if (outcome === 'success') old.resolve([model(11, 1, { is_recommended: true })]);
     else old.reject(new Error('old models'));
     await flush();
     expect(selects()[1].textContent).toContain('加载中');
     expect(getDatasetFields).not.toHaveBeenCalled();
-    fresh.resolve([model(21, 2, { is_default: true })]);
+    fresh.resolve([model(21, 2, { is_recommended: true })]);
     await flush();
     expect(selects()[1].value).toBe('21');
     expect(selects()[1].textContent).not.toContain('算法11');
@@ -104,8 +104,8 @@ describe('risk inference selection and pagination races', () => {
     await chooseDataset('1');
     await chooseDataset('2');
     await chooseDataset('');
-    fresh.resolve([model(21, 2, { is_default: true })]);
-    old.resolve([model(11, 1, { is_default: true })]);
+    fresh.resolve([model(21, 2, { is_recommended: true })]);
+    old.resolve([model(11, 1, { is_recommended: true })]);
     await flush();
     expect(selects()[1].value).toBe('');
     expect(selects()[1].textContent).toContain('暂无已发布模型');
@@ -223,7 +223,7 @@ describe('risk inference selection and pagination races', () => {
 
   it('does not auto-select a draft model marked as default', async () => {
     vi.mocked(getModelVersionList).mockResolvedValueOnce([
-      model(11, 1, { status: 'DRAFT', is_default: true }), model(12, 1),
+      model(11, 1, { status: 'DRAFT', is_recommended: true }), model(12, 1),
     ]);
     await mount();
     await chooseDataset();
@@ -272,7 +272,7 @@ describe('risk inference selection and pagination races', () => {
     useUserStore().currentUser = null;
     useUserStore().currentUser = user();
     await flush();
-    wait.resolve([model(11, 1, { is_default: true })]);
+    wait.resolve([model(11, 1, { is_recommended: true })]);
     await flush();
     expect(selects()[0].value).toBe('');
     expect(selects()[1].value).toBe('');

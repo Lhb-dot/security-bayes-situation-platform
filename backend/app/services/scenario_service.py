@@ -20,10 +20,7 @@ from app.schemas.common import ok
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.constants import (
     DATASET_RISK_TYPES,
-    DATASET_VISIBILITY_COMPANY,
-    DATASET_VISIBILITY_PLATFORM,
     MODEL_STATUS_PUBLISHED,
-    ROLE_ADMIN,
     ROLE_SCENARIO_ADMIN,
     ROLE_SUPER_ADMIN,
     SCENARIO_ACCESS_ACTUAL,
@@ -53,13 +50,8 @@ class ScenarioService(ServiceBase):
         管理员可见全部场景。普通用户未绑定场景时返回空列表。
         """
         self.require_login(current_user)
-        stmt = select(Scenario).order_by(Scenario.id)
-        if getattr(current_user, "role", None) != ROLE_ADMIN:
-            bound = getattr(current_user, "scenario_id", None)
-            if bound is None:
-                return ok(data=[])
-            stmt = stmt.where(Scenario.id == bound)
-        scenarios = self.db.scalars(stmt).all()
+        stmt = self.authz.scope_scenarios(select(Scenario), current_user)
+        scenarios = self.db.scalars(stmt.order_by(Scenario.id)).all()
         return ok(data=[row_to_dict(s) for s in scenarios])
 
     @service_call
@@ -99,10 +91,7 @@ class ScenarioService(ServiceBase):
         stmt = select(Dataset).where(Dataset.scenario_id == scenario_id)
         if dataset_id is not None:
             stmt = stmt.where(Dataset.id == dataset_id)
-        if getattr(current_user, "role", None) == ROLE_SUPER_ADMIN:
-            stmt = stmt.where(Dataset.visibility == DATASET_VISIBILITY_PLATFORM)
-        elif getattr(current_user, "role", None) == ROLE_SCENARIO_ADMIN:
-            stmt = stmt.where(Dataset.visibility.in_((DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)))
+        stmt = self.authz.scope_datasets(stmt, current_user)
         stmt = stmt.order_by(Dataset.id)
         dataset = self.db.scalars(stmt).first()
         if dataset is None:

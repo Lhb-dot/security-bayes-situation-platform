@@ -20,9 +20,11 @@ from app.services.inference_record_service import (  # noqa: E402
     _explanation_artifacts,
 )
 
-ADMIN = SimpleNamespace(id=1, role="SUPER_ADMIN", status="ENABLED")
-OWNER = SimpleNamespace(id=9, role="SCENARIO_USER", status="ENABLED")
-OTHER = SimpleNamespace(id=10, role="SCENARIO_USER", status="ENABLED")
+# 场景管理员才能看到本场景下其他用户产生的记录（超管只看自己的），
+# 因此「管理侧」受众由 SCENARIO_ADMIN 代表。
+ADMIN = SimpleNamespace(id=1, role="SCENARIO_ADMIN", scenario_id=1, status="ENABLED")
+OWNER = SimpleNamespace(id=9, role="SCENARIO_USER", scenario_id=1, status="ENABLED")
+OTHER = SimpleNamespace(id=10, role="SCENARIO_USER", scenario_id=1, status="ENABLED")
 
 FULL_EXPLANATION = {
     "contract_version": "1.0",

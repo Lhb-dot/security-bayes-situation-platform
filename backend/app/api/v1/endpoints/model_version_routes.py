@@ -1,7 +1,7 @@
 """模型版本路由（/api/v1/model-versions）。
 
 对应 Service：ModelVersionService（backend/app/services/model_version_service.py）。
-权限（需求 6.7/6.5.2）：训练/发布/下线/默认推荐 → 仅 ADMIN；查看 → 登录用户
+权限（需求 6.7/6.5.2）：训练/发布/下线/推荐 → 仅 ADMIN；查看 → 登录用户
 （普通用户仅见 PUBLISHED 模型）。
 """
 from fastapi import APIRouter, Depends, Query
@@ -56,18 +56,18 @@ def list_model_versions(
 
 
 @router.get(
-    "/default",
+    "/recommended",
     response_model=ResponseModel,
-    summary="获取某场景+数据集的默认推荐模型（需求 6.7.4）",
+    summary="获取某场景+数据集的推荐模型列表（需求 6.7.4；推荐不唯一）",
 )
-def get_default_model(
+def get_recommended_models(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
     scenario_id: int = Query(..., description="场景 ID"),
     dataset_id: int = Query(..., description="数据集 ID"),
 ):
     return unwrap(
-        ModelVersionService(db).get_default(
+        ModelVersionService(db).get_recommended(
             current_user=current_user,
             scenario_id=scenario_id,
             dataset_id=dataset_id,
@@ -230,7 +230,7 @@ def fail_model_training(
 @router.post(
     "/{model_id}/publish",
     response_model=ResponseModel,
-    summary="发布模型（仅训练人）：DRAFT → PUBLISHED",
+    summary="发布模型（本场景管理员）：DRAFT → PUBLISHED",
 )
 def publish_model(
     model_id: int,
@@ -239,21 +239,6 @@ def publish_model(
 ):
     return unwrap(
         ModelVersionService(db).publish(current_user=current_user, model_id=model_id)
-    )
-
-
-@router.post(
-    "/{model_id}/offline",
-    response_model=ResponseModel,
-    summary="兼容旧接口：PUBLISHED → DISABLED（自动清除默认推荐状态）",
-)
-def offline_model(
-    model_id: int,
-    db: Session = Depends(get_db),
-    current_user: AppUser = Depends(require_scenario_admin),
-):
-    return unwrap(
-        ModelVersionService(db).offline(current_user=current_user, model_id=model_id)
     )
 
 
@@ -275,7 +260,7 @@ def disable_model(
 @router.post(
     "/{model_id}/enable",
     response_model=ResponseModel,
-    summary="重新启用模型（仅管理员）：DISABLED → PUBLISHED，不自动恢复默认推荐",
+    summary="重新启用模型（仅管理员）：DISABLED → PUBLISHED，不自动恢复推荐状态",
 )
 def enable_model(
     model_id: int,
@@ -288,32 +273,32 @@ def enable_model(
 
 
 @router.post(
-    "/{model_id}/set-default",
+    "/{model_id}/recommend",
     response_model=ResponseModel,
-    summary="设为默认推荐模型（仅管理员；每个场景+数据集最多一个）",
+    summary="设为推荐模型（仅管理员；推荐不唯一，可多个）",
 )
-def set_default_model(
+def recommend_model(
     model_id: int,
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
-        ModelVersionService(db).set_default(current_user=current_user, model_id=model_id)
+        ModelVersionService(db).recommend(current_user=current_user, model_id=model_id)
     )
 
 
 @router.post(
-    "/{model_id}/clear-default",
+    "/{model_id}/unrecommend",
     response_model=ResponseModel,
-    summary="取消默认推荐状态（仅管理员）",
+    summary="取消推荐状态（仅管理员）",
 )
-def clear_default_model(
+def unrecommend_model(
     model_id: int,
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(require_scenario_admin),
 ):
     return unwrap(
-        ModelVersionService(db).clear_default(
+        ModelVersionService(db).unrecommend(
             current_user=current_user, model_id=model_id
         )
     )

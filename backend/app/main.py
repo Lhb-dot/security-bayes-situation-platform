@@ -15,7 +15,6 @@ from starlette.types import Scope
 # Support both ``python app/main.py`` and ``python -m app.main`` from backend/.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.api.legacy_model_routes import router as legacy_model_router
 from app.api.v1 import api_router
 from app.paths import PROJECT_ROOT
 
@@ -143,7 +142,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
-    app.include_router(legacy_model_router)
     _warm_dataset_caches_async()
     _start_report_scheduler()
     _start_training_runner()

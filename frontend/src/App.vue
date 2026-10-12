@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import type { UserRole } from './types/security';
 import { useUserStore } from './stores/userStore';
+import { rolesForPath } from './router/access';
 import { useReportJobStore } from './stores/reportJobStore';
 import { useTrainingJobStore } from './stores/trainingJobStore';
 import { useBatchJobStore } from './stores/batchJobStore';
@@ -373,48 +373,44 @@ interface NavItem {
   label: string;
   /** 系统管理员的显示文案（缺省沿用 label） */
   superAdminLabel?: string;
-  /** 允许访问的角色列表（缺省=所有角色） */
-  roles?: UserRole[];
   /** 点击动作：复用原导航跳转函数，保持既有行为 */
   action: () => void;
   /** 激活态判定：与显示文案一样按角色区分（原先散在 isXxxPage 与 isNavActive 两处） */
   isActive: () => boolean;
 }
 
-const ALL_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN', 'SCENARIO_USER'];
-const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
-
 /** 是否正停在某个路径上（精确匹配，与原 isXxxPage 判断一致） */
 const atPath = (path: string): boolean => route.path === path;
 
+// 导航项不再各自声明 roles：可见性统一按路径查 router/access.ts 的 PAGE_ROLES，
+// 与路由守卫 meta.roles 同源（单一来源，避免「导航隐藏但手敲地址能进」的漂移）。
 const navItems: NavItem[] = [
   // 场景用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
-  { path: '/overview', label: '首页', roles: ['SUPER_ADMIN'], action: goOverview, isActive: () => atPath('/overview') },
+  { path: '/overview', label: '首页', action: goOverview, isActive: () => atPath('/overview') },
   {
     path: '/scenarios',
     label: '首页',
     superAdminLabel: '场景中心',
-    roles: ALL_ROLES,
     action: goScenarioCenter,
     // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
     isActive: () =>
       isSuperAdmin.value ? atPath('/scenarios') : route.path.startsWith('/scenarios/') || atPath('/scenarios'),
   },
-  { path: '/datasets', label: '数据集中心', roles: ALL_ROLES, action: goDatasetCenter, isActive: () => atPath('/datasets') },
-  { path: '/alerts', label: '风险事件', roles: ALL_ROLES, action: goAlertsList, isActive: () => atPath('/alerts') },
-  { path: '/risk', label: 'AI模型训练', roles: MGMT_ROLES, action: goAiTrainPage, isActive: () => atPath('/risk') },
-  { path: '/models', label: '模型中心', roles: ALL_ROLES, action: goModelCenter, isActive: () => atPath('/models') },
-  { path: '/inference', label: '风险研判', roles: ALL_ROLES, action: goRiskInference, isActive: () => atPath('/inference') },
-  { path: '/inference-records', label: '推理记录', roles: ALL_ROLES, action: goInferenceRecords, isActive: () => atPath('/inference-records') },
-  { path: '/reports', label: '报告中心', roles: ALL_ROLES, action: goReportCenter, isActive: () => atPath('/reports') },
-  { path: '/users', label: '用户管理', roles: MGMT_ROLES, action: goUsers, isActive: () => atPath('/users') },
-  { path: '/settings', label: '设置', superAdminLabel: '系统设置', roles: ALL_ROLES, action: goSettings, isActive: () => atPath('/settings') },
+  { path: '/datasets', label: '数据集中心', action: goDatasetCenter, isActive: () => atPath('/datasets') },
+  { path: '/alerts', label: '风险事件', action: goAlertsList, isActive: () => atPath('/alerts') },
+  { path: '/risk', label: 'AI模型训练', action: goAiTrainPage, isActive: () => atPath('/risk') },
+  { path: '/models', label: '模型中心', action: goModelCenter, isActive: () => atPath('/models') },
+  { path: '/inference', label: '风险研判', action: goRiskInference, isActive: () => atPath('/inference') },
+  { path: '/inference-records', label: '推理记录', action: goInferenceRecords, isActive: () => atPath('/inference-records') },
+  { path: '/reports', label: '报告中心', action: goReportCenter, isActive: () => atPath('/reports') },
+  { path: '/users', label: '用户管理', action: goUsers, isActive: () => atPath('/users') },
+  { path: '/settings', label: '设置', superAdminLabel: '系统设置', action: goSettings, isActive: () => atPath('/settings') },
 ];
 
-/** 按当前角色过滤可见导航项 */
+/** 按当前角色过滤可见导航项（角色准入查 router/access.ts，唯一来源） */
 const visibleNavItems = computed(() => {
   const role = userStore.currentUser?.role;
-  return navItems.filter((item) => !item.roles || (role ? item.roles.includes(role) : false));
+  return navItems.filter((item) => (role ? rolesForPath(item.path).includes(role) : false));
 });
 
 /** 导航显示文案：系统管理员用 superAdminLabel（缺省沿用 label） */

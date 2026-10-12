@@ -319,7 +319,6 @@ onMounted(async () => {
         <div class="users-filters">
           <select v-model="filterRole" class="pwd-form__input users-filter" @change="applyFilter">
             <option value="">全部角色</option>
-            <option v-if="isSuperAdmin" value="SUPER_ADMIN">系统管理员</option>
             <option value="SCENARIO_ADMIN">场景管理员</option>
             <option value="SCENARIO_USER">场景用户</option>
           </select>

@@ -17,11 +17,14 @@ import {
   getDatasetVersions,
   uploadDatasetFile,
   createDatasetVersion,
+  appendDatasetRows,
+  getDatasetRevisions,
   disableDatasetVersion,
   deleteDatasetVersion,
   getDatasetAiAnalysis,
   streamDatasetAiAnalysis,
 } from '@/api/datasetApi';
+import type { DatasetRevisionItem } from '@/api/datasetApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 import { useUserStore } from '@/stores/userStore';
 import { stripArffQuotes } from '@/utils/arffValue';
@@ -240,12 +243,74 @@ const submitUpload = async () => {
   await submitNewVersion();
 };
 
+// ===================== 追加样本（迭代：增加数据条数） =====================
+// 增量文件必须与当前数据集同结构；是否新开版本由后端迭代策略决定
+// （未被模型引用 → 原地更新，版本号不变；已引用 → 自动新建版本）。
+const appendDialogVisible = ref(false);
+const appendTarget = ref<Dataset | null>(null);
+const appendFile = ref<File | null>(null);
+const appendSubmitting = ref(false);
+
+const openAppendDialog = (dataset: Dataset) => {
+  appendTarget.value = dataset;
+  appendFile.value = null;
+  appendSubmitting.value = false;
+  appendDialogVisible.value = true;
+};
+
+const onAppendFileChange = (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  appendFile.value = input.files?.[0] ?? null;
+};
+
+const submitAppend = async () => {
+  const target = appendTarget.value;
+  if (!target) return;
+  if (!appendFile.value) {
+    ElMessage.warning('请选择要追加的增量文件（.arff / .csv）');
+    return;
+  }
+  appendSubmitting.value = true;
+  try {
+    const version = await appendDatasetRows(target.dataset_id, appendFile.value);
+    ElMessage.success(
+      `追加成功：当前 v${version.dataset_version.replace(/^v/, '')} 共 ${version.record_count.toLocaleString()} 条`
+    );
+    appendDialogVisible.value = false;
+    if (versionTarget.value) {
+      await loadVersionDialogData(versionTarget.value.dataset_id);
+    }
+    await loadDatasets();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '追加失败');
+  } finally {
+    appendSubmitting.value = false;
+  }
+};
+
 // ===================== 版本管理（需求 2.3.3/2.3.5/2.3.6） =====================
 const versionDialogVisible = ref(false);
 const versionDialogTitle = ref('');
 const versionTarget = ref<Dataset | null>(null);
 const versionList = ref<DatasetVersion[]>([]);
 const versionLoading = ref(false);
+/** 迭代记录：含原地更新（不新增版本的那类迭代），版本列表看不出来，这里补齐审计视角。 */
+const revisionList = ref<DatasetRevisionItem[]>([]);
+const revisionLoading = ref(false);
+
+/** 版本 + 迭代记录一起刷新（两者是同一数据集的两种视角，必须同步）。 */
+const loadVersionDialogData = async (datasetId: string) => {
+  try {
+    versionList.value = await getDatasetVersions(datasetId);
+  } catch {
+    versionList.value = [];
+  }
+  try {
+    revisionList.value = await getDatasetRevisions(datasetId);
+  } catch {
+    revisionList.value = [];
+  }
+};
 
 const openVersionDialog = async (dataset: Dataset) => {
   versionTarget.value = dataset;
@@ -253,14 +318,15 @@ const openVersionDialog = async (dataset: Dataset) => {
   // 先清空上一次的版本数据：否则打开瞬间会闪出上一个数据集的样本数/字段数，
   // 数字随请求返回再跳变，看着像「眼睛跳动」。
   versionList.value = [];
+  revisionList.value = [];
   versionLoading.value = true;
+  revisionLoading.value = true;
   versionDialogVisible.value = true;
   try {
-    versionList.value = await getDatasetVersions(dataset.dataset_id);
-  } catch {
-    versionList.value = [];
+    await loadVersionDialogData(dataset.dataset_id);
   } finally {
     versionLoading.value = false;
+    revisionLoading.value = false;
   }
 };
 
@@ -269,7 +335,7 @@ const handleDisableVersion = async (v: DatasetVersion) => {
     await disableDatasetVersion(v.dataset_version_id);
     ElMessage.success(`版本 ${v.dataset_version} 已停用`);
     if (versionTarget.value) {
-      versionList.value = await getDatasetVersions(versionTarget.value.dataset_id);
+      await loadVersionDialogData(versionTarget.value.dataset_id);
       await loadDatasets();
     }
   } catch (err) {
@@ -282,7 +348,7 @@ const handleDeleteVersion = async (v: DatasetVersion) => {
     await deleteDatasetVersion(v.dataset_version_id);
     ElMessage.success(`版本 ${v.dataset_version} 已删除`);
     if (versionTarget.value) {
-      versionList.value = await getDatasetVersions(versionTarget.value.dataset_id);
+      await loadVersionDialogData(versionTarget.value.dataset_id);
       await loadDatasets();
     }
   } catch (err) {
@@ -832,6 +898,15 @@ onMounted(async () => {
         >
           修改字段 → 创建新版本
         </el-button>
+        <el-button
+          v-if="versionTarget"
+          class="version-create-button"
+          size="small"
+          plain
+          @click="openAppendDialog(versionTarget)"
+        >
+          追加样本 → 增加数据条数
+        </el-button>
       </div>
       <el-table
         :data="versionList"
@@ -845,6 +920,24 @@ onMounted(async () => {
             <span class="version-badge" :class="row.enabled ? 'version-badge--on' : 'version-badge--off'">
               {{ row.dataset_version }}
             </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="变更类型" min-width="150" align="center">
+          <template #default="{ row }: { row: DatasetVersion }">
+            <span v-if="row.change_type_label" class="iteration-tag">
+              {{ row.change_type_label }}
+              <span
+                v-if="row.is_breaking"
+                class="iteration-tag__flag iteration-tag__flag--breaking"
+                title="破坏结构兼容：旧模型不可直接复用"
+              >不兼容</span>
+              <span
+                v-else
+                class="iteration-tag__flag iteration-tag__flag--compatible"
+                title="兼容变更：旧模型仍可使用"
+              >兼容</span>
+            </span>
+            <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
         <el-table-column prop="record_count" label="样本数" min-width="100" align="right">
@@ -888,6 +981,60 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 迭代记录：含「原地更新」（不新增版本）的迭代，补齐版本列表看不到的审计视角 -->
+      <div class="revision-history">
+        <div class="revision-history__title">迭代记录</div>
+        <p v-if="revisionLoading" class="version-tip">加载中…</p>
+        <p v-else-if="revisionList.length === 0" class="version-tip">暂无迭代记录</p>
+        <ul v-else class="revision-history__list">
+          <li v-for="item in revisionList" :key="item.id" class="revision-history__item">
+            <span class="revision-history__time">
+              {{ item.created_at ? item.created_at.replace('T', ' ').slice(0, 19) : '—' }}
+            </span>
+            <span class="iteration-tag">
+              {{ item.change_type_label }}
+              <span
+                v-if="item.is_breaking"
+                class="iteration-tag__flag iteration-tag__flag--breaking"
+              >不兼容</span>
+              <span v-else class="iteration-tag__flag iteration-tag__flag--compatible">兼容</span>
+            </span>
+            <span class="revision-history__mode">
+              {{ item.mode === 'new_version' ? '新建版本' : '原地更新' }}
+            </span>
+            <span class="revision-history__summary">{{ item.summary || item.reason || '—' }}</span>
+          </li>
+        </ul>
+      </div>
+    </el-dialog>
+
+    <!-- 追加样本弹窗（迭代：增加数据条数；同结构增量文件，是否新开版本由后端策略决定） -->
+    <el-dialog
+      v-model="appendDialogVisible"
+      :title="`追加样本 - ${appendTarget?.name ?? ''}`"
+      width="560px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="upload-form">
+        <p class="version-tip">
+          增量文件必须与当前数据集<strong>同结构</strong>（字段名同名同序，格式一致）。
+          未被模型引用时直接并入当前版本（版本号不变）；已被引用时自动新建版本，旧版本保留。
+        </p>
+        <div class="upload-form__row">
+          <label class="upload-form__label">增量文件<span class="required">*</span>（.arff / .csv）</label>
+          <input type="file" accept=".arff,.csv" class="upload-form__input" @change="onAppendFileChange" />
+          <p v-if="appendFile" class="version-tip">
+            已选择：{{ appendFile.name }}（{{ (appendFile.size / 1024).toFixed(1) }} KB）
+          </p>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="appendDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="appendSubmitting" @click="submitAppend">确认追加</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -1210,6 +1357,81 @@ onMounted(async () => {
 .version-badge--off {
   background: rgba(220, 234, 255, 0.08);
   color: rgba(220, 234, 255, 0.5);
+}
+
+/* 迭代类型标签：类型名 + 兼容性徽标（区分「改字段」与「加数据」等迭代） */
+.iteration-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: rgba(220, 234, 255, 0.82);
+  white-space: nowrap;
+}
+
+.iteration-tag__flag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+}
+
+.iteration-tag__flag--compatible {
+  background: rgba(83, 229, 200, 0.12);
+  color: #53e5c8;
+}
+
+.iteration-tag__flag--breaking {
+  background: rgba(255, 176, 122, 0.14);
+  color: #ffb07a;
+}
+
+/* 迭代记录：版本表下方的紧凑审计列表（原地更新不进版本表，只能在这里看到） */
+.revision-history {
+  margin-top: 14px;
+  border-top: 1px solid rgba(220, 234, 255, 0.08);
+  padding-top: 10px;
+}
+
+.revision-history__title {
+  font-size: 0.85rem;
+  color: rgba(220, 234, 255, 0.72);
+  margin-bottom: 6px;
+}
+
+.revision-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+
+.revision-history__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 0.78rem;
+  color: rgba(220, 234, 255, 0.72);
+  border-bottom: 1px dashed rgba(220, 234, 255, 0.06);
+}
+
+.revision-history__time {
+  flex: 0 0 auto;
+  color: rgba(220, 234, 255, 0.5);
+}
+
+.revision-history__mode {
+  flex: 0 0 auto;
+  color: rgba(220, 234, 255, 0.6);
+}
+
+.revision-history__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 上传表单 */

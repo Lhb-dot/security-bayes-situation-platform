@@ -42,7 +42,7 @@ def read_csv(path: str, sample_limit: int = _TYPE_SAMPLE_LIMIT):
     """解析 CSV，返回 (fields, rows)。
 
     - fields: [{name, type, enum_values, sample_values}]，类型按前 sample_limit 行推断
-    - rows: list[list[str]]（最多 sample_limit 行）
+    - rows: list[list[str]]（最多 sample_limit 行；sample_limit=None 表示全量）
     """
     fields: list[dict] = []
     rows: list[list[str]] = []
@@ -54,7 +54,7 @@ def read_csv(path: str, sample_limit: int = _TYPE_SAMPLE_LIMIT):
         header = [str(h).strip() for h in header]
         for row in reader:
             rows.append(row)
-            if len(rows) >= sample_limit:
+            if sample_limit is not None and len(rows) >= sample_limit:
                 break
 
     n = len(header)
@@ -112,6 +112,69 @@ def read_dataset_file(path: str):
     else:
         raise ValueError("不支持的文件格式：仅支持 .arff / .csv")
     return fmt, fields, record_count
+
+
+def read_all_rows(path: str):
+    """读取整份数据文件（不做行数截断），返回 (fields, rows)。ARFF / CSV 都支持。
+
+    追加样本需要「当前全量 + 增量」逐行合并，不能像预览那样只取前 N 行，
+    因此这里单独给出全量入口，避免调用方误用被 sample_limit 截断的数据。
+    """
+    fmt = detect_format(path)
+    if fmt == "arff":
+        return read_arff(path)
+    if fmt == "csv":
+        return read_csv(path, sample_limit=None)
+    raise ValueError("不支持的文件格式：仅支持 .arff / .csv")
+
+
+def _arff_token(value) -> str:
+    """把字段名 / 枚举值 / 数据值写成合法 ARFF 记号（必要时加单引号转义）。"""
+    text = "" if value is None else str(value)
+    if (
+        text == ""
+        or text != text.strip()
+        or any(ch in text for ch in ",{}'\"\t\n")
+    ):
+        escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+    return text
+
+
+def write_dataset_file(
+    path: str, fields: list[dict], rows: list[list], fmt: str | None = None
+) -> None:
+    """把 fields + rows 写成 ARFF / CSV 文件（追加样本合并后的落盘入口）。
+
+    - fields: [{name, type, enum_values}]，type 取 numeric / enum / string；
+    - ARFF 按字段类型输出 @attribute，enum 还原成 {v1,v2} 值域；
+    - 值统一按字符串写出，含逗号/引号/空白时按 ARFF 规则加引号。
+    """
+    fmt = fmt or detect_format(path)
+    if fmt == "arff":
+        lines = ["@relation dataset", ""]
+        for field in fields:
+            ftype = str(field.get("type", "numeric")).lower()
+            if ftype == "enum" and field.get("enum_values"):
+                type_text = "{" + ",".join(_arff_token(v) for v in field["enum_values"]) + "}"
+            elif ftype == "numeric":
+                type_text = "numeric"
+            else:
+                type_text = "string"
+            lines.append(f"@attribute {_arff_token(field.get('name'))} {type_text}")
+        lines.append("")
+        lines.append("@data")
+        for row in rows:
+            lines.append(",".join(_arff_token(v) for v in row))
+        Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    if fmt == "csv":
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([str(field.get("name")) for field in fields])
+            writer.writerows(rows)
+        return
+    raise ValueError("不支持的文件格式：仅支持 .arff / .csv")
 
 
 def read_sample_rows(

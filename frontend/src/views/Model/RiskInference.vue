@@ -114,7 +114,7 @@ const selectedModel = computed(() =>
 );
 
 const modelLabel = (m: BackendModelVersion) =>
-  `#${m.model_version_id} ${m.algorithm_name ?? m.algorithm_id}${m.is_default ? '（默认推荐）' : ''}`;
+  `#${m.model_version_id} ${m.algorithm_name ?? m.algorithm_id}${m.is_recommended ? '（推荐）' : ''}`;
 
 /** 模型下拉旁展示的指标口径 */
 type MetricKey = 'accuracy' | 'recall' | 'f1' | 'g_mean';
@@ -473,8 +473,8 @@ watch(selectedDatasetId, async (datasetId, _, onCleanup) => {
     });
     if (!isCurrent()) return;
     modelVersions.value = list;
-    // 有默认推荐的用默认，否则取第一个 —— 同样省掉用户手点
-    const preferred = publishedModels.value.find((m) => m.is_default) ?? publishedModels.value[0];
+    // 有推荐模型的优先选推荐，否则取第一个 —— 同样省掉用户手点
+    const preferred = publishedModels.value.find((m) => m.is_recommended) ?? publishedModels.value[0];
     selectedModelId.value = preferred ? preferred.model_version_id : '';
   } catch {
     // 拉取失败必须清空：留着上一个数据集的模型列表会按旧列表自动选中模型

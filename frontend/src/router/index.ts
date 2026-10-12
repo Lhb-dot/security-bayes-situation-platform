@@ -1,12 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useUserStore } from '@/stores/userStore';
-import type { UserRole } from '@/types/security';
+import { rolesForPath } from './access';
 import { roleLanding, setupRouterGuards } from './guards';
-
-// 角色白名单常量。写成 UserRole[] 而不是内联数组字面量：
-// routes 的类型是独立推断的，内联字面量会退化成 string[]，传给 createRouter 时报类型错。
-const MGMT_ROLES: UserRole[] = ['SUPER_ADMIN', 'SCENARIO_ADMIN'];
-const SUPER_ADMIN_ROLES: UserRole[] = ['SUPER_ADMIN'];
 
 const routes = [
   {
@@ -41,7 +36,7 @@ const routes = [
     // 拖慢首屏（首页 / 场景中心）的加载。
     component: () => import('@/views/Model/RiskAnalysis.vue'),
     // 管理级角色（最外层 + 场景管理员）可训练；场景管理员由后端校验仅自己场景
-    meta: { title: 'AI模型训练预测', roles: MGMT_ROLES },
+    meta: { title: 'AI模型训练预测', roles: rolesForPath('/risk') },
   },
   // ===================== 多场景架构新增路由 =====================
   {
@@ -49,7 +44,7 @@ const routes = [
     name: '管理员首页',
     component: () => import('@/views/Home/dashboard/DashboardHomeView.vue'),
     // 首页按角色分发：最外层管理员=平台总览；场景管理员=数据画像；场景用户=我的工作台
-    meta: { title: '平台运行总览', roles: SUPER_ADMIN_ROLES },
+    meta: { title: '平台运行总览', roles: rolesForPath('/overview') },
   },
   {
     path: '/scenarios',
@@ -111,7 +106,7 @@ const routes = [
     name: '用户管理',
     component: () => import('@/views/Model/UserManagement.vue'),
     // 管理级角色（最外层管场景管理员/用户；场景管理员管自己场景用户）；权限由后端校验
-    meta: { title: '用户管理', roles: MGMT_ROLES },
+    meta: { title: '用户管理', roles: rolesForPath('/users') },
   },
   {
     path: '/events/:eventId',

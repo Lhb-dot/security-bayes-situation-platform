@@ -29,8 +29,6 @@ from app.services.base import ServiceBase, ServiceError, service_call
 from app.services import risk_view
 from app.services.constants import (
     DATASET_RISK_TYPES,
-    DATASET_VISIBILITY_COMPANY,
-    DATASET_VISIBILITY_PLATFORM,
     RISK_EVENT_STATUS_PENDING,
     RISK_EVENT_STATUS_RESOLVED,
     RISK_LEVEL_HIGH,
@@ -41,8 +39,6 @@ from app.services.constants import (
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
-    ROLE_SCENARIO_ADMIN,
-    ROLE_SUPER_ADMIN,
     dataset_display_name_of,
 )
 from app.utils.common import get_logger, paginate, row_to_dict
@@ -60,31 +56,12 @@ class RiskEventService(ServiceBase):
         return event
 
     def _require_event_access(self, current_user, event: RiskEvent) -> None:
-        """风险事件访问控制（需求 0.2 / 5.2）。
+        """风险事件访问控制（走集中式策略，需求 0.2 / 5.2）：
 
-        - SUPER_ADMIN：仅 platform 数据集派生事件
-        - SCENARIO_ADMIN：仅绑定场景事件
-        - SCENARIO_USER：仅本人创建的事件
+        SUPER_ADMIN / SCENARIO_USER 仅本人创建的事件；SCENARIO_ADMIN 本场景全部。
         """
         self.require_login(current_user)
-        role = getattr(current_user, "role", None)
-        if role == ROLE_SUPER_ADMIN:
-            dataset = self.db.get(Dataset, event.dataset_id)
-            if dataset is None or not self.is_platform_visibility(dataset.visibility):
-                raise ServiceError(403, "无权限操作")
-            return
-        if role == ROLE_SCENARIO_ADMIN:
-            dataset = self.db.get(Dataset, event.dataset_id)
-            if (
-                event.scenario_id != getattr(current_user, "scenario_id", None)
-                or dataset is None
-                or dataset.visibility
-                not in (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
-            ):
-                raise ServiceError(403, "无权限操作")
-            return
-        if event.created_by_user_id != getattr(current_user, "id", None):
-            raise ServiceError(403, "无权限操作")
+        self.authz.require_view_event(current_user, event)
 
     @staticmethod
     def _calc_risk_level(risk_score: float, medium: float, high: float) -> str:
@@ -362,9 +339,9 @@ class RiskEventService(ServiceBase):
     ):
         """风险事件列表。
 
-        - SUPER_ADMIN：仅 platform 数据集派生事件（可按场景/状态/等级过滤）；
-        - SCENARIO_ADMIN：自己场景内全部事件；
-        - SCENARIO_USER：强制按 created_by_user_id 过滤（需求 5.2 访问控制第 1 条）。
+        可见性一律由 :meth:`Authz.scope_events` 追加条件：
+        - SUPER_ADMIN / SCENARIO_USER：仅本人创建的事件（需求 5.2 访问控制第 1 条）；
+        - SCENARIO_ADMIN：本场景全部事件。
 
         已隐藏（`hidden_at` 非空）的事件默认不出现在列表里，`include_hidden=True` 才带上
         —— 隐藏是可见性开关，不是删除（见 :meth:`set_hidden`）。
@@ -382,29 +359,11 @@ class RiskEventService(ServiceBase):
             raise ServiceError(400, "风险等级取值无效")
         page = max(1, int(page or 1))
         page_size = min(max(1, int(page_size or 10)), 200)
-        role = getattr(current_user, "role", None)
         stmt = select(RiskEvent)
-        if role == ROLE_SUPER_ADMIN:
-            stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
-                Dataset.visibility == DATASET_VISIBILITY_PLATFORM
-            )
-            if scenario_id is not None:
-                stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
-        elif role == ROLE_SCENARIO_ADMIN:
-            bound = getattr(current_user, "scenario_id", None)
-            if scenario_id is not None and scenario_id != bound:
-                raise ServiceError(403, "无权限操作")
-            stmt = stmt.join(Dataset, Dataset.id == RiskEvent.dataset_id).where(
-                RiskEvent.scenario_id == bound,
-                Dataset.visibility.in_(
-                    (DATASET_VISIBILITY_PLATFORM, DATASET_VISIBILITY_COMPANY)
-                ),
-            )
-        else:
-            stmt = stmt.where(RiskEvent.created_by_user_id == current_user.id)
-            if scenario_id is not None:
-                self.require_scenario_access(current_user, scenario_id)
-                stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
+        stmt = self.authz.scope_events(stmt, current_user)
+        if scenario_id is not None:
+            self.require_scenario_access(current_user, scenario_id)
+            stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
         if status is not None:
             stmt = stmt.where(RiskEvent.status == status)
         # 已隐藏的默认不查（隐藏是可见性开关，不是删除）
@@ -560,16 +519,6 @@ class RiskEventService(ServiceBase):
         return ok(message="处置说明已记录")
 
     # ------------------------------------------------------------------
-    # 删除：禁止（需求 5.2 访问控制第 4 条：历史风险事件不得被无痕删除或自动改写）
-    # ------------------------------------------------------------------
-    @service_call
-    def delete(self, current_user, event_id: int):
-        """风险事件不允许删除（需求 5.2：历史事件必须保持可追溯）。"""
-        self.require_login(current_user)
-        self._get(event_id)
-        raise ServiceError(400, "历史风险事件不允许删除，需保持可追溯")
-
-    # ------------------------------------------------------------------
     # 隐藏 / 取消隐藏：可见性开关（需求 5.2 禁止真删，所以给一个可逆的收起来动作）
     # ------------------------------------------------------------------
     @service_call
@@ -577,8 +526,7 @@ class RiskEventService(ServiceBase):
         """隐藏或取消隐藏风险事件（软删除，数据一行不动）。
 
         为什么不是删除：需求 5.2 访问控制第 4 条要求历史事件不得被无痕删除或自动改写，
-        :meth:`delete` 因此永远返回 400。列表需要一个「把不要的行收起来」的动作，
-        于是改成可见性开关 —— ``hidden_at`` 非空即隐藏，置回 NULL 即恢复，
+        风险事件因此不提供删除，只提供可见性开关 —— ``hidden_at`` 非空即隐藏，置回 NULL 即恢复，
         处置记录（handling_record）与统计口径全程不受影响。
 
         权限与「处置」一致（:meth:`_require_event_access`）：能处置才谈得上隐藏。

@@ -37,6 +37,10 @@ interface ApiDataset {
   record_count?: number;
   referenced?: boolean;
   enabled?: boolean;
+  change_type?: string | null;
+  change_type_label?: string | null;
+  is_breaking?: boolean;
+  base_version_id?: number | null;
 }
 
 interface ApiField {
@@ -195,6 +199,10 @@ export const mapApiDataset = (item: ApiDataset): Dataset => {
     uploaded_at: formatUploadedAt(item.uploaded_at),
     enabled: item.enabled ?? item.status === 'ACTIVE',
     referenced: Boolean(item.referenced),
+    change_type: item.change_type ?? null,
+    change_type_label: item.change_type_label ?? null,
+    is_breaking: Boolean(item.is_breaking),
+    base_version_id: item.base_version_id ?? null,
   };
 };
 
@@ -216,6 +224,10 @@ export const mapApiDatasetVersion = (item: ApiDataset): DatasetVersion => {
     uploaded_at: base.uploaded_at,
     enabled: base.enabled,
     referenced: base.referenced,
+    change_type: base.change_type,
+    change_type_label: base.change_type_label,
+    is_breaking: base.is_breaking,
+    base_version_id: base.base_version_id,
   };
 };
 
@@ -371,7 +383,6 @@ export const uploadDataset = async (params: {
   }>;
   fields_schema?: ApiField[];
   label_field?: string;
-  visibility?: string;
 }): Promise<Dataset> => {
   await ensureScenarioMaps();
   const logicalId = (params.logical_id || params.dataset_id || '').trim();
@@ -395,7 +406,6 @@ export const uploadDataset = async (params: {
       file_path: params.file_path,
       fields_schema: fieldsSchema,
       label_field: labelField,
-      visibility: params.visibility,
     })
   )) as ApiDataset;
   return mapApiDataset(item);
@@ -408,7 +418,6 @@ export const uploadDatasetFile = async (params: {
   name?: string;
   scenario_id: number | string;
   label_field: string;
-  visibility?: string;
 }): Promise<Dataset> => {
   await ensureScenarioMaps();
   // 后端 scenario_id 是数字 ID，这里把场景编码（如 power_system）转成数字
@@ -423,7 +432,6 @@ export const uploadDatasetFile = async (params: {
   form.append('scenario_id', String(scenarioNumeric));
   form.append('label_field', params.label_field);
   if (params.name?.trim()) form.append('name', params.name.trim());
-  if (params.visibility) form.append('visibility', params.visibility);
   const item = (await unwrapData(
     await request.post('/api/v1/datasets/upload', form)
   )) as ApiDataset;
@@ -464,6 +472,49 @@ export const createDatasetVersion = async (
     await request.put(`/api/v1/datasets/${pk}`, payload)
   )) as ApiDataset;
   return mapApiDatasetVersion(item);
+};
+
+/**
+ * 追加样本（POST /datasets/{id}/revisions/append，multipart 增量文件）。
+ *
+ * 增量文件必须与当前数据集同结构（字段名同名同序）。是否新建版本由后端按
+ * 迭代策略决定：未被模型引用时原地更新（版本号不变），已引用时自动新建版本。
+ */
+export const appendDatasetRows = async (
+  datasetId: string | number,
+  file: File
+): Promise<DatasetVersion> => {
+  const pk = await resolveDatasetPk(datasetId);
+  const form = new FormData();
+  form.append('file', file);
+  const item = (await unwrapData(
+    await request.post(`/api/v1/datasets/${pk}/revisions/append`, form)
+  )) as ApiDataset;
+  return mapApiDatasetVersion(item);
+};
+
+/** 数据集迭代记录（GET /datasets/{id}/revisions）：含原地更新，用于审计追溯。 */
+export interface DatasetRevisionItem {
+  id: number;
+  dataset_id: number;
+  change_type: string;
+  change_type_label: string;
+  is_breaking: boolean;
+  mode: 'in_place' | 'new_version';
+  result_dataset_id: number | null;
+  reason: string | null;
+  summary: string | null;
+  created_at: string | null;
+}
+
+export const getDatasetRevisions = async (
+  datasetId: string | number
+): Promise<DatasetRevisionItem[]> => {
+  const pk = await resolveDatasetPk(datasetId);
+  const data = (await unwrapData(
+    await request.get(`/api/v1/datasets/${pk}/revisions`)
+  )) as { items?: DatasetRevisionItem[] };
+  return data?.items ?? [];
 };
 
 /** 停用数据集版本 */
