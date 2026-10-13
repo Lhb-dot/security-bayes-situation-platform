@@ -15,6 +15,9 @@ import weka.classifiers.zh.CAVWNB.WANBDistribution;
 import weka.classifiers.zh.MVCAVWNB.EMAWNB;
 import weka.classifiers.zh.MVCAVWNB.MVCAVWNB;
 import weka.classifiers.mkx.DIWNB.DIWNB_HE;
+import weka.classifiers.bayes.FTAWNB;
+import weka.classifiers.zh.FLNB.FLNB;
+import weka.classifiers.zh.KFDB.KFDB;
 import weka.core.Attribute;
 import weka.core.DenseInstance;
 import weka.core.Instance;
@@ -144,9 +147,10 @@ public final class NbAlgorithmService {
         MODEL_CACHE.put(modelPath, new CachedModel(classifier, estimated));
     }
 
-    /** 本服务支持的算法（同一个进程同时服务全部算法，5 个算法共用同一份字节码）。 */
+    /** 本服务支持的算法（同一个进程同时服务全部算法，8 个算法共用同一份字节码）。 */
     private static final String[] SUPPORTED_ALGORITHMS = {
-            "A2WNB", "CAVWNB", "DIWNB", "MAWNB", "EMAWNB"
+            "A2WNB", "CAVWNB", "DIWNB", "MAWNB", "EMAWNB",
+            "KFDB", "FLNB", "FTAWNB"
     };
 
     /**
@@ -208,6 +212,9 @@ public final class NbAlgorithmService {
             case "DIWNB": return "weka.classifiers.mkx.DIWNB.DIWNB_HE";
             case "MAWNB": return "weka.classifiers.zh.MVCAVWNB.MVCAVWNB";
             case "EMAWNB": return "weka.classifiers.zh.MVCAVWNB.EMAWNB";
+            case "KFDB": return "weka.classifiers.zh.KFDB.KFDB";
+            case "FLNB": return "weka.classifiers.zh.FLNB.FLNB";
+            case "FTAWNB": return "weka.classifiers.bayes.FTAWNB";
             default: throw new IllegalArgumentException("不支持的算法: " + code);
         }
     }
@@ -511,6 +518,29 @@ public final class NbAlgorithmService {
                         .put("probability_change", probabilityChange)
                         .put("rode", rode)
                         .put("available", true);
+            } else if (base instanceof KFDB) {
+                KFDB kfdb = (KFDB) base;
+                JSONObject full = viewObj("KFDB 依赖结构视图", finalDistribution, header);
+                views.put(full);
+                specific.put("full_view", full)
+                        .put("model_score", kfdb.getMS())
+                        .put("max_parents", kfdb.getMaxParentsForReport())
+                        .put("available", true);
+                calculationMethod = "K-Free 依赖贝叶斯：按属性依赖结构聚合条件概率";
+            } else if (base instanceof FLNB) {
+                FLNB flnb = (FLNB) base;
+                JSONObject full = viewObj("FLNB 懒惰相似度视图", finalDistribution, header);
+                views.put(full);
+                specific.put("full_view", full)
+                        .put("weight_scheme", flnb.getWeightScheme())
+                        .put("available", true);
+                calculationMethod = "频率懒惰朴素贝叶斯：训练样本按相似度加权后估计条件概率";
+            } else if (base instanceof FTAWNB) {
+                JSONObject full = viewObj("FTAWNB 属性加权视图", finalDistribution, header);
+                views.put(full);
+                specific.put("full_view", full)
+                        .put("available", true);
+                calculationMethod = "属性加权朴素贝叶斯：互信息微调属性权重后估计条件概率";
             }
 
             explain.put("views", views);
@@ -891,6 +921,19 @@ public final class NbAlgorithmService {
                     throw new IllegalArgumentException("A2WNB 的第一阶段分类器必须是 RODE");
                 }
                 ((RODE) first).setTask(parameters.getInt("rode_task"));
+            }
+        } else if (base instanceof FLNB) {
+            FLNB flnb = (FLNB) base;
+            if (parameters.has("weight_scheme")) {
+                flnb.setWeightScheme(parameters.getString("weight_scheme"));
+            }
+        } else if (base instanceof KFDB) {
+            KFDB kfdb = (KFDB) base;
+            if (parameters.has("model_score")) {
+                kfdb.set_m_S(parameters.getString("model_score"));
+            }
+            if (parameters.has("max_parents")) {
+                kfdb.setK(parameters.getInt("max_parents"));
             }
         }
     }

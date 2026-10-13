@@ -44,7 +44,7 @@ export interface DatasetStat {
   uploader_role: string | null;
   /** 上传时间（ISO 8601 字符串），缺失时为 null */
   uploaded_at: string | null;
-  /** 所属同源组 key（内容指纹或显式同源族 ID） */
+  /** 所属分组 key（文件内容指纹） */
   source_group: string;
   /** 文件内容指纹 "{size}-{sha1前16位}"，文件缺失时为 "missing:{logical_id}" */
   content_fingerprint: string;
@@ -144,9 +144,9 @@ export interface ProfileBase {
     datasets: string[];
     record_count: number;
     deduplicated: boolean;
-    /** 该同源组包含的物理文件数（成员数） */
+    /** 该分组包含的物理文件数（成员数） */
     file_count: number;
-    /** 该同源组的组 key（内容指纹或显式同源族 ID） */
+    /** 该分组的组 key（文件内容指纹） */
     fingerprint: string;
   }>;
   /** 每数据集的模型版本覆盖统计（无模型的数据集也在列，published/draft/total 均为 0） */
@@ -254,13 +254,13 @@ export interface PowerProfile extends ProfileBase {
   component_matrix: ComponentMatrixRow[];
 }
 
-/** 同源编码族治理表的一行（每数据集一行） */
+/** 编码形态与分组治理表的一行（每数据集一行） */
 export interface EncodingFamilyRow {
   /** 数据集逻辑 ID */
   logical_id: string;
   /** 数据集名（= logical_id） */
   name: string;
-  /** 所属同源组 key */
+  /** 所属分组 key（文件内容指纹） */
   source_group: string;
   /** 编码形态：数值连续 / 离散区间 / 配对轨迹 / 未知 */
   encoding: 'numeric' | 'interval' | 'paired' | 'unknown';
@@ -270,23 +270,23 @@ export interface EncodingFamilyRow {
   record_count: number;
   /** 正类（碰撞）样本数 */
   risk_count: number;
-  /** 正类数是否与同源组代表一致 */
+  /** 正类数是否与分组代表一致 */
   collision_consistent: boolean;
   /** 该数据集已发布模型版本数 */
   published_model_count: number;
 }
 
-/** 同源冗余度与去重收益 */
+/** 重复内容冗余度与去重收益 */
 export interface RedundancyStat {
   /** 物理文件总数 */
   file_count: number;
-  /** 去重后的有效同源组数 */
+  /** 去重后的有效分组数 */
   effective_group_count: number;
-  /** 同源冗余率 = 1 - effective_group_count / file_count */
+  /** 重复内容冗余率 = 1 - effective_group_count / file_count */
   redundancy_rate: number;
   /** 去重前样本量（按文件逐个求和） */
   raw_samples: number;
-  /** 去重后样本量（同源组代表求和） */
+  /** 去重后样本量（分组代表求和） */
   deduped_samples: number;
 }
 
@@ -300,9 +300,9 @@ export interface FlightdeckProfile extends ProfileBase {
   relative_angle: { mean: number | null; max: number | null };
   distance_curve: Array<{ step: number; mean: number | null }>;
   collision_comparison: Record<'collision' | 'normal', { count: number; mean_min_distance: number | null }>;
-  /** 同源编码族治理表（每数据集一行） */
+  /** 编码形态与分组治理表（每数据集一行） */
   encoding_family: EncodingFamilyRow[];
-  /** 同源冗余度与去重收益 */
+  /** 重复内容冗余度与去重收益 */
   redundancy: RedundancyStat;
 }
 

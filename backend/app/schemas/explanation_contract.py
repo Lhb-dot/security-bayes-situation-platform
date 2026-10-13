@@ -19,7 +19,10 @@ EXPLANATION_ROLES = ("SCENARIO_USER", "SCENARIO_ADMIN", "SUPER_ADMIN")
 #: 由 EXPLANATION_ROLES 派生，避免同一集合出现第二份字面量。
 #: （services/constants.py 里另有一份基于角色常量的 ADMIN_ROLES，值相同。）
 ADMIN_ROLES = EXPLANATION_ROLES[1:]
-ALGORITHM_CODES = ("A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB")
+ALGORITHM_CODES = (
+    "A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB",
+    "KFDB", "FLNB", "FTAWNB",
+)
 
 #: 解释流的 SSE 事件词表（权威定义）。前端逐字对应
 #: ``frontend/src/api/inferenceRecordApi.ts`` 的 event 分支。
@@ -135,6 +138,9 @@ def algorithm_specific_template(algorithm_code: str) -> dict[str, Any]:
             "neighbor_class_ratios": [],
             "consistency": None,
         },
+        "KFDB": {"full_view": {}, "model_score": None, "max_parents": None},
+        "FLNB": {"full_view": {}, "weight_scheme": None},
+        "FTAWNB": {"full_view": {}},
     }
     return deepcopy(templates.get(code, {"available": False, "reason": "当前算法未提供专属解释数据"}))
 

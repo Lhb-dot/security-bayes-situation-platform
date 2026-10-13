@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import * as userApi from '@/api/userApi';
+import { resetScenarioIdCache } from '@/api/scenarioApi';
 import { invalidateSessionRequests, RequestError, setCsrfToken } from '@/utils/request';
 import type { ScenarioId, UserAccount, UserRole } from '@/types/security';
 
@@ -105,6 +106,8 @@ export const useUserStore = defineStore('user', {
       session.auth = null;
       session.usersSequence += 1;
       invalidateSessionRequests();
+      // 场景「编码 → 数字 ID」缓存按用户可见集生成，换账号必须清掉，否则新账号会命中旧映射。
+      resetScenarioIdCache();
       // 退出 POST 仍需当前 CSRF；该请求结束时再由 userApi 清理。
       if (options?.clearCredentials !== false) setCsrfToken(null);
       this.currentUser = null;

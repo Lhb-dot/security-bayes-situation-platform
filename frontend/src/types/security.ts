@@ -445,7 +445,7 @@ export interface AlgorithmParamDef {
 
 /** 算法注册定义（需求 6.6.2 算法接入规则） */
 export interface AlgorithmDefinition {
-  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB
+  algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB / KFDB / FLNB / FTAWNB
   display_name: string;
   available: boolean;                                     // 可用状态
   input_constraints: string;                              // 支持的输入类型或数据约束

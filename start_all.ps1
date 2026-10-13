@@ -152,7 +152,7 @@ while ((Get-Date) -lt $t) {
     try { if ((Invoke-RestMethod "http://127.0.0.1:12315/health" -TimeoutSec 2).status -eq "ok") { $nbOk = $true; break } } catch {}
     Start-Sleep 1
 }
-if ($nbOk) { Write-Host ":12315  OK  A2WNB/CAVWNB/EMAWNB/MAWNB/DIWNB" -ForegroundColor Green }
+if ($nbOk) { Write-Host ":12315  OK  A2WNB/CAVWNB/EMAWNB/MAWNB/DIWNB/KFDB/FLNB/FTAWNB" -ForegroundColor Green }
 else       { Write-Host ":12315  FAIL" -ForegroundColor Red }
 
 # ---- Python FastAPI ----

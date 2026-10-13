@@ -72,7 +72,7 @@ java -jar backend/lib/pmwnb-service.jar 12313
 # 3. Java 通用预测服务（端口 12314）
 java -jar backend/lib/predict-service.jar 12314
 
-# 4. Java NB 算法服务（端口 12315，A2WNB / CAVWNB / EMAWNB / MAWNB / DIWNB 共用同一进程）
+# 4. Java NB 算法服务（端口 12315，A2WNB / CAVWNB / EMAWNB / MAWNB / DIWNB / KFDB / FLNB / FTAWNB 共用同一进程）
 java -jar backend/lib/nb-algorithm-service.jar 12315
 
 # 5. Python FastAPI 后端（端口 12312）

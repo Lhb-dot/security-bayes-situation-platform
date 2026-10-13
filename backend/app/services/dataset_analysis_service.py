@@ -94,6 +94,27 @@ ALGORITHM_APPLICABILITY: dict[str, dict[str, Any]] = {
             "原生支持连续特征；复现论文结果时数据集会先做全局离散",
         ],
     },
+    "KFDB": {
+        "needs_discrete_input": True,
+        "notes": [
+            "K-Free 依赖贝叶斯：为每个属性学习最多 k 个父属性的依赖结构后做概率推断",
+            "只接受离散属性，数值特征需前置离散（平台自动完成）",
+        ],
+    },
+    "FLNB": {
+        "needs_discrete_input": True,
+        "notes": [
+            "频率懒惰朴素贝叶斯：按测试样本与训练样本的频率相似度加权估计条件概率",
+            "只接受离散属性，数值特征需前置离散（平台自动完成）",
+        ],
+    },
+    "FTAWNB": {
+        "needs_discrete_input": True,
+        "notes": [
+            "属性加权朴素贝叶斯：用属性与类别的互信息微调属性权重后估计条件概率",
+            "只接受离散属性，数值特征需前置离散（平台自动完成）",
+        ],
+    },
 }
 
 _FALLBACK_ALGORITHM_NOTE = "暂无该算法的补充适用性说明。"

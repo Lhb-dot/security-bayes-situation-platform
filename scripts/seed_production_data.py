@@ -6,7 +6,6 @@
 数据链路（每一步都走真实 HTTP 接口 → Service → ORM → PostgreSQL，不直插数据库）：
 
     账号（4 场景 × 管理员 + 4 用户）
-      → 数据集（三级可见性：platform / company / personal）
       → 模型（各场景管理员真实训练 → 发布 → 设默认推荐）
       → 推理记录 + 风险事件（真实 Java 预测服务）
       → 处置记录（状态流转 + 处置说明）
@@ -14,14 +13,14 @@
       → 时间轴铺开（把「都是刚刚」改成近 60 天的分布）
 
 用法：
-    python scripts/seed_production_data.py --stage accounts,datasets,models
+    python scripts/seed_production_data.py --stage accounts,models
     python scripts/seed_production_data.py --stage inference --inferences 2000
     python scripts/seed_production_data.py --stage handling,reports
     python scripts/seed_production_data.py --stage timeline
     python scripts/seed_production_data.py --all
 
 重跑安全性（实测确认）：
-    账号 / 数据集 / 模型 —— 跳过已存在的，重复跑不新增；
+    账号 / 模型 —— 跳过已存在的，重复跑不新增；
     处置 —— 只挑 PENDING 事件，天然收敛；
     推理 / 报告 / 快照 —— **追加式**，重跑会再生成一批（要重跑先清库）。
 """
@@ -62,10 +61,8 @@ SCENARIOS = [
         "id": 1,
         "admin": "net_admin",
         "users": ["alice", "net_user01", "net_user02", "net_user03"],
-        "train": [("nf_unsw_nb15_v2", ["A2WNB", "MAWNB"])],
-        "infer": ["nf_unsw_nb15_v2", "kdd_train_20_percent"],
-        "company": ("net_flow_company_v1", "data/network/NF-UNSW-NB15-v2.arff", "Label"),
-        "personal": ("alice_conn_personal_v1", "data/network/KDDTrain_20Percent.arff", "class", "alice"),
+        "train": [("nf_unsw_nb15", ["A2WNB", "MAWNB", "KFDB", "FLNB", "FTAWNB"])],
+        "infer": ["nf_unsw_nb15", "kdd_train_20"],
         "thresholds": [(0.50, 0.80), (0.45, 0.75), (0.55, 0.85), (0.35, 0.65), (0.60, 0.90)],
     },
     {
@@ -73,10 +70,8 @@ SCENARIOS = [
         "id": 2,
         "admin": "power_admin",
         "users": ["bob", "power_user01", "power_user02", "power_user03"],
-        "train": [("powergrid_knowledgebase", ["A2WNB", "MAWNB", "PMWNB", "DIWNB"])],
-        "infer": ["powergrid_knowledgebase"],
-        "company": ("power_grid_company_v1", "data/power/powergrid_knowledgebase_dataset.arff", "Target_Event"),
-        "personal": ("bob_sensor_personal_v1", "data/power/powergrid_knowledgebase_dataset.arff", "Target_Event", "bob"),
+        "train": [("powergrid_knowledge", ["A2WNB", "MAWNB", "PMWNB", "DIWNB", "KFDB", "FLNB", "FTAWNB"])],
+        "infer": ["powergrid_knowledge"],
         "thresholds": [(0.50, 0.80), (0.40, 0.70), (0.55, 0.85), (0.30, 0.60), (0.65, 0.90)],
     },
     {
@@ -84,10 +79,8 @@ SCENARIOS = [
         "id": 3,
         "admin": "zs",
         "users": ["deck_user01", "deck_user02", "deck_user03", "deck_user04"],
-        "train": [("carrier_feature2_biaoqian", ["A2WNB", "MAWNB"])],
+        "train": [("carrier_feature2_biaoqian", ["A2WNB", "MAWNB", "KFDB", "FLNB", "FTAWNB"])],
         "infer": ["carrier_feature2_biaoqian"],
-        "company": ("carrier_track_company_v1", "data/carrier/Feature2_Cleaning_lisan.arff", "Collision"),
-        "personal": ("deck_user01_trail_personal_v1", "data/carrier/paired_TrailData_feature2_biaoqian.arff", "Collision", "deck_user01"),
         "thresholds": [(0.50, 0.80), (0.45, 0.70), (0.55, 0.85), (0.35, 0.65), (0.60, 0.88)],
     },
     {
@@ -95,10 +88,8 @@ SCENARIOS = [
         "id": 4,
         "admin": "geo_admin",
         "users": ["carol", "geo_user01", "geo_user02", "geo_user03"],
-        "train": [("dis_raw_data", ["A2WNB", "MAWNB", "PMWNB", "DIWNB"])],
+        "train": [("dis_raw_data", ["A2WNB", "MAWNB", "PMWNB", "DIWNB", "KFDB", "FLNB", "FTAWNB"])],
         "infer": ["dis_raw_data", "dis_landslides", "dis_guaruja_random"],
-        "company": ("geo_slope_company_v1", "data/geological/DIS_Landslides.arff", "LS"),
-        "personal": ("carol_slope_personal_v1", "data/geological/DIS_raw_data.arff", "Label", "carol"),
         "thresholds": [(0.50, 0.80), (0.42, 0.72), (0.55, 0.85), (0.38, 0.68), (0.62, 0.90)],
     },
 ]
@@ -204,61 +195,6 @@ def stage_accounts(state):
 
 
 # ---------------------------------------------------------------------------
-# 阶段二：数据集（三级可见性）
-# ---------------------------------------------------------------------------
-def stage_datasets(state):
-    """上传 company / personal 数据集。
-
-    幂等：先按上传者视角查一遍已有 logical_id，已存在就跳过。
-    —— 平台的 `/datasets/upload` 对同一 logical_id 是「新增一个版本」，
-    不做这层判断的话重跑会给每个数据集多出一个 v2（实测 19 → 27 条）。
-    """
-    uploaded, skipped = [], []
-
-    def have(cli):
-        items = cli.data("GET", "/datasets", params={"page": 1, "page_size": 200})["items"]
-        return {d["logical_id"] for d in items}
-
-    for sc in SCENARIOS:
-        # company：场景管理员上传
-        logical_id, rel_src, label = sc["company"]
-        cli = Client(sc["admin"])
-        if logical_id in have(cli):
-            skipped.append(logical_id)
-            print(f"  [company] {logical_id} 跳过（已存在）")
-        else:
-            st, body = cli.post("/datasets/upload", data={
-                "logical_id": logical_id, "scenario_id": str(sc["id"]),
-                "label_field": label, "visibility": "company",
-            }, files={"file": (Path(rel_src).name, (PROJECT_ROOT / rel_src).read_bytes(), "application/octet-stream")})
-            if body.get("code") == 0:
-                uploaded.append({"logical_id": logical_id, "visibility": "company", "by": sc["admin"]})
-                print(f"  [company] {logical_id} <- {sc['admin']}")
-            else:
-                print(f"  [company] {logical_id} 跳过/失败: {body.get('message')}")
-
-        # personal：场景用户上传（强制 personal）
-        logical_id, rel_src, label, owner = sc["personal"]
-        cli = Client(owner)
-        if logical_id in have(cli):
-            skipped.append(logical_id)
-            print(f"  [personal] {logical_id} 跳过（已存在）")
-        else:
-            st, body = cli.post("/datasets/upload", data={
-                "logical_id": logical_id, "scenario_id": str(sc["id"]), "label_field": label,
-            }, files={"file": (Path(rel_src).name, (PROJECT_ROOT / rel_src).read_bytes(), "application/octet-stream")})
-            if body.get("code") == 0:
-                uploaded.append({"logical_id": logical_id, "visibility": "personal", "by": owner})
-                print(f"  [personal] {logical_id} <- {owner}")
-            else:
-                print(f"  [personal] {logical_id} 跳过/失败: {body.get('message')}")
-
-    state["datasets_uploaded"] = uploaded
-    state["datasets_skipped"] = skipped
-    return state
-
-
-# ---------------------------------------------------------------------------
 # 阶段三：模型（训练 → 发布 → 默认推荐）
 # ---------------------------------------------------------------------------
 def _param_variants(schema, index):
@@ -266,6 +202,9 @@ def _param_variants(schema, index):
 
     取 schema 默认值作为基线，再按 index 轮换离散化方式 / 分箱数，
     使同一数据集上的多个算法版本参数不同（模型对比才有内容可看）。
+    算法自带的额外枚举 / 整数超参数（如 KFDB 的 model_score、max_parents，
+    FLNB 的 weight_scheme）同样按 index 在合法取值范围内轮换，保证新接入算法
+    与既有算法一样，能产出参数不同的对比版本。
     """
     params = {}
     for item in schema or []:
@@ -275,6 +214,17 @@ def _param_variants(schema, index):
         params["discrete_method"] = ("equal_width", "equal_freq")[index % 2]
     if "discrete_bins" in params:
         params["discrete_bins"] = (5, 10, 20)[index % 3]
+    for item in schema or []:
+        name = item.get("name")
+        if name in ("discrete_method", "discrete_bins"):
+            continue
+        if item.get("type") == "enum" and item.get("enum_values"):
+            values = item["enum_values"]
+            params[name] = values[index % len(values)]
+        elif item.get("type") == "int":
+            low, high = item.get("min"), item.get("max")
+            if isinstance(low, int) and isinstance(high, int) and high >= low:
+                params[name] = low + index % (high - low + 1)
     return params
 
 
@@ -329,7 +279,7 @@ def stage_models(state):
             models = cli.data("GET", "/model-versions", params={
                 "page": 1, "page_size": 200, "dataset_id": dataset["id"]})["items"]
             pub = [m for m in models if m["status"] == "PUBLISHED"]
-            if not pub or any(m["is_default"] for m in pub):
+            if not pub or any(m["is_recommended"] for m in pub):
                 continue
             best = max(pub, key=lambda m: (m.get("evaluation_metrics") or {}).get("accuracy") or 0)
             cli.data("POST", f"/model-versions/{best['id']}/set-default")
@@ -673,7 +623,6 @@ def stage_timeline(state, days=60):
 # ---------------------------------------------------------------------------
 STAGES = {
     "accounts": stage_accounts,
-    "datasets": stage_datasets,
     "models": stage_models,
     "handling": stage_handling,
     "reports": stage_reports,
@@ -681,13 +630,13 @@ STAGES = {
 
 # --all 必须按依赖顺序显式列出：处置依赖推理产出的事件，
 # 直接用 dict 顺序会把 handling 排到 inference 前面 —— 空库上等于静默跳过。
-ALL_STAGES = ["accounts", "datasets", "models", "inference", "handling", "reports", "timeline"]
+ALL_STAGES = ["accounts", "models", "inference", "handling", "reports", "timeline"]
 
 
 def main():
     parser = argparse.ArgumentParser(description="虚拟生产数据注入")
-    parser.add_argument("--stage", default="accounts,datasets,models",
-                        help="逗号分隔：accounts,datasets,models,inference,handling,reports,timeline")
+    parser.add_argument("--stage", default="accounts,models",
+                        help="逗号分隔：accounts,models,inference,handling,reports,timeline")
     parser.add_argument("--all", action="store_true", help="跑全部阶段")
     parser.add_argument("--inferences", type=int, default=2000, help="推理总条数（近似）")
     parser.add_argument("--accounts", default=None, help="仅对指定账号跑推理（逗号分隔）")

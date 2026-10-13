@@ -4,7 +4,7 @@
  * 数据来自 /dashboard/admin/overview，字段口径见 docs/首页字段口径说明.md。
  *
  * 口径要点（docs/首页字段口径说明.md 第 6 条）：
- * - 有效数据集 / 有效样本量按「同源衍生只计一次」去重（carrier 三份算 1 个数据集）；
+ * - 有效数据集 / 有效样本量按「内容完全相同的重复注册文件只计一次」去重；
  * - 运行态指标来自 risk_event / inference_record / app_user 真实表，跑推理前为 0。
  */
 import { onMounted, ref } from 'vue';
@@ -48,23 +48,23 @@ onMounted(load);
       <DashKpis
         :items="[
           { label: '接入场景', value: data.totals.scenario_count, unit: '个', tone: 'primary', sub: '已接入场景' },
-          { label: '有效数据集', value: data.totals.effective_dataset_count, unit: '个', tone: 'success', sub: '同源文件已去重' },
+          { label: '有效数据集', value: data.totals.effective_dataset_count, unit: '个', tone: 'success', sub: '内容重复文件已去重' },
           { label: '有效样本量', value: data.totals.effective_sample_count, unit: '条', tone: 'warning', sub: '去重后统计' },
           { label: '可用算法', value: data.totals.algorithm_count, unit: '种', tone: 'purple', sub: '已注册算法' },
         ]"
       />
 
       <div class="d-grid2">
-        <DashCard title="各场景有效样本量" source="同源衍生文件只计一次">
+        <DashCard title="各场景有效样本量" source="内容重复文件只计一次">
           <DashColumns :items="data.scenarios.map((s) => ({ label: s.name.replace('态势', ''), value: s.effective_sample_count }))" />
         </DashCard>
-        <DashCard title="各场景数据集数量" source="按场景统计数据集数量（同源去重）">
+        <DashCard title="各场景数据集数量" source="按场景统计数据集数量（内容去重）">
           <DashColumns :items="data.scenarios.map((s) => ({ label: s.name.replace('态势', ''), value: s.dataset_count }))" />
         </DashCard>
       </div>
 
       <div class="d-grid2">
-        <DashCard title="各场景风险样本占比（%）" source="按各数据集标签字段全量统计（同源去重）">
+        <DashCard title="各场景风险样本占比（%）" source="按各数据集标签字段全量统计（内容去重）">
           <DashColumns
             :items="data.scenarios.map((s) => ({ label: s.name.replace('态势', ''), value: Number((s.risk_rate * 100).toFixed(1)) }))"
             :percent-value="true"

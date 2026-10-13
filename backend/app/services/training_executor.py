@@ -1,8 +1,8 @@
 """Java 算法训练/预测执行器。
 
-PMWNB 使用既有服务；A2WNB、MAWNB、EMAWNB、CAVWNB 使用由
-scripts/build_nb_algorithm_jars.ps1 编译的真实 Weka 算法服务。所有训练
-指标均来自 Java 分类器，不再生成 mock 指标。
+PMWNB 使用既有服务；A2WNB、MAWNB、EMAWNB、CAVWNB、DIWNB、KFDB、FLNB、
+FTAWNB 使用由 scripts/build_nb_algorithm_jars.ps1 编译的真实 Weka 算法服务。
+所有训练指标均来自 Java 分类器，不再生成 mock 指标。
 """
 import os
 

@@ -42,7 +42,7 @@ export interface ApiScenarioOverviewCard {
   name: string;
   description: string;
   access_status: string;
-  /** 去重口径有效数据集数（carrier 同源三份只计 1） */
+  /** 去重口径有效数据集数（内容完全相同的重复注册文件只计 1） */
   dataset_count: number;
   /** 去重口径有效样本量 */
   sample_count: number;
@@ -80,7 +80,7 @@ export interface ApiScenarioOverview {
  * 场景卡片聚合（真实数据，唯一数据源）。
  *
  * 「场景中心」与「平台运行总览」都消费本接口，指标口径完全一致
- * （数据集同源去重、模型只算已发布）。后端按角色限定可见场景与数据可见性。
+ * （内容重复文件去重、模型只算已发布）。后端按角色限定可见场景与数据可见性。
  */
 export const getScenarioOverview = async (): Promise<ApiScenarioOverview> => {
   const overview = unwrapData<ApiScenarioOverview>(await request.get('/api/v1/scenarios/overview'));
@@ -105,7 +105,7 @@ export const toScenarioCard = (card: ApiScenarioOverviewCard): Scenario => ({
   risk_score: card.risk_score,
   event_count: card.event_count,
   high_risk_count: card.high_risk_count,
-  // 去重口径：carrier 同源三份只计 1 个有效数据集
+  // 去重口径：内容完全相同的重复注册文件只计 1 个有效数据集
   dataset_count: card.dataset_count,
   // 本接口口径下「模型」= 已发布模型版本数
   model_count: card.published_model_count,
@@ -116,6 +116,17 @@ export const toScenarioCard = (card: ApiScenarioOverviewCard): Scenario => ({
 
 // 场景编码 → 数字 ID 缓存（前端路由用编码，后端接口用数字 ID）
 let _idByCodeCache: Record<string, number> | null = null;
+
+/**
+ * 清空「编码 → 数字 ID」缓存。
+ *
+ * 缓存来源（`GET /scenarios` 与 `GET /scenarios/overview`）都是**按当前登录用户**过滤的，
+ * 切换账号后若不清空，会把上一个用户可见的场景集复用到新账号上，导致
+ * `resolveScenarioId` 对本账号可见的场景报「场景不存在」。登录/退出/401 时调用。
+ */
+export const resetScenarioIdCache = (): void => {
+  _idByCodeCache = null;
+};
 
 /**
  * 用「编码 → 数字 ID」预填缓存。
@@ -142,12 +153,14 @@ export const resolveScenarioId = async (codeOrId: string | number): Promise<numb
   if (typeof codeOrId === 'number') return codeOrId;
   const text = String(codeOrId).trim();
   if (/^\d+$/.test(text)) return Number(text);
-  if (!_idByCodeCache) {
+  let id = _idByCodeCache?.[text];
+  if (id == null) {
+    // 缓存缺失（首次调用，或切换账号后命中了上一个用户的旧映射）→ 按当前会话重新拉取
     const list = await getScenarioList();
     _idByCodeCache = {};
     for (const s of list) _idByCodeCache[s.code] = s.id;
+    id = _idByCodeCache[text];
   }
-  const id = _idByCodeCache[text];
   if (id == null) throw new Error(`场景不存在: ${codeOrId}`);
   return id;
 };

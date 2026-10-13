@@ -118,7 +118,7 @@ const kpis = computed<KpiItem[]>(() => [
     value: props.data.sample_count,
     unit: '条',
     tone: 'primary',
-    sub: '同源去重后的有效样本',
+    sub: '内容重复文件去重后的有效样本',
   },
   {
     label: '统一风险占比',

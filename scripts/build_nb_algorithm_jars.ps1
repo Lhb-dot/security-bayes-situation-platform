@@ -6,9 +6,14 @@ $pmwnbJar = Join-Path $repo "backend\lib\pmwnb-service.jar"
 $buildRoot = Join-Path $repo "backend\java\.build-nb"
 $classes = Join-Path $buildRoot "classes"
 $lib = Join-Path $repo "backend\lib"
+$kfdbRoot = Join-Path $nbRoot "KFDB"
+$mltoolsJar = Join-Path $lib "MLTools.jar"
+$commonsMathJar = Join-Path $lib "commons-math3-3.6.1.jar"
 
 if (-not (Test-Path $pmwnbJar)) { throw "找不到依赖 JAR: $pmwnbJar" }
 if (-not (Test-Path $nbRoot)) { throw "找不到算法源码目录: $nbRoot" }
+if (-not (Test-Path $mltoolsJar)) { throw "找不到 KFDB 依赖 JAR: $mltoolsJar" }
+if (-not (Test-Path $commonsMathJar)) { throw "找不到 KFDB 依赖 JAR: $commonsMathJar" }
 
 if (Test-Path $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $classes -Force | Out-Null
@@ -19,17 +24,31 @@ $sources = @(
     (Join-Path $repo "backend\java\compat\DiscreteEstimator.java")
 )
 $sources += Get-ChildItem (Join-Path $nbRoot "A2WNB"), (Join-Path $nbRoot "CAVWNB"), (Join-Path $nbRoot "DIWNB"), (Join-Path $nbRoot "MVCAVWNB") -Filter *.java -File | Select-Object -ExpandProperty FullName
+$sources += Get-ChildItem (Join-Path $nbRoot "FLNB"), (Join-Path $nbRoot "FTAWNB") -Filter *.java -File | Select-Object -ExpandProperty FullName
+# KFDB 仓库源码（KFDB / hdp / tools 三个包）+ 平台适配器 KFDB.java。
+# 排除作者自带的 KFDB_CV / Evaluation / hdp\testing（实验入口与测试 main，平台不用，
+# 且 KFDB_CV 里写死了作者本机数据集路径）。
+$sources += Join-Path $kfdbRoot "KFDB.java"
+$sources += Get-ChildItem (Join-Path $kfdbRoot "src\KFDB") -Filter *.java -File |
+    Where-Object { $_.Name -notin @("Evaluation.java", "KFDB_CV.java") } |
+    Select-Object -ExpandProperty FullName
+$sources += Get-ChildItem (Join-Path $kfdbRoot "src\hdp") -Filter *.java -File | Select-Object -ExpandProperty FullName
+$sources += Get-ChildItem (Join-Path $kfdbRoot "src\hdp\logStirling") -Filter *.java -File | Select-Object -ExpandProperty FullName
+$sources += Get-ChildItem (Join-Path $kfdbRoot "src\hdp\logStirling\cache") -Filter *.java -File | Select-Object -ExpandProperty FullName
+$sources += Get-ChildItem (Join-Path $kfdbRoot "src\tools") -Filter *.java -File | Select-Object -ExpandProperty FullName
 $sources += Get-ChildItem (Join-Path $repo "backend\java\compat") -Filter *.java -File -Recurse | Select-Object -ExpandProperty FullName
 
 Write-Host "Compiling supplied NB Java sources..."
-& javac -encoding UTF-8 -cp $pmwnbJar -d $classes $sources
+# KFDB 的 hdp 包依赖 mltools（MLTools.jar）与 commons-math3；只在编译期需要 mltools
+# 的类在运行期不会加载（lgCache 已标 transient，logStirling 分支在 KFDB_MSE/ACC 下不走）。
+& javac -encoding UTF-8 -cp "$pmwnbJar;$commonsMathJar;$mltoolsJar" -d $classes $sources
 if ($LASTEXITCODE -ne 0) { throw "javac 编译失败" }
 
 $manifest = Join-Path $buildRoot "MANIFEST.MF"
 @(
     "Manifest-Version: 1.0",
     "Main-Class: com.security.bayes.nbservice.NbAlgorithmService",
-    "Class-Path: pmwnb-service.jar",
+    "Class-Path: pmwnb-service.jar commons-math3-3.6.1.jar MLTools.jar",
     ""
 ) | Set-Content -LiteralPath $manifest -Encoding ascii
 

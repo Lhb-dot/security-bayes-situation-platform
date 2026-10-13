@@ -9,6 +9,8 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '@/stores/userStore';
 import { roleLanding } from '@/router/guards';
+// 开发阶段快捷登录面板（独立组件）：连同下面的 <QuickLoginPanel /> 一起删掉即整块移除
+import QuickLoginPanel from '@/components/dev/QuickLoginPanel.vue';
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -89,6 +91,10 @@ const handleLogin = async () => {
       </form>
 
     </div>
+
+    <!-- 开发阶段快捷登录面板（独立组件）：删掉这一行 + 上面的 import 即可整块移除。
+         面板自身绝对定位在右侧，不参与布局，登录卡始终是原来的居中位置。 -->
+    <QuickLoginPanel />
   </div>
 </template>
 

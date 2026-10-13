@@ -297,6 +297,12 @@ def _algorithm_specific(
         )
     if algorithm_code == "A2WNB":
         return unavailable("A2WNB 未提供原始属性、增强属性和概率变化明细")
+    if algorithm_code == "KFDB":
+        return {"views": views} if views else unavailable("KFDB 未提供依赖结构视图明细")
+    if algorithm_code == "FLNB":
+        return {"views": views} if views else unavailable("FLNB 未提供懒惰相似度视图明细")
+    if algorithm_code == "FTAWNB":
+        return {"views": views} if views else unavailable("FTAWNB 未提供属性加权视图明细")
     return unavailable("当前算法未提供专属解释数据")
 
 

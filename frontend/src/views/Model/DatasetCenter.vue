@@ -16,7 +16,6 @@ import {
   getDatasetFields,
   getDatasetVersions,
   uploadDatasetFile,
-  createDatasetVersion,
   appendDatasetRows,
   getDatasetRevisions,
   disableDatasetVersion,
@@ -71,80 +70,39 @@ const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 const canUpload = computed(() => Boolean(userStore.currentUser));
 
 const uploadDialogVisible = ref(false);
-/** 弹窗模式：upload=上传新数据集(v1)；newVersion=修改已用数据集→创建新版本（保留旧版本） */
-const uploadDialogMode = ref<'upload' | 'newVersion'>('upload');
-/** 新版本模式下的目标数据集 */
-const newVersionTarget = ref<Dataset | null>(null);
 const uploadForm = ref({
   dataset_id: '',
   name: '',
   scenario_id: '' as ScenarioId | '',
-  data_format: 'arff' as Dataset['data_format'],
-  record_count: 0,
-  file_path: '',
   label_field: '',
 });
-/** 上传模式下选择的文件 */
+/** 上传数据集时选择的文件 */
 const selectedFile = ref<File | null>(null);
+/** 隐藏的原生 file input：由云上传图标按钮触发（复用 RiskInference 批量上传的交互） */
+const uploadFileInputRef = ref<HTMLInputElement | null>(null);
+const appendFileInputRef = ref<HTMLInputElement | null>(null);
+
+/** 云上传图标按钮：把点击转发给隐藏的原生 file input（清空后重选同一个文件也能触发 change） */
+const pickFile = (input: HTMLInputElement | null) => {
+  if (!input) return;
+  input.value = '';
+  input.click();
+};
 
 const onFileChange = (e: Event) => {
   const input = e.target as HTMLInputElement;
   selectedFile.value = input.files?.[0] ?? null;
 };
-const uploadFields = ref<Array<{ field_name: string; field_type: string; field_role: '输入特征' | '分类标签'; description: string }>>([
-  { field_name: '', field_type: 'float', field_role: '输入特征', description: '' },
-]);
 
 const openUploadDialog = () => {
-  uploadDialogMode.value = 'upload';
-  newVersionTarget.value = null;
   uploadForm.value = {
     dataset_id: '',
     name: '',
     scenario_id: isSuperAdmin.value ? '' : (userStore.boundScenarioId ?? ''),
-    data_format: 'arff',
-    record_count: 0,
-    file_path: '',
     label_field: '',
   };
-  uploadFields.value = [{ field_name: '', field_type: 'float', field_role: '输入特征', description: '' }];
   selectedFile.value = null;
   uploadDialogVisible.value = true;
-};
-
-/** 打开"创建新版本"弹窗：加载当前启用版本的字段结构，允许修改后保存为新版本（需求 2.3.3） */
-const openNewVersion = async (dataset: Dataset) => {
-  uploadDialogMode.value = 'newVersion';
-  newVersionTarget.value = dataset;
-  uploadForm.value = {
-    dataset_id: dataset.dataset_id,
-    name: dataset.name,
-    scenario_id: dataset.scenario_id,
-    data_format: dataset.data_format,
-    record_count: dataset.record_count,
-    file_path: '',
-    label_field: '',
-  };
-  try {
-    const fields = await getDatasetFields(dataset.dataset_id);
-    uploadFields.value = fields.map((f) => ({
-      field_name: f.field_name,
-      field_type: f.field_type,
-      field_role: f.field_role,
-      description: f.description,
-    }));
-  } catch {
-    uploadFields.value = [];
-  }
-  uploadDialogVisible.value = true;
-};
-
-const addUploadField = () => {
-  uploadFields.value.push({ field_name: '', field_type: 'float', field_role: '输入特征', description: '' });
-};
-
-const removeUploadField = (index: number) => {
-  uploadFields.value.splice(index, 1);
 };
 
 /** 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段 */
@@ -181,69 +139,15 @@ const submitNewDataset = async () => {
   }
 };
 
-/** 创建新版本：保留原有手动字段编辑流程（需求 2.3.3） */
-const submitNewVersion = async () => {
-  if (!uploadForm.value.dataset_id.trim() || !uploadForm.value.name.trim()) {
-    ElMessage.warning('请填写数据集编码和名称');
-    return;
-  }
-  const fields = uploadFields.value.filter((f) => f.field_name.trim());
-  if (fields.length === 0) {
-    ElMessage.warning('至少填写一个字段');
-    return;
-  }
-  const fieldNames = fields.map((f) => f.field_name);
-  if (new Set(fieldNames).size !== fieldNames.length) {
-    ElMessage.warning('字段名不允许重名');
-    return;
-  }
-  if (!fields.some((f) => f.field_role === '分类标签')) {
-    ElMessage.warning('必须指定一个分类标签字段');
-    return;
-  }
-  const fieldDefs = fields.map((f) => ({
-    field_name: f.field_name.trim(),
-    field_type: f.field_type,
-    field_role: f.field_role,
-    description: f.description,
-    sample_value: '',
-    nullable: false,
-  }));
-  if (!uploadForm.value.file_path.trim()) {
-    ElMessage.warning('请填写 data/ 目录下的相对文件路径，例如 data/carrier/xxx.arff');
-    return;
-  }
-  // newVersion 模式下 target 必然已由 openNewVersion 赋值
-  // （openUploadDialog 清空它的同时会把 mode 切回 upload，两者不会同时成立）
-  const target = newVersionTarget.value;
-  if (!target) return;
-  try {
-    const v = await createDatasetVersion(target.dataset_id, {
-      file_path: uploadForm.value.file_path.trim(),
-      fields: fieldDefs,
-      label_field: fieldDefs.find((f) => f.field_role === '分类标签')?.field_name,
-    });
-    ElMessage.success(`已创建新版本 ${v.dataset_version}，旧版本保留`);
-    uploadDialogVisible.value = false;
-    await loadDatasets();
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '操作失败');
-  }
-};
-
 const submitUpload = async () => {
   if (!uploadForm.value.scenario_id) {
     ElMessage.warning('必须指定所属场景');
     return;
   }
-  if (uploadDialogMode.value === 'upload') {
-    await submitNewDataset();
-    return;
-  }
-  await submitNewVersion();
+  await submitNewDataset();
 };
 
-// ===================== 追加样本（迭代：增加数据条数） =====================
+// ===================== 追加数据（迭代：增加数据条数） =====================
 // 增量文件必须与当前数据集同结构；是否新开版本由后端迭代策略决定
 // （未被模型引用 → 原地更新，版本号不变；已引用 → 自动新建版本）。
 const appendDialogVisible = ref(false);
@@ -273,8 +177,12 @@ const submitAppend = async () => {
   appendSubmitting.value = true;
   try {
     const version = await appendDatasetRows(target.dataset_id, appendFile.value);
+    // 版本号变了说明后端按「已被引用」策略新开了版本，没变则是原地并入
+    const rows = version.record_count.toLocaleString();
     ElMessage.success(
-      `追加成功：当前 v${version.dataset_version.replace(/^v/, '')} 共 ${version.record_count.toLocaleString()} 条`
+      version.dataset_version === target.dataset_version
+        ? `追加成功：已并入 ${version.dataset_version}，共 ${rows} 条`
+        : `追加成功：已新建版本 ${version.dataset_version}，共 ${rows} 条`
     );
     appendDialogVisible.value = false;
     if (versionTarget.value) {
@@ -785,10 +693,10 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 上传数据集 / 创建新版本弹窗（管理员，需求 2.3.2 / 2.3.3；append-to-body 防 topbar 遮挡） -->
+    <!-- 上传数据集弹窗（管理员，需求 2.3.2；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="uploadDialogVisible"
-      :title="uploadDialogMode === 'newVersion' ? `创建新版本 - ${newVersionTarget?.name ?? ''}` : '上传数据集'"
+      title="上传数据集"
       width="680px"
       top="6vh"
       append-to-body
@@ -797,15 +705,15 @@ onMounted(async () => {
       <div class="upload-form">
         <div class="upload-form__row">
           <label class="upload-form__label">数据集编码<span class="required">*</span></label>
-          <input v-model.trim="uploadForm.dataset_id" class="upload-form__input" placeholder="如 my_dataset_01" :disabled="uploadDialogMode === 'newVersion'" />
+          <input v-model.trim="uploadForm.dataset_id" class="upload-form__input" placeholder="如 my_dataset_01" />
         </div>
         <div class="upload-form__row">
           <label class="upload-form__label">数据集名称<span class="required">*</span></label>
-          <input v-model.trim="uploadForm.name" class="upload-form__input" placeholder="如 My Dataset" :disabled="uploadDialogMode === 'newVersion'" />
+          <input v-model.trim="uploadForm.name" class="upload-form__input" placeholder="如 My Dataset" />
         </div>
         <div class="upload-form__row">
           <label class="upload-form__label">所属场景<span class="required">*</span></label>
-          <select v-model="uploadForm.scenario_id" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion' || !isSuperAdmin">
+          <select v-model="uploadForm.scenario_id" class="upload-form__input" :disabled="!isSuperAdmin">
             <option value="" disabled>-- 请选择场景 --</option>
             <option value="network_security">网络安全</option>
             <option value="power_system">电力系统</option>
@@ -813,64 +721,42 @@ onMounted(async () => {
             <option value="geological_risk">地质风险</option>
           </select>
         </div>
-        <!-- 上传模式：文件选择 + 标签字段（后端自动识别 ARFF/CSV 并解析字段） -->
-        <template v-if="uploadDialogMode === 'upload'">
-          <div class="upload-form__row">
-            <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv）</label>
-            <input type="file" accept=".arff,.csv" class="upload-form__input" @change="onFileChange" />
-            <p v-if="selectedFile" class="version-tip">已选择：{{ selectedFile.name }}（{{ (selectedFile.size / 1024).toFixed(1) }} KB）</p>
-          </div>
-          <div class="upload-form__row">
-            <label class="upload-form__label">标签字段名<span class="required">*</span></label>
-            <input v-model.trim="uploadForm.label_field" class="upload-form__input" placeholder="通常是最后一列，如 label / class / Collision" />
-          </div>
-        </template>
-
-        <!-- 新版本模式：保留原有手动字段编辑 -->
-        <template v-else>
-          <div class="upload-form__row upload-form__row--split">
-            <div class="upload-form__half">
-              <label class="upload-form__label">数据格式</label>
-              <select v-model="uploadForm.data_format" class="upload-form__input" :disabled="uploadDialogMode === 'newVersion'">
-                <option value="arff">ARFF</option>
-                <option value="csv">CSV</option>
-                <option value="json">JSON</option>
-              </select>
-            </div>
-            <div class="upload-form__half">
-              <label class="upload-form__label">样本数量</label>
-              <input v-model.number="uploadForm.record_count" type="number" min="0" class="upload-form__input" placeholder="0" />
-            </div>
-          </div>
-          <p class="version-tip">创建新版本将保留旧版本，已产生的历史模型、推理记录和风险事件继续可追溯。</p>
-          <div class="upload-form__row">
-            <label class="upload-form__label">文件路径<span class="required">*</span></label>
+        <!-- 文件选择 + 标签字段（后端自动识别 ARFF/CSV 并解析字段） -->
+        <div class="upload-form__row">
+          <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv）</label>
+          <div class="upload-picker">
+            <!-- 原生 file input 藏起来，由云上传图标按钮代它触发（与 RiskInference 批量上传同一交互） -->
             <input
-              v-model.trim="uploadForm.file_path"
-              class="upload-form__input"
-              placeholder="data/场景目录/文件名.arff"
+              ref="uploadFileInputRef"
+              type="file"
+              accept=".arff,.csv"
+              class="upload-picker__input"
+              @change="onFileChange"
             />
+            <button class="upload-icon-btn" type="button" aria-label="选择数据文件" @click="pickFile(uploadFileInputRef)">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 13v8" />
+                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                <path d="m8 17 4-4 4 4" />
+              </svg>
+            </button>
+            <span class="upload-picker__name" :class="{ 'is-empty': !selectedFile }">
+              {{ selectedFile ? `${selectedFile.name}（${(selectedFile.size / 1024).toFixed(1)} KB）` : '未选择文件' }}
+            </span>
           </div>
-          <div class="upload-form__row">
-            <label class="upload-form__label">固定字段结构<span class="required">*</span>（至少一个字段，且必须包含一个分类标签）</label>
-            <div class="upload-fields">
-              <div v-for="(f, index) in uploadFields" :key="index" class="upload-field-row">
-                <input v-model.trim="f.field_name" class="upload-form__input upload-field-name" placeholder="字段名" />
-                <select v-model="f.field_type" class="upload-form__input upload-field-type">
-                  <option value="float">float</option>
-                  <option value="int">int</option>
-                  <option value="string">string</option>
-                </select>
-                <select v-model="f.field_role" class="upload-form__input upload-field-role">
-                  <option value="输入特征">输入特征</option>
-                  <option value="分类标签">分类标签</option>
-                </select>
-                <button class="upload-field-del" @click="removeUploadField(index)">✕</button>
-              </div>
-              <button class="upload-add-field" @click="addUploadField">+ 添加字段</button>
-            </div>
-          </div>
-        </template>
+        </div>
+        <div class="upload-form__row">
+          <label class="upload-form__label">标签字段名<span class="required">*</span></label>
+          <input v-model.trim="uploadForm.label_field" class="upload-form__input" placeholder="通常是最后一列，如 label / class / Collision" />
+        </div>
       </div>
       <template #footer>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
@@ -882,36 +768,27 @@ onMounted(async () => {
     <el-dialog
       v-model="versionDialogVisible"
       :title="versionDialogTitle"
-      width="880px"
-      top="6vh"
+      class="version-dialog"
+      width="1100px"
+      align-center
       append-to-body
       :close-on-click-modal="false"
     >
       <div class="version-dialog-toolbar">
         <el-button
           v-if="versionTarget"
-          class="version-create-button"
-          size="small"
-          type="primary"
-          plain
-          @click="openNewVersion(versionTarget)"
-        >
-          修改字段 → 创建新版本
-        </el-button>
-        <el-button
-          v-if="versionTarget"
-          class="version-create-button"
           size="small"
           plain
           @click="openAppendDialog(versionTarget)"
         >
-          追加样本 → 增加数据条数
+          追加数据
         </el-button>
       </div>
       <el-table
         :data="versionList"
+        class="version-dialog__table"
+        max-height="var(--version-pane-max-h)"
         stripe
-        max-height="62vh"
         style="width: 100%"
         :empty-text="versionLoading ? '加载中…' : '暂无版本记录'"
       >
@@ -957,7 +834,7 @@ onMounted(async () => {
             <span :class="row.referenced ? 'text-active' : 'text-muted'">{{ row.referenced ? '是' : '否' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="140" align="center" fixed="right">
+        <el-table-column label="操作" min-width="150" align="center">
           <template #default="{ row }: { row: DatasetVersion }">
             <div class="dataset-ops">
               <el-button
@@ -983,8 +860,8 @@ onMounted(async () => {
       </el-table>
 
       <!-- 迭代记录：含「原地更新」（不新增版本）的迭代，补齐版本列表看不到的审计视角 -->
+      <div class="revision-history__title">迭代记录</div>
       <div class="revision-history">
-        <div class="revision-history__title">迭代记录</div>
         <p v-if="revisionLoading" class="version-tip">加载中…</p>
         <p v-else-if="revisionList.length === 0" class="version-tip">暂无迭代记录</p>
         <ul v-else class="revision-history__list">
@@ -1009,12 +886,12 @@ onMounted(async () => {
       </div>
     </el-dialog>
 
-    <!-- 追加样本弹窗（迭代：增加数据条数；同结构增量文件，是否新开版本由后端策略决定） -->
+    <!-- 追加数据弹窗（迭代：增加数据条数；同结构增量文件，是否新开版本由后端策略决定） -->
     <el-dialog
       v-model="appendDialogVisible"
-      :title="`追加样本 - ${appendTarget?.name ?? ''}`"
+      :title="`追加数据 - ${appendTarget?.name ?? ''}`"
       width="560px"
-      top="10vh"
+      align-center
       append-to-body
       :close-on-click-modal="false"
     >
@@ -1025,10 +902,34 @@ onMounted(async () => {
         </p>
         <div class="upload-form__row">
           <label class="upload-form__label">增量文件<span class="required">*</span>（.arff / .csv）</label>
-          <input type="file" accept=".arff,.csv" class="upload-form__input" @change="onAppendFileChange" />
-          <p v-if="appendFile" class="version-tip">
-            已选择：{{ appendFile.name }}（{{ (appendFile.size / 1024).toFixed(1) }} KB）
-          </p>
+          <div class="upload-picker">
+            <!-- 原生 file input 藏起来，由云上传图标按钮代它触发（与 RiskInference 批量上传同一交互） -->
+            <input
+              ref="appendFileInputRef"
+              type="file"
+              accept=".arff,.csv"
+              class="upload-picker__input"
+              @change="onAppendFileChange"
+            />
+            <button class="upload-icon-btn" type="button" aria-label="选择增量文件" @click="pickFile(appendFileInputRef)">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 13v8" />
+                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                <path d="m8 17 4-4 4 4" />
+              </svg>
+            </button>
+            <span class="upload-picker__name" :class="{ 'is-empty': !appendFile }">
+              {{ appendFile ? `${appendFile.name}（${(appendFile.size / 1024).toFixed(1)} KB）` : '未选择文件' }}
+            </span>
+          </div>
         </div>
       </div>
       <template #footer>
@@ -1385,25 +1286,34 @@ onMounted(async () => {
   color: #ffb07a;
 }
 
-/* 迭代记录：版本表下方的紧凑审计列表（原地更新不进版本表，只能在这里看到） */
-.revision-history {
-  margin-top: 14px;
-  border-top: 1px solid rgba(220, 234, 255, 0.08);
-  padding-top: 10px;
-}
-
+/* 迭代记录：版本表下方的紧凑审计列表（原地更新不进版本表，只能在这里看到）。
+   标题在框外当小标题，框内只有记录；框的高度上限由弹窗统一给定（见 .version-dialog）。 */
 .revision-history__title {
   font-size: 0.85rem;
   color: rgba(220, 234, 255, 0.72);
   margin-bottom: 6px;
 }
 
+.revision-history {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(220, 234, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+}
+
+.revision-history .version-tip {
+  margin: 0;
+}
+
 .revision-history__list {
   list-style: none;
   margin: 0;
-  padding: 0;
-  max-height: 22vh;
+  padding: 0 4px 0 0;
+  /* 记录很多时框内自身上下滚动，不把弹窗撑出屏幕 */
   overflow-y: auto;
+  min-height: 0;
 }
 
 .revision-history__item {
@@ -1446,18 +1356,6 @@ onMounted(async () => {
   gap: 6px;
 }
 
-.upload-form__row--split {
-  flex-direction: row;
-  gap: 14px;
-}
-
-.upload-form__half {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .upload-form__label {
   font-size: 0.85rem;
   color: rgba(220, 234, 255, 0.7);
@@ -1487,54 +1385,54 @@ onMounted(async () => {
   color: #e8f1ff;
 }
 
-.upload-fields {
-  display: grid;
-  gap: 8px;
-  max-height: 45vh; /* 字段较多时列表内部竖向滚动，标题/X/底部按钮始终可见 */
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.upload-field-row {
+/* 增量文件选择：隐藏原生 file input（原生控件悬停会冒出「未选择文件」提示），
+   改由云上传图标按钮触发 —— 与 RiskInference 批量上传复用同一套按钮样式。 */
+.upload-picker {
   display: flex;
-  gap: 8px;
   align-items: center;
-}
-
-.upload-field-name {
-  flex: 2;
-}
-
-.upload-field-type {
-  flex: 1;
-}
-
-.upload-field-role {
-  flex: 1;
-}
-
-.upload-field-del {
-  border: none;
-  background: transparent;
-  color: rgba(255, 123, 114, 0.7);
-  font-size: 0.9rem;
-  cursor: pointer;
-  flex-shrink: 0;
-  padding: 6px;
-}
-
-.upload-add-field {
-  padding: 8px 14px;
-  border: 1px dashed rgba(125, 201, 255, 0.3);
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(125, 201, 255, 0.2);
   border-radius: 8px;
-  background: transparent;
-  color: #9ad6ff;
-  font-size: 0.85rem;
-  cursor: pointer;
+  background: rgba(8, 17, 31, 0.7);
 }
 
-.upload-add-field:hover {
-  background: rgba(91, 166, 255, 0.1);
+.upload-picker__input {
+  display: none;
+}
+
+.upload-picker__name {
+  min-width: 0;
+  font-size: 0.82rem;
+  color: rgba(220, 234, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-picker__name.is-empty {
+  color: rgba(220, 234, 255, 0.4);
+}
+
+.upload-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px dashed rgba(91, 166, 255, 0.35);
+  background: rgba(91, 166, 255, 0.07);
+  color: #9ad6ff;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.upload-icon-btn:hover {
+  background: rgba(91, 166, 255, 0.18);
+  border-color: rgba(91, 166, 255, 0.55);
 }
 
 .version-tip {
@@ -1549,7 +1447,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  margin-bottom: 12px;
 }
 </style>
 
@@ -1642,11 +1539,38 @@ onMounted(async () => {
   --el-button-hover-text-color: #bae3ff !important;
 }
 
-/* append-to-body 的版本管理弹窗不在 .dataset-center 内，需为创建版本按钮单独提高默认背景与边框对比度。 */
-.version-create-button.el-button--primary.is-plain {
-  background: rgba(91, 166, 255, 0.24) !important;
-  border-color: rgba(125, 201, 255, 0.56) !important;
-  color: #fff !important;
+/* 版本管理弹窗（append-to-body，不在 .dataset-center 内）：
+   加宽避免表格横向滚动；整体高度受限于视口并垂直居中。
+   上下两块（版本表 / 迭代记录）各自最多占「弹窗最大高度」的一半，多出来的部分
+   在各自区域内滚动，因此弹窗永远不会超出屏幕。 */
+.version-dialog {
+  /* 88vh 扣掉标题、工具栏、小标题与间距等固定开销后对半分。
+     版本表的 max-height 通过属性绑定同一个变量：只有走 Element Plus 的 max-height
+     属性，表格内部才会正确感知纵向滚动条并补上表头占位列。 */
+  --version-pane-max-h: calc((88vh - 220px) / 2);
+  display: flex;
+  flex-direction: column;
+  max-width: 96vw;
+  max-height: 88vh;
+  overflow: hidden;
+}
+
+.version-dialog .el-dialog__header {
+  flex: 0 0 auto;
+}
+
+/* 正文撑满剩余高度：版本表占满可用空间并在表内滚动，迭代记录框固定在底部。 */
+.version-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.version-dialog .revision-history {
+  max-height: var(--version-pane-max-h);
 }
 
 </style>

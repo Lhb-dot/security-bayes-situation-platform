@@ -395,7 +395,7 @@ const captureSelection = (level: 'scenario' | 'dataset' | 'model') => {
 /**
  * 默认选中哪个数据集：优先挑第一个「有已发布模型」的。
  *
- * 场景下的第一个数据集不一定有已发布模型（本地库里 nf_unsw_nb15_v2 就没有），
+ * 场景下的第一个数据集不一定有已发布模型（本地库里 nf_unsw_nb15 就没有），
  * 直接取第一个会让用户照样得手点一次，所以这里并发探一遍；一个都没有才退回第一个。
  */
 const pickDatasetWithPublishedModel = async (
@@ -1168,6 +1168,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div v-else-if="sampleLoading" class="pane-status">正在读取样本…</div>
+          <div v-else class="pane-status">该数据集没有可读取的样本</div>
         </div>
       </div>
     </section>

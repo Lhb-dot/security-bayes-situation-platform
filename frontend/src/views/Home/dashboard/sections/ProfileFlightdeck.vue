@@ -6,7 +6,7 @@
  * 视角：**管理端看数据资产与治理，不是执行端看飞行态势**。与场景用户的「我的工作台」
  * （WorkspaceFlightdeck）的区别：
  *   用户侧 = 我手上的活：双机方向角雷达、最小间距分布、最近告警；
- *   管理侧 = 这批数据能不能用：同源文件是否重复入模、正类口径一致吗、哪份数据白躺没人建模。
+ *   管理侧 = 这批数据能不能用：是否存在内容重复的文件、正类口径一致吗、哪份数据白躺没人建模。
  * 因此本页**不再渲染任何研判图**（间距曲线、方向角雷达、接近率、碰撞对比、总航程等），
  * 后端字段按契约 §5.3 仍然保留（向后兼容），只是本页不使用。
  *
@@ -110,10 +110,10 @@ const VISIBILITY_TEXT: Record<string, string> = {
 /* ------------------------------------------------------------------ */
 
 /**
- * S1：前 3 个四场景一致，第 4 个是舰面调度特色（同源冗余率）。
+ * S1：前 3 个四场景一致，第 4 个是舰面调度特色（重复内容冗余率）。
  *
  * 冗余度直接取画像顶层 `redundancy`（契约 §5.3 必填字段，后端按
- * 1 - 有效同源组数 / 文件数 算好下发）。前端不再按 dataset_file_count / dataset_count
+ * 1 - 有效分组数 / 文件数 算好下发）。前端不再按 dataset_file_count / dataset_count
  * 现算一遍：那是同一个公式的第二份实现，只会在两边口径漂移时给出两个数。
  */
 const assetKpis = computed(() => {
@@ -131,7 +131,7 @@ const assetKpis = computed(() => {
       value: props.data.sample_count,
       unit: '条',
       tone: 'success' as const,
-      sub: '同源文件已按同源组去重',
+      sub: '内容完全相同的文件已去重',
     },
     {
       label: '统一风险占比',
@@ -141,7 +141,7 @@ const assetKpis = computed(() => {
       sub: `风险样本 ${props.data.risk_count} 条 / 全部样本`,
     },
     {
-      label: '同源冗余率',
+      label: '重复内容冗余率',
       value: fmtPercent(stat.redundancy_rate),
       tone: 'warning' as const,
       raw: true,
@@ -151,15 +151,15 @@ const assetKpis = computed(() => {
 });
 
 /* ------------------------------------------------------------------ */
-/* D1 ★ 同源编码族治理表                                               */
+/* D1 ★ 编码形态与分组治理表                                           */
 /* ------------------------------------------------------------------ */
 
 /**
- * 同源组 → 可读组名。
+ * 内容分组 → 可读组名。
  *
- * 后端 `source_group` 是内容指纹（"{size}-{sha1前16位}"）或显式同源族 ID，
+ * 后端 `source_group` 是内容指纹（"{size}-{sha1前16位}"），
  * 直接上屏读者看不懂。这里按 `groups[]` 顺序编号并带上成员数：
- * 「同源组」一列取到相同值的行，就是同一批样本的不同编码 —— 这正是本表要传达的信息。
+ * 「内容分组」一列取到相同值的行，就是内容完全相同的重复注册文件 —— 这正是本表要传达的信息。
  * `groups[].group_id` 与 `groups[].fingerprint` 是同一个值（后端 `get_profile` 两处都写
  * `group_key`，只读探针实测逐组相等），故只需登记一个键。
  */
@@ -172,23 +172,23 @@ const groupLabels = computed(() => {
 });
 
 /**
- * 本表**只讲同源编码族治理**（同源组 / 编码形态 / 正类数 / 正类一致性），
+ * 本表**只讲编码形态与分组治理**（内容分组 / 编码形态 / 正类数 / 正类一致性），
  * 不复述字段数、样本量（资产属性，归 S2）、也不复述已发布模型数（归 S3 建模覆盖）。
  * 同一粒度的信息全页只展示一次。
  */
 const familyColumns: DashColumn[] = [
   { key: 'name', label: '数据集' },
-  { key: 'source_group', label: '同源组' },
+  { key: 'source_group', label: '内容分组' },
   { key: 'encoding', label: '编码形态' },
   { key: 'risk_count', label: '正类数', numeric: true, align: 'right' },
   { key: 'collision_consistent', label: '正类一致性' },
 ];
 
 /**
- * 同源编码族逐行对比。
+ * 各数据集的编码形态逐行对比。
  *
  * 管理端要回答的问题：同一批样本被注册成了几种编码？各自的正类数一致吗
- * （不一致说明同源组内至少有一份数据的标签口径有问题）？
+ * （不一致说明同一内容分组内至少有一份数据的标签口径有问题）？
  * 至于「谁已经拿去建过模了」，由 S3 建模覆盖统一回答，本表不再重复。
  */
 const familyRows = computed<Array<Record<string, unknown>>>(() =>
@@ -199,7 +199,7 @@ const familyRows = computed<Array<Record<string, unknown>>>(() =>
     source_group: groupLabels.value.get(row.source_group) ?? row.source_group,
     encoding: ENCODING_TEXT[row.encoding] ?? '未知',
     risk_count: row.risk_count,
-    // 正类一致性：与同源组代表的 risk_count 相同才算一致，不一致标红（管理告警）
+    // 正类一致性：与分组代表的 risk_count 相同才算一致，不一致标红（管理告警）
     collision_consistent:
       row.collision_consistent === true
         ? { text: '一致', tone: 'ok' }
@@ -208,10 +208,10 @@ const familyRows = computed<Array<Record<string, unknown>>>(() =>
 );
 
 /* ------------------------------------------------------------------ */
-/* D2 ★ 同源冗余度与去重收益                                            */
+/* D2 ★ 重复内容冗余度与去重收益                                        */
 /* ------------------------------------------------------------------ */
 
-/** 被同源吸收掉的数据集数 = 文件数 - 有效数据集数（多出来的都是重复入模风险） */
+/** 被去重吸收掉的数据集数 = 文件数 - 有效数据集数（多出来的都是重复入模风险） */
 const absorbedCount = computed(() => {
   const stat = props.data.redundancy;
   return Math.max(stat.file_count - stat.effective_group_count, 0);
@@ -220,7 +220,7 @@ const absorbedCount = computed(() => {
 /**
  * 去重收益四问中的后三问。
  *
- * **「同源冗余率」不在这里** —— 它已经是 S1 第 4 个 KPI（场景特色位），
+ * **「重复内容冗余率」不在这里** —— 它已经是 S1 第 4 个 KPI（场景特色位），
  * 同一个数在同一页出现两次会让读者以为是两个指标。此处只讲「去重前后样本差了多少、
  * 吸收掉几份」，冗余率本身由 S1 承载。
  */
@@ -239,7 +239,7 @@ const redundancyKpis = computed(() => {
       value: stat.deduped_samples,
       unit: '条',
       tone: 'success' as const,
-      sub: '同源组代表求和',
+      sub: '分组代表求和',
     },
     {
       label: '被吸收数据集数',
@@ -251,7 +251,7 @@ const redundancyKpis = computed(() => {
   ];
 });
 
-/** 每个同源组一根柱 = 组内物理文件数；标签用组内 logical_id 连接，便于核对是哪几份文件同源 */
+/** 每个内容分组一根柱 = 组内物理文件数；标签用组内 logical_id 连接，便于核对是哪几份文件重复 */
 const groupBars = computed(() =>
   props.data.groups.map((group) => ({
     value: group.datasets.join(' / '),
@@ -289,7 +289,7 @@ const datasetRows = computed(() =>
 
 /**
  * 本表**只讲资产属性**。`已发布模型数` 归 S3 建模覆盖（柱状图已按数据集逐根呈现），此处不再重复。
- * `标签字段` 保留在本表 —— 舰面场景的 D1 讲的是同源编码族，不承载标签口径，
+ * `标签字段` 保留在本表 —— 舰面场景的 D1 讲的是编码形态，不承载标签口径，
  * 故标签字段在本场景只在 S2 出现一次。
  */
 const assetColumns: DashColumn[] = [
@@ -410,21 +410,21 @@ const memberRows = computed(() => {
 </script>
 
 <template>
-  <!-- S1 场景资产总览（前 3 项四场景一致，第 4 项为舰面调度特色：同源冗余率） -->
+  <!-- S1 场景资产总览（前 3 项四场景一致，第 4 项为舰面调度特色：重复内容冗余率） -->
   <DashKpis :items="assetKpis" />
 
-  <!-- D1 ★ 舰面调度特色块 1：同源编码族治理表 -->
+  <!-- D1 ★ 舰面调度特色块 1：编码形态与分组治理表 -->
   <DashCard
-    title="同源编码族治理表"
-    source="同源组内为同一批样本的不同编码 · 只应保留一份入模"
+    title="编码形态与分组治理表"
+    source="按文件内容指纹分组 · 内容完全相同的重复注册会被合并"
   >
     <DashTable :columns="familyColumns" :rows="familyRows" row-key="logical_id" dense />
   </DashCard>
 
-  <!-- D2 ★ 舰面调度特色块 2：同源冗余度与去重收益 -->
+  <!-- D2 ★ 舰面调度特色块 2：重复内容冗余度与去重收益 -->
   <DashCard
-    title="同源冗余度与去重收益"
-    source="冗余率 = 1 - 有效数据集数 / 文件数；去重前按文件逐个求和，去重后按同源组代表求和"
+    title="重复内容冗余度与去重收益"
+    source="冗余率 = 1 - 有效分组数 / 文件数；去重前按文件逐个求和，去重后按分组代表求和"
   >
     <DashKpis :items="redundancyKpis" />
     <div style="margin-top: 14px">

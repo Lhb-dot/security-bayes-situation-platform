@@ -9,7 +9,7 @@
 
 ## 口径硬约束（`docs/首页字段口径说明.md` 第三轮核查结论）
 
-1. **有效样本量 / 有效数据集**：同源衍生文件（carrier 三份）只计一次，避免重复计数；
+1. **有效样本量 / 有效数据集**：内容完全相同的重复注册文件只计一次，避免重复计数；
 2. **风险样本占比**：按各数据集真实标签字段**全量**统计，不做分页截断（原「异常率」
    只读前 500 行导致恒 0）；
 3. **风险分区间固定分箱** 0.5-0.7 / 0.7-0.9 / 0.9-1.0 —— 事件仅在判为风险时创建，
@@ -95,19 +95,9 @@ RISK_TYPE_KEYS = {
     RISK_TYPE_GEOLOGICAL: "geological",
 }
 
-#: 同源衍生的航母数据集；三份内容同源，统计时只保留一份（避免 3 倍重复计数）
-CARRIER_LOGICAL_IDS = (
-    "carrier_feature2_biaoqian",
-    "carrier_feature2_lisan",
-    "carrier_paired_trail",
-)
-#: 航母同源组的代表数据集：数值未离散化，可直接做数值统计
+#: 舰面调度画像取用的航母数据集：数值未离散化，可直接做数值统计。
+#: 仅用于选择画像数据源，不再承担「同源去重代表」职责（三份航母数据集各自独立计数）。
 CARRIER_CANONICAL = "carrier_feature2_biaoqian"
-
-#: 显式同源族 key：carrier 三份是**同一批样本的三种编码**（内容 MD5 各不相同），
-#: 以及任何内容与其中一份完全相同的再注册（如 carrier_track_company_v1 = lisan）。
-#: 只按内容指纹分组会把它们拆成 3~4 个组，因此必须保留显式族。
-CARRIER_GROUP_ID = "carrier_shared_source"
 
 #: NF-UNSW 数据集的 PROTOCOL 为协议号，映射为可读名称
 PROTOCOL_NAMES = {"1": "ICMP", "6": "TCP", "17": "UDP", "47": "GRE", "50": "ESP", "89": "OSPF"}
@@ -157,8 +147,6 @@ GEO_DATASET_ROLES = {
     "dis_global_catalog": "全球编目表",
     "dis_guaruja_random": "随机基线集",
     # 生产 seed 用新 logical_id 注册的同一份 DIS_Landslides（字节完全相同，正常会被
-    # 同源去重吸收）。此处登记是兜底：一旦它成为组代表，角色不能落到「未分类」。
-    "geo_slope_company_v1": "风险标签表",
 }
 #: 未在 GEO_DATASET_ROLES 中登记的数据集统一角色
 GEO_ROLE_UNCLASSIFIED = "未分类"
@@ -395,7 +383,7 @@ def _percent_or_none(part: int, total: int) -> float | None:
     """占比（0~1 小数）；分母为 0 返回 ``None``（下发 null）。
 
     用于「0/0 是未定义而非 0」的字段：数据集 risk_rate（文件缺失 / 空表）、
-    工频合格率（无 PowerFrequencyHz 数据）、同源冗余率（无文件）。
+    工频合格率（无 PowerFrequencyHz 数据）、重复内容冗余率（无文件）。
 
     注意：前端 ``components/dashboard/dashFormat.ts`` 的 ``fmtPercent`` 用
     ``Number(value)`` 判有限性，而 ``Number(null) === 0``，**null 仍会渲染成
@@ -583,7 +571,7 @@ _HEADER_CACHE: dict[int, tuple[float, int, list[dict]]] = {}
 #: dataset_id -> (mtime, size, label_field, 总行数, 风险行数)
 _LABEL_STATS_CACHE: dict[int, tuple[float, int, str, int, int]] = {}
 
-#: dataset_id -> (mtime, size, 内容指纹)：同源去重的唯一依据，只依赖文件内容
+#: dataset_id -> (mtime, size, 内容指纹)：内容去重的唯一依据，只依赖文件内容
 _FINGERPRINT_CACHE: dict[int, tuple[float, int, str]] = {}
 
 #: dataset_id -> (mtime, size, label_field, 标签列取值计数)：label_values / label_kind 用
@@ -613,9 +601,8 @@ _FINGERPRINT_CHUNK = 1024 * 1024
 def content_fingerprint(dataset: Dataset) -> str:
     """文件内容指纹：``"{size}-{sha1(全文)[:16]}"``；文件缺失返回 ``"missing:{logical_id}"``。
 
-    同源去重的唯一依据。**不能**按 logical_id / 文件名判断同源——生产 seed 用新的
-    logical_id 重新注册了同一批物理文件（net_flow_company_v1 = NF-UNSW-NB15-v2 …），
-    只有内容哈希能识别出来。
+    内容去重的唯一依据。**不能**按 logical_id / 文件名判断是否重复——同一份物理文件可能以
+    不同 logical_id 重复注册，只有内容哈希能识别真正的同源。
 
     缓存与 ``_HEADER_CACHE`` / ``_LABEL_STATS_CACHE`` 同风格：以 ``_file_signature``
     的 (mtime, size) 作失效依据，进程级常驻（一份数据集只存一个 16 位摘要）。
@@ -687,7 +674,7 @@ def warm_dataset_caches(db, max_seconds: float = 10.0) -> dict[str, Any]:
             reader.fields(dataset)      # 表头：定位标签列
             reader.label_stats(dataset)  # 标签统计：首页 / 场景中心
             reader.label_value_counts(dataset)  # 标签取值构成：数据画像 describe()
-            content_fingerprint(dataset)  # 内容指纹：同源去重分组
+            content_fingerprint(dataset)  # 内容指纹：内容去重分组
             reader.rows(dataset)         # 全量行：数据画像 / 工作台
             warmed += 1
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，跳过该数据集
@@ -931,7 +918,7 @@ class _DatasetReader:
             "visibility": dataset.visibility,
             "uploader_role": dataset.uploader_role,
             "uploaded_at": uploaded_at.isoformat() if uploaded_at else None,
-            "source_group": source_group if source_group is not None else _group_key(dataset),
+            "source_group": source_group if source_group is not None else content_fingerprint(dataset),
             "content_fingerprint": content_fingerprint(dataset),
             "positive_labels": sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
             "label_values": [value for value, _ in label_values.most_common(12)],
@@ -941,46 +928,20 @@ class _DatasetReader:
         }
 
 
-def _group_key(dataset: Dataset) -> str:
-    """单文件同源去重键：carrier 白名单归入显式同源族，其余按内容指纹。"""
-    if dataset.logical_id in CARRIER_LOGICAL_IDS:
-        return CARRIER_GROUP_ID
-    return content_fingerprint(dataset)
-
-
 def _effective_groups(datasets: list[Dataset]) -> dict[str, list[Dataset]]:
-    """两遍分组：显式同源族（carrier）∪ 内容指纹。
+    """按内容指纹分组：**只有内容完全相同**的重复注册文件才归为一组。
 
-    - 第一遍先取 carrier 三份的内容指纹集合：任何**内容与其中一份相同**的再注册
-      （如 ``carrier_track_company_v1`` = ``Feature2_Cleaning_lisan``）都并入同一族，
-      不允许单独成组；
-    - 第二遍按「carrier 白名单 or 指纹命中 carrier 集合 → ``CARRIER_GROUP_ID``，
-      否则用自身内容指纹」落组。
-
-    不能只按指纹分组——carrier 三份是同一批样本的三种编码，内容各不相同
-    （MD5 6296CCE2… / 1C95B0A5… / 77CB74B6…），只按指纹会被拆成 3 组。
+    不再按 logical_id 做任何硬编码归并——内容不同的数据集（哪怕是同一批样本的不同
+    编码，如航母的三份文件）各自独立成组、独立计数。
     """
-    carrier_fingerprints = {
-        content_fingerprint(dataset)
-        for dataset in datasets
-        if dataset.logical_id in CARRIER_LOGICAL_IDS
-    }
     groups: dict[str, list[Dataset]] = defaultdict(list)
     for dataset in datasets:
-        fingerprint = content_fingerprint(dataset)
-        # 白名单成员（logical_id ∈ CARRIER_LOGICAL_IDS）的指纹必然已在
-        # carrier_fingerprints 中 —— 第一遍就是用同一批 datasets 算的，
-        # 因此这里只按指纹判族，不必再单独判一次 logical_id（恒真的死分支）。
-        key = CARRIER_GROUP_ID if fingerprint in carrier_fingerprints else fingerprint
-        groups[key].append(dataset)
+        groups[content_fingerprint(dataset)].append(dataset)
     return groups
 
 
 def _representative(group: list[Dataset]) -> Dataset:
-    """取同源组的代表数据集（优先数值未离散化的那份）。"""
-    for dataset in group:
-        if dataset.logical_id == CARRIER_CANONICAL:
-            return dataset
+    """取内容分组的代表数据集（组内内容完全一致，取第一个即可）。"""
     return group[0]
 
 
@@ -1165,7 +1126,7 @@ class DashboardService(ServiceBase):
                     "scenario_key": _scenario_key(scenario.code, None),
                     "name": scenario.name,
                     "access_status": scenario.access_status,
-                    # 去重口径：carrier 同源三份只计 1 个数据集
+                    # 去重口径：内容完全相同的重复注册文件只计 1 个数据集
                     "dataset_count": dataset_count,
                     "effective_sample_count": samples,
                     "risk_count": risk,
@@ -1215,19 +1176,23 @@ class DashboardService(ServiceBase):
         """场景卡片聚合（场景中心列表页 + 平台运行总览共用，唯一数据源）。
 
         口径与平台总览完全一致（`docs/首页字段口径说明.md`），避免两处数字打架：
-        - 数据集：同源衍生文件（carrier 三份）只计 1 个有效数据集；
+        - 数据集：内容完全相同的重复注册文件只计 1 个有效数据集；
         - 样本量：各有效数据集代表文件的全量样本数（不做前 N 行截断）；
         - 模型：仅统计 status=PUBLISHED 的已发布模型版本；
         - 风险分：所辖真实风险事件 risk_score 的均值 ×100（无事件记 0）；
         - 风险等级：有高危事件 high / 仅有中危 medium / 其余 low。
 
         前端「场景中心」与「平台运行总览」都消费本接口，不要再在前端自行
-        按 `datasets.filter(...)` 计数（那条路径没有同源去重）。
+        按 `datasets.filter(...)` 计数（那条路径没有内容去重）。
 
         可见性（需求 6.5.2，与数据集中心 `DatasetService.get_list` 对齐）：
-        - SUPER_ADMIN    ：全部场景，仅 platform 数据；
-        - SCENARIO_ADMIN ：本人绑定场景，platform + company 数据；
+        - SUPER_ADMIN    ：全部场景，仅 platform 数据（服务提供方的基础数据）；
+        - SCENARIO_ADMIN ：本人绑定场景的**全部**数据集（platform + company + 场景内 personal）；
         - SCENARIO_USER  ：本人绑定场景，platform + company + 本人 personal 数据。
+
+        事件/风险统计走 `Authz.scope_event_stats`：SUPER 看平台全量统计（不下发明细），
+        SCENARIO_ADMIN 看本场景，SCENARIO_USER 仅本人事件。故同一场景卡片对不同角色的
+        event_count / high_risk_count / risk_score 可能不同，这是按权限过滤后的结果。
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
@@ -1352,7 +1317,7 @@ class DashboardService(ServiceBase):
 
         reader = _DatasetReader()
         groups = _effective_groups(datasets)
-        # 同源组归属表：一次算好传给 describe，避免逐行重复分组
+        # 内容分组归属表：一次算好传给 describe，避免逐行重复分组
         source_group_of = {
             item.id: group_key for group_key, group in groups.items() for item in group
         }
@@ -1382,7 +1347,7 @@ class DashboardService(ServiceBase):
                     "datasets": [item.logical_id for item in group],
                     "record_count": reader.label_stats(_representative(group))[0],
                     "deduplicated": len(group) > 1,
-                    # 同源组内文件数（>1 即存在同源冗余）与组指纹（= 组 key）
+                    # 分组内文件数（>1 即存在重复内容）与组指纹（= 组 key）
                     "file_count": len(group),
                     "fingerprint": group_key,
                 }
@@ -1446,8 +1411,8 @@ class DashboardService(ServiceBase):
     @classmethod
     def _network_profile(cls, reader: _DatasetReader, by_logical: dict[str, Dataset]) -> dict[str, Any]:
         """网络安全数据画像：NF-UNSW 提供协议/端口/包长/重传，KDD 提供 flag/service。"""
-        nf_fields, nf_rows = cls._dataset_columns(reader, by_logical.get("nf_unsw_nb15_v2"))
-        kdd_fields, kdd_rows = cls._dataset_columns(reader, by_logical.get("kdd_train_20_percent"))
+        nf_fields, nf_rows = cls._dataset_columns(reader, by_logical.get("nf_unsw_nb15"))
+        kdd_fields, kdd_rows = cls._dataset_columns(reader, by_logical.get("kdd_train_20"))
         nf = _field_index(nf_fields)
         kdd = _field_index(kdd_fields)
 
@@ -1484,8 +1449,8 @@ class DashboardService(ServiceBase):
                 "retrans_stats": _stats(retrans),
             },
             "sources": {
-                "traffic": "nf_unsw_nb15_v2",
-                "connection": "kdd_train_20_percent",
+                "traffic": "nf_unsw_nb15",
+                "connection": "kdd_train_20",
                 "protocol_note": "PROTOCOL 为协议号，已映射为 TCP/UDP/ICMP 等名称",
             },
             # ---- D1：数据集风险口径可比性矩阵（每数据集一行，同口径并列）----
@@ -1556,7 +1521,7 @@ class DashboardService(ServiceBase):
         """电力系统数据画像：电参量、设备/系统/问题分布、设备故障率、遥测基线与覆盖矩阵。
 
         - **旧字段**（``params``/``fault_count``/``device_fault_rates`` …）改为在
-          ``by_logical`` 上按「同源去重后的代表数据集」合并统计：不再硬编码单个
+          ``by_logical`` 上按「内容去重后的代表数据集」合并统计：不再硬编码单个
           ``logical_id``，同时避免把同源副本重复求和（power 场景两份文件内容相同）。
         - **新字段** ``telemetry_by_dataset`` / ``component_matrix`` 按数据集逐个展开，
           用于横向对比各注册数据是否同质。
@@ -1630,7 +1595,7 @@ class DashboardService(ServiceBase):
             "components": _top(component_values, 8),
             "systems": _top(system_values, 8),
             "device_fault_rates": sorted(device_rates, key=lambda item: item["risk_rate"], reverse=True),
-            "sources": {"dataset": "powergrid_knowledgebase"},
+            "sources": {"dataset": "powergrid_knowledge"},
             # ---- D1：逐数据集遥测画像 + 准入基线校验 ----
             "telemetry_by_dataset": cls._power_telemetry_by_dataset(reader, by_logical),
             # ---- D2：设备/系统 × 数据集 覆盖矩阵 ----
@@ -1725,7 +1690,7 @@ class DashboardService(ServiceBase):
         by_logical: dict[str, Dataset],
         modeling_by_logical: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """舰面调度数据画像：以去重后的载体数据集为准（同源三份只算一份）。"""
+        """舰面调度数据画像：以数值未离散化的航母数据集（``CARRIER_CANONICAL``）为源。"""
         item = by_logical.get(CARRIER_CANONICAL) or next(iter(by_logical.values()), None)
         fields, rows = cls._dataset_columns(reader, item)
         cmap = _field_index(fields)
@@ -1798,7 +1763,7 @@ class DashboardService(ServiceBase):
             "collision_comparison": comparison,
             "sources": {
                 "dataset": item.logical_id if item is not None else None,
-                "note": "carrier 三份为同源衍生，本页只按其中一份统计，避免 3 倍重复计数",
+                "note": "舰面画像取用数值未离散化的 carrier_feature2_biaoqian 单份统计",
             },
             # ---- D1：同源编码族（每份文件一行，标注编码形态与一致性）----
             "encoding_family": cls._flight_encoding_family(
@@ -1818,7 +1783,7 @@ class DashboardService(ServiceBase):
         """D1：同源编码族的逐文件画像。
 
         ``encoding`` 由字段结构判定（paired / interval / numeric / unknown），
-        ``collision_consistent`` = 本文件风险样本数与同源组代表文件是否一致
+        ``collision_consistent`` = 本文件风险样本数与分组代表文件是否一致
         （不一致说明「同一批样本的另一种编码」标签对不上，需要治理）。
         """
         modeling_by_logical = modeling_by_logical or {}
@@ -1834,7 +1799,7 @@ class DashboardService(ServiceBase):
         for entry in by_logical.values():
             entry_fields = reader.fields(entry)
             total, risk = reader.label_stats(entry)
-            group_key = source_group_of.get(entry.id) or _group_key(entry)
+            group_key = source_group_of.get(entry.id) or content_fingerprint(entry)
             modeling = modeling_by_logical.get(entry.logical_id) or {}
             family.append(
                 {
@@ -1859,7 +1824,7 @@ class DashboardService(ServiceBase):
     def _flight_redundancy(
         cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
     ) -> dict[str, Any]:
-        """D2：冗余度 = 1 - 有效同源组数 / 文件数；同时给出原始与去重后样本量。"""
+        """D2：冗余度 = 1 - 有效分组数 / 文件数；同时给出原始与去重后样本量。"""
         groups = _effective_groups(list(by_logical.values()))
         file_count = len(by_logical)
         effective_group_count = len(groups)
@@ -1911,8 +1876,7 @@ class DashboardService(ServiceBase):
 
         modeling_by_logical = modeling_by_logical or {}
 
-        # 同源去重：同一份物理文件被多次注册时（如 geo_slope_company_v1 ≡ dis_landslides，
-        # 字节完全相同）只保留第一个。否则角色矩阵会多出一行同名同内容的数据集，
+        # 内容去重：同一份物理文件被多次注册时只保留第一个。否则角色矩阵会多出一行同名同内容的数据集，
         # 因子覆盖矩阵也会把同一个来源算两次。D1/D2 共用这一份基底。
         unique_entries: list[Dataset] = []
         seen_fingerprints: set[str] = set()

@@ -1,6 +1,6 @@
 # 各NB改进算法：配置、训练、预处理、参数易错点总结
 > 全部基于WEKA论文实验，数据集为UCI；原始数据集含有大量连续数值属性。
-> 涉及算法：CAVWNB、A²WNB、MAWNB、EMAWNB、PMWNB、DIWNB
+> 涉及算法：CAVWNB、A²WNB、MAWNB、EMAWNB、PMWNB、DIWNB、KFDB、FLNB、FTAWNB
 
 ## 一、离散化处理：哪些需要，哪些不需要
 |算法 | 是否必须做离散化（Discretize） | 论文使用的离散化方式 | 说明 |
@@ -111,3 +111,32 @@
 > - 很多人复现PMWNB，照搬其他算法，数据集先全局离散，PMWNB效果很差，就是这个原因。
 > - EMAWNB不要简化去掉k折交叉验证，退回MAWNB，就会复现出过拟合，测试集精度下降。
 > - 所有加权模型（CAVWNB、MAWNB、EMAWNB、PMWNB）λ正则不要设0，容易权重爆炸。
+
+## 五、后续接入算法：KFDB / FLNB / FTAWNB
+> 三者源码分别来自作者仓库（KFDB/FLNB：zhanghuan1994；FTAWNB：jiangliangxiao），
+> 已随 `backend/java/algorithm-src/NB/{KFDB,FLNB,FTAWNB}` 纳入版本管理，编译进共用的
+> `nb-algorithm-service.jar`（端口 12315），与既有算法同一进程、同一套 HTTP 接口。
+
+### 1. KFDB（K-Free Dependence Bayesian Classifier，TNNLS 2026）
+1. 结构学习：为每个属性最多选 k 个父属性（`max_parents`，论文默认 k=1），两种评分准则：
+   `KFDB_MSE`（均方误差，默认）/ `KFDB_ACC`（分类精度）。
+2. 输入：只接受**离散属性**（源码把属性值直接当整数下标），连续特征必须先离散化；
+   平台由外层 Weka `Discretize` 自动完成。
+3. 平台适配：作者仓库的 `KFDB.wdBayesOnlinePYP` 里 `getCapabilities()` 返回 null、
+   `classifyInstance()` 恒返回 0，会让外层 `FilteredClassifier` 空指针 / 评估失真；
+   适配器 `weka.classifiers.zh.KFDB.KFDB` 只补这两处，算法本体不变。
+4. 依赖：`MLTools.jar` + `commons-math3-3.6.1.jar`（见 `backend/lib`）。
+5. 易错：KFDB_MSE/ACC 结构学习路径**不使用** logStirling 采样，所以模型序列化时
+   `lgCache` 已标 `transient`；不要把 `model_score` 设成 KFDB_MSE/ACC 之外的值。
+
+### 2. FLNB（Frequency-based Lazy Naive Bayes）
+1. 懒惰贝叶斯：预测时按测试样本与每个训练样本的**频率相似度**加权，再估计条件概率。
+2. 两个相似度版本：`poly`（多项式，平台默认）/ `log`（对数），由 `weight_scheme` 选择。
+3. 输入：只接受离散属性，数值特征需前置离散。
+4. 平台适配：作者源码按旧版 Weka 写 `extends Classifier`，在 Weka 3.8.6（`Classifier` 是接口）
+   下改为 `extends AbstractClassifier`；`weka.classifiers.zh.FLNB.FLNB` 按参数转发给对应实现。
+
+### 3. FTAWNB（Fine Tuning Attribute Weighted NB，Neurocomputing 2021）
+1. 用属性与类别的互信息微调属性权重，再做加权朴素贝叶斯判定。
+2. 输入：只接受离散属性，数值特征需前置离散。
+3. 无公开超参数，平台只暴露离散化参数（与 A2WNB/MAWNB/EMAWNB 一致）。

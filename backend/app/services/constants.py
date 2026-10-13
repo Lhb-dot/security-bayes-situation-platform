@@ -112,9 +112,9 @@ DATASET_LABEL_FIELD_MAX_LEN = 64
 #      且两者必须成对登记（未登记 = 不产风险事件，见 dashboard_service 的 registered 判断）；
 #   2. 例外：dis_global_catalog 只登记编码、不进风险映射（全球地质目录，不作为训练/风险样本）。
 DATASET_LOGICAL_IDS = (
-    "kdd_train_20_percent",
-    "nf_unsw_nb15_v2",
-    "powergrid_knowledgebase",
+    "kdd_train_20",
+    "nf_unsw_nb15",
+    "powergrid_knowledge",
     "dis_raw_data",
     "dis_landslides",
     "dis_causative_factors",
@@ -123,15 +123,6 @@ DATASET_LOGICAL_IDS = (
     "carrier_feature2_biaoqian",
     "carrier_feature2_lisan",
     "carrier_paired_trail",
-    # 生产 seed 上传的数据集（同一批物理文件的再次注册，logical_id 与平台内置清单不同）
-    "net_flow_company_v1",
-    "alice_conn_personal_v1",
-    "power_grid_company_v1",
-    "bob_sensor_personal_v1",
-    "carrier_track_company_v1",
-    "deck_user01_trail_personal_v1",
-    "geo_slope_company_v1",
-    "carol_slope_personal_v1",
 )
 
 # logical_id 是文件派生的稳定标识，供常量字典与去重逻辑做键值匹配，不得改写。
@@ -141,8 +132,7 @@ def dataset_display_name_of(dataset: object | None) -> str | None:
     """按 Dataset 记录取展示名：一律取内部编码 logical_id（如 dis_raw_data）。
 
     全平台只保留这一套数据集名字 —— logical_id 同时也是风险规则映射
-    （DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）、同源去重白名单
-    （dashboard_service.CARRIER_LOGICAL_IDS）与报告下发的键，展示与匹配同源，
+    （DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）与报告下发的键，展示与匹配同源，
     不会再出现「界面上看到的字在代码里搜不到」的情况。
 
     所有「需要展示数据集名称」的位置都应改用本函数。用 getattr 取值，
@@ -162,9 +152,13 @@ def dataset_display_name_of(dataset: object | None) -> str | None:
 # ---------------------------------------------------------------------------
 ALGORITHM_STATUS_AVAILABLE = "AVAILABLE"
 
-# 需求文档 §6.6.1 第一阶段算法编码（数据字典，硬编码校验基准）
-# 六个算法：A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB；MAWNB 对应外部 MVCAVWNB。
-ALGORITHM_CODES = ("A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB")
+# 需求文档 §6.6.1 算法编码（数据字典，硬编码校验基准）
+# 九个算法：A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB / KFDB / FLNB / FTAWNB；
+# MAWNB 对应外部 MVCAVWNB；KFDB / FLNB / FTAWNB 为后续接入的论文算法。
+ALGORITHM_CODES = (
+    "A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB",
+    "KFDB", "FLNB", "FTAWNB",
+)
 ALGORITHM_CODE_MAX_LEN = 32
 ALGORITHM_NAME_MAX_LEN = 64
 
@@ -239,9 +233,9 @@ RISK_TYPE_FLIGHT_DECK = "FLIGHT_DECK_OPERATION_RISK"
 # 每个数据集"风险（正类）"标签的显式映射 —— 需求文档 §6.4.1 明确：
 # 开发人员不得按标签字符串、数值大小或文件排列顺序自动推断正类，必须使用显式映射。
 DATASET_POSITIVE_LABELS = {
-    "kdd_train_20_percent": {"anomaly"},                       # 正类=anomaly / 负类=normal
-    "nf_unsw_nb15_v2": {"1"},                                  # 正类=1 / 负类=0
-    "powergrid_knowledgebase": {"1"},                          # 正类=Target_Event 1 / 0
+    "kdd_train_20": {"anomaly"},                               # 正类=anomaly / 负类=normal
+    "nf_unsw_nb15": {"1"},                                     # 正类=1 / 负类=0
+    "powergrid_knowledge": {"1"},                              # 正类=Target_Event 1 / 0
     "dis_raw_data": {"1"},                                     # Label=1 风险 / 0 正常
     "dis_landslides": {"1"},                                   # LS=1 风险 / 0 正常
     "dis_causative_factors": {"1"},                            # landslides>0 即风险（另见 DATASET_RISK_GT_ZERO）
@@ -249,16 +243,6 @@ DATASET_POSITIVE_LABELS = {
     "carrier_feature2_biaoqian": {"1"},                        # Collision=1 风险 / 0 正常
     "carrier_feature2_lisan": {"1"},
     "carrier_paired_trail": {"1"},
-    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
-    # 标签语义与其源文件完全一致，见上表同名源文件的登记说明。
-    "net_flow_company_v1": {"1"},                              # 源 NF-UNSW-NB15-v2，Label 正类=1
-    "alice_conn_personal_v1": {"anomaly"},                     # 源 KDDTrain_20Percent，class 正类=anomaly
-    "power_grid_company_v1": {"1"},                            # 源 powergrid_knowledgebase_dataset，Target_Event 正类=1
-    "bob_sensor_personal_v1": {"1"},                           # 同上
-    "carrier_track_company_v1": {"1"},                         # 源 Feature2_Cleaning_lisan，Collision 正类=1
-    "deck_user01_trail_personal_v1": {"1"},                    # 源 paired_TrailData_feature2_biaoqian，Collision 正类=1
-    "geo_slope_company_v1": {"1"},                             # 源 DIS_Landslides，LS 正类=1
-    "carol_slope_personal_v1": {"1"},                          # 源 DIS_raw_data，Label 正类=1
 }
 # dis_global_catalog：多分类编目数据，不参与二分类训练与风险事件生成（§4.4.3），未列入映射。
 
@@ -286,9 +270,9 @@ def is_risk_label(logical_id: str, prediction_label: object) -> bool:
 
 # 数据集 → 统一风险类型（需求文档 §5.3）
 DATASET_RISK_TYPES = {
-    "kdd_train_20_percent": RISK_TYPE_NETWORK,
-    "nf_unsw_nb15_v2": RISK_TYPE_NETWORK,
-    "powergrid_knowledgebase": RISK_TYPE_POWER,
+    "kdd_train_20": RISK_TYPE_NETWORK,
+    "nf_unsw_nb15": RISK_TYPE_NETWORK,
+    "powergrid_knowledge": RISK_TYPE_POWER,
     "dis_raw_data": RISK_TYPE_GEOLOGICAL,
     "dis_landslides": RISK_TYPE_GEOLOGICAL,
     "dis_causative_factors": RISK_TYPE_GEOLOGICAL,
@@ -296,15 +280,6 @@ DATASET_RISK_TYPES = {
     "carrier_feature2_biaoqian": RISK_TYPE_FLIGHT_DECK,
     "carrier_feature2_lisan": RISK_TYPE_FLIGHT_DECK,
     "carrier_paired_trail": RISK_TYPE_FLIGHT_DECK,
-    # ---- 生产 seed 注册的数据集（显式登记，非自动推断）----
-    "net_flow_company_v1": RISK_TYPE_NETWORK,
-    "alice_conn_personal_v1": RISK_TYPE_NETWORK,
-    "power_grid_company_v1": RISK_TYPE_POWER,
-    "bob_sensor_personal_v1": RISK_TYPE_POWER,
-    "carrier_track_company_v1": RISK_TYPE_FLIGHT_DECK,
-    "deck_user01_trail_personal_v1": RISK_TYPE_FLIGHT_DECK,
-    "geo_slope_company_v1": RISK_TYPE_GEOLOGICAL,
-    "carol_slope_personal_v1": RISK_TYPE_GEOLOGICAL,
 }
 
 # 阈值兜底（需求文档 §5.4.1 第 6 条：正式阈值应通过 risk_threshold 表配置提供，

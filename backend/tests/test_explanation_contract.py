@@ -25,7 +25,7 @@ class ExplanationContractTests(unittest.TestCase):
     def test_all_six_algorithms_have_standard_samples(self):
         self.assertEqual(
             {case["algorithm_code"] for case in self.samples["cases"]},
-            {"A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB"},
+            set(ALGORITHM_CODES),
         )
         self.assertEqual(self.samples["contract_version"], EXPLANATION_CONTRACT_VERSION)
 
@@ -41,6 +41,9 @@ class ExplanationContractTests(unittest.TestCase):
             "CAVWNB": {"feature_evidence"},
             "PMWNB": {"submodels", "risk_support_count", "disagreement"},
             "DIWNB": {"original_view", "knn_view", "k", "neighbor_risk_ratio", "neighbor_class_ratios", "consistency"},
+            "KFDB": {"full_view", "model_score", "max_parents"},
+            "FLNB": {"full_view", "weight_scheme"},
+            "FTAWNB": {"full_view"},
         }
         for code, fields in required.items():
             self.assertTrue(fields.issubset(algorithm_specific_template(code)))

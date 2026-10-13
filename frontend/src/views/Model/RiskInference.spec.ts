@@ -57,6 +57,11 @@ const choose = async (select: HTMLSelectElement, value: string) => {
 const mount = async () => { app.mount(host); await flush(); };
 const chooseDataset = (id = '1') => choose(selects()[0], id);
 const chooseModel = (id: string) => choose(selects()[1], id);
+/** 切到「样本库」标签：样本表与分页条只在「样本库」这一类里渲染 */
+const showSampleTab = async () => {
+  host.querySelectorAll<HTMLButtonElement>('.source-tab')[1].click();
+  await flush();
+};
 
 describe('risk inference selection and pagination races', () => {
   it.each(['success', 'failure'])('ignores old-scene %s and preserves new-scene loading', async (outcome) => {
@@ -78,34 +83,38 @@ describe('risk inference selection and pagination races', () => {
   });
 
   it.each(['success', 'failure'])('ignores old-dataset model %s while the new models load', async (outcome) => {
+    // 挂载时组件已按「有已发布模型的数据集」自动选中数据集 1，
+    // 所以用「切到 2 再切回 1」构造同一层级上的两个在途请求。
+    await mount();
+    vi.mocked(getDatasetFields).mockClear();
     const old = deferred<BackendModelVersion[]>();
     const fresh = deferred<BackendModelVersion[]>();
     vi.mocked(getModelVersionList).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    await mount();
-    await chooseDataset('1');
     await chooseDataset('2');
-    if (outcome === 'success') old.resolve([model(11, 1, { is_recommended: true })]);
+    await chooseDataset('1');
+    if (outcome === 'success') old.resolve([model(21, 2, { is_recommended: true })]);
     else old.reject(new Error('old models'));
     await flush();
     expect(selects()[1].textContent).toContain('加载中');
     expect(getDatasetFields).not.toHaveBeenCalled();
-    fresh.resolve([model(21, 2, { is_recommended: true })]);
+    fresh.resolve([model(11, 1, { is_recommended: true })]);
     await flush();
-    expect(selects()[1].value).toBe('21');
-    expect(selects()[1].textContent).not.toContain('算法11');
-    expect(getDatasetFields).toHaveBeenCalledWith('2', '1');
+    expect(selects()[1].value).toBe('11');
+    expect(selects()[1].textContent).not.toContain('算法21');
+    expect(getDatasetFields).toHaveBeenCalledWith('1', '1');
   });
 
   it('invalidates model requests on A → B → empty selection', async () => {
+    await mount();
+    vi.mocked(getDatasetFields).mockClear();
     const old = deferred<BackendModelVersion[]>();
     const fresh = deferred<BackendModelVersion[]>();
     vi.mocked(getModelVersionList).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    await mount();
-    await chooseDataset('1');
     await chooseDataset('2');
+    await chooseDataset('1');
     await chooseDataset('');
-    fresh.resolve([model(21, 2, { is_recommended: true })]);
-    old.resolve([model(11, 1, { is_recommended: true })]);
+    fresh.resolve([model(11, 1, { is_recommended: true })]);
+    old.resolve([model(21, 2, { is_recommended: true })]);
     await flush();
     expect(selects()[1].value).toBe('');
     expect(selects()[1].textContent).toContain('暂无已发布模型');
@@ -114,19 +123,21 @@ describe('risk inference selection and pagination races', () => {
   });
 
   it.each(['success', 'failure'])('ignores old-model field %s and keeps new input defaults', async (outcome) => {
+    // 挂载时模型 11 已自动选中，字段与样本都已就绪；
+    // 用「切到模型 12 再切回 11」构造同一层级上的两个在途字段请求。
+    await mount();
+    vi.mocked(getDatasetFields).mockClear();
+    vi.mocked(getDatasetPreview).mockClear();
     const old = deferred<DatasetField[]>();
     const fresh = deferred<DatasetField[]>();
     vi.mocked(getDatasetFields).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    await mount();
-    await chooseDataset();
     await chooseModel('12');
+    await chooseModel('11');
     fresh.resolve([field(), { ...field('protocol'), field_type: 'string', sample_value: 'TCP', enum_values: ['TCP', 'UDP'] },
       { ...field('label'), field_role: '分类标签' }]);
     await flush();
     if (outcome === 'success') old.resolve([field('old_field')]);
     else old.reject(new Error('old fields'));
-    await flush();
-    host.querySelectorAll<HTMLButtonElement>('.source-tab')[1].click();
     await flush();
     expect(host.querySelector<HTMLInputElement>('.field-group-body input')?.value).toBe('443');
     expect(host.querySelector<HTMLSelectElement>('.field-group-body select')?.value).toBe('TCP');
@@ -136,27 +147,30 @@ describe('risk inference selection and pagination races', () => {
   });
 
   it('uses returned fields when another query replaces the shared fields before the continuation', async () => {
+    await mount();
     const wait = deferred<DatasetField[]>();
     vi.mocked(getDatasetFields).mockReturnValueOnce(wait.promise);
-    await mount();
-    await chooseDataset();
+    await chooseModel('12');
     wait.resolve([field('own_field')]);
     await useDatasetStore().fetchFields('other');
     await flush();
+    await showSampleTab();
     expect(host.querySelector('thead')?.textContent).toContain('own_field');
     expect(host.querySelector('thead')?.textContent).not.toContain('L4_DST_PORT');
   });
 
   it.each(['success', 'failure'])('ignores old-model sample %s and preserves the new loading flag', async (outcome) => {
+    await mount();
+    vi.mocked(getDatasetPreview).mockClear();
     const old = deferred<DataPreview>();
     const fresh = deferred<DataPreview>();
     vi.mocked(getDatasetPreview).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    await mount();
-    await chooseDataset();
     await chooseModel('12');
+    await chooseModel('11');
     if (outcome === 'success') old.resolve(preview(1, 999));
     else old.reject(new Error('old sample'));
     await flush();
+    await showSampleTab();
     expect(host.textContent).toContain('正在读取样本');
     fresh.resolve(preview(1, 222));
     await flush();
@@ -167,7 +181,7 @@ describe('risk inference selection and pagination races', () => {
 
   it.each(['success', 'failure'])('ignores an obsolete page %s when the next page has finished', async (outcome) => {
     await mount();
-    await chooseDataset();
+    await showSampleTab();
     const old = deferred<DataPreview>();
     const fresh = deferred<DataPreview>();
     vi.mocked(getDatasetPreview).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
@@ -190,7 +204,7 @@ describe('risk inference selection and pagination races', () => {
 
   it('keeps page 3 when independent page 2 and page 3 requests return out of order', async () => {
     await mount();
-    await chooseDataset();
+    await showSampleTab();
     const second = deferred<DataPreview>();
     const third = deferred<DataPreview>();
     vi.mocked(getDatasetPreview).mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
@@ -222,20 +236,22 @@ describe('risk inference selection and pagination races', () => {
   });
 
   it('does not auto-select a draft model marked as default', async () => {
-    vi.mocked(getModelVersionList).mockResolvedValueOnce([
-      model(11, 1, { status: 'DRAFT', is_recommended: true }), model(12, 1),
+    // 该场景下所有数据集都只有草稿模型：既没有可自动落点的数据集，
+    // 也不能因为草稿带了推荐标记就把它选中。
+    vi.mocked(getModelVersionList).mockImplementation(async () => [
+      model(11, 1, { status: 'DRAFT', is_recommended: true }), model(12, 1, { status: 'DRAFT' }),
     ]);
     await mount();
-    await chooseDataset();
     expect(selects()[1].value).toBe('');
     expect(selects()[1].textContent).not.toContain('算法11');
+    expect(selects()[1].textContent).toContain('该范围暂无已发布模型');
     expect(getDatasetFields).not.toHaveBeenCalled();
   });
 
   it('keeps current sample failure empty and recovers after changing models', async () => {
     vi.mocked(getDatasetPreview).mockRejectedValueOnce(new Error('offline'));
     await mount();
-    await chooseDataset();
+    await showSampleTab();
     expect(host.textContent).toContain('没有可读取的样本');
     expect(host.querySelector('.loader')).toBeNull();
     await chooseModel('12');
@@ -266,27 +282,29 @@ describe('risk inference selection and pagination races', () => {
 
   it('invalidates previous account requests on logout and same-account relogin', async () => {
     const wait = deferred<BackendModelVersion[]>();
-    vi.mocked(getModelVersionList).mockReturnValueOnce(wait.promise);
     await mount();
-    await chooseDataset();
+    vi.mocked(getModelVersionList).mockReturnValueOnce(wait.promise);
+    await chooseDataset('2');
     useUserStore().currentUser = null;
     useUserStore().currentUser = user();
     await flush();
-    wait.resolve([model(11, 1, { is_recommended: true })]);
+    wait.resolve([model(21, 2, { is_recommended: true })]);
     await flush();
-    expect(selects()[0].value).toBe('');
-    expect(selects()[1].value).toBe('');
-    expect(host.querySelector('.source-card')).toBeNull();
-    expect(getDatasetFields).not.toHaveBeenCalled();
+    // 换号后重新自动落点到数据集 1 / 模型 11，旧号那条数据集 2 的响应不得回填
+    expect(selects()[0].value).toBe('1');
+    expect(selects()[1].value).toBe('11');
+    expect(selects()[1].textContent).not.toContain('算法21');
+    expect(host.querySelector('.source-card')).not.toBeNull();
   });
 
   it('leaves current model failures empty and recovers on another dataset', async () => {
-    vi.mocked(getModelVersionList).mockRejectedValueOnce(new Error('offline'));
     await mount();
-    await chooseDataset();
-    expect(selects()[1].textContent).toContain('暂无已发布模型');
+    vi.mocked(getModelVersionList).mockRejectedValueOnce(new Error('offline'));
     await chooseDataset('2');
-    expect(selects()[1].value).toBe('21');
+    expect(selects()[1].textContent).toContain('暂无已发布模型');
+    await chooseDataset('1');
+    await showSampleTab();
+    expect(selects()[1].value).toBe('11');
     expect(host.querySelector('tbody')?.textContent).toContain('100');
   });
 });

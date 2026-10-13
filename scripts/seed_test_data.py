@@ -91,22 +91,22 @@ DATASETS = {
         "binary": True,
     },
     # 补录：网络 / 电力场景真实数据集（原文件在下载目录，source 指向原始文件）
-    # logical_id 与 V3.0 §2 需求文档一致（constants.py 的 DATASET_RISK_TYPES/DATASET_POSITIVE_LABELS 按此键名映射）
-    "nf_unsw_nb15_v2": {
+    # 键名与 constants.py 的 DATASET_RISK_TYPES/DATASET_POSITIVE_LABELS 一致（按此键名映射）
+    "nf_unsw_nb15": {
         "file": "NF-UNSW-NB15-v2.arff",
         "source": r"D:\001Mine\005   Download\NF-UNSW-NB15-v20503",
         "scenario": "network_security",
         "label": "Label",
         "binary": True,
     },
-    "kdd_train_20_percent": {
+    "kdd_train_20": {
         "file": "KDDTrain_20Percent.arff",
         "source": r"D:\001Mine\005   Download\KDDTrain+_20Percent0503",
         "scenario": "network_security",
         "label": "class",
         "binary": True,
     },
-    "powergrid_knowledgebase": {
+    "powergrid_knowledge": {
         "file": "powergrid_knowledgebase_dataset.arff",
         "source": r"D:\001Mine\005   Download\powergrid_knowledgebase_dataset0503",
         "scenario": "power_system",
