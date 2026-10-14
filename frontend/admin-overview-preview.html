@@ -4,10 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#07111f" />
-    <meta http-equiv="refresh" content="0;url=/overview" />
-    <title>平台运行总览</title>
+    <title>管理员首页设计预览</title>
+    <style>
+      .preview-note { position: fixed; z-index: 100; right: 18px; bottom: 12px; padding: 5px 9px; border: 1px solid #3987a8; border-radius: 3px; background: #061a2ee6; color: #91cce1; font: 11px/1.4 sans-serif; pointer-events: none; }
+    </style>
   </head>
   <body>
-    <script>window.location.replace('/overview');</script>
+    <div id="app"></div>
+    <script type="module" src="/src/admin-overview-preview.ts"></script>
   </body>
 </html>

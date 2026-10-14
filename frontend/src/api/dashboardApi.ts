@@ -459,8 +459,9 @@ export type ScenarioWorkspace =
 // 请求封装
 // ---------------------------------------------------------------------------
 
-export const getAdminDashboard = async (): Promise<DashboardOverview> =>
+export const getAdminDashboard = async (options?: { signal?: AbortSignal }): Promise<DashboardOverview> =>
   unwrapData(await request.get('/api/v1/dashboard/admin/overview', {
+    signal: options?.signal,
     params: { _t: Date.now() },
     timeout: 30_000,
   }));
