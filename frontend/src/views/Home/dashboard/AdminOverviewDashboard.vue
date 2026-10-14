@@ -20,7 +20,7 @@ const exact = exactOverviewCount;
 const riskPercent = (value: number | null) => value === null ? '—' : `${(value * 100).toFixed(1)}%`;
 const riskWidth = (value: number | null) => `${(value ?? 0) * 100}%`;
 const scenes = computed(() => (props.data?.scenes ?? []).map((scene) => ({
-  ...SCENE_STYLES[scene.key], ...scene, users: scene.userCount, admins: scene.adminCount, href: scene.path,
+  ...scene, ...SCENE_STYLES[scene.key], users: scene.userCount, admins: scene.adminCount, href: scene.path,
 })));
 const runtime = computed(() => ({
   trained: props.data?.trainedModels ?? null, published: props.data?.publishedModels ?? 0,
@@ -80,10 +80,10 @@ const metrics = computed(() => {
   if (!data) return [];
   const padded = (value: number) => value < 10 ? String(value).padStart(2, '0') : format(value);
   return [
-    { label: '多域态势覆盖', value: padded(data.scenarioCount), unit: '大场景', detail: '网络 / 电力 / 舰面 / 地质', icon: 'scene', color: '#69b7ff', href: '#scene-overview', title: `${exact(data.scenarioCount)} 个场景，点击选择场景` },
-    { label: '异构数据资源', value: padded(data.datasetCount), unit: '套数据集', detail: '去重有效数据集', icon: 'data', color: '#4cdac6', href: '/datasets', title: `${exact(data.datasetCount)} 个有效数据集` },
-    { label: '有效样本规模', ...sampleMetric(data.sampleCount), detail: '按数据内容去重统计', icon: 'prediction', color: '#efc17a', href: '/datasets', title: `${exact(data.sampleCount)} 条有效样本` },
-    { label: '算法能力储备', value: padded(data.algorithmCount), unit: '类算法', detail: '贝叶斯及加权算法', icon: 'model', color: '#a999ee', href: '/risk', title: `${exact(data.algorithmCount)} 个可用算法` },
+    { label: '多域态势覆盖', value: padded(data.scenarioCount), unit: '大场景', icon: 'scene', color: '#69b7ff', href: '#scene-overview', title: `${exact(data.scenarioCount)} 个场景，点击选择场景` },
+    { label: '异构数据资源', value: padded(data.datasetCount), unit: '套数据集', icon: 'data', color: '#4cdac6', href: '/datasets', title: `${exact(data.datasetCount)} 个有效数据集` },
+    { label: '有效样本规模', ...sampleMetric(data.sampleCount), icon: 'prediction', color: '#efc17a', href: '/datasets', title: `${exact(data.sampleCount)} 条有效样本` },
+    { label: '算法能力储备', value: padded(data.algorithmCount), unit: '类算法', icon: 'model', color: '#a999ee', href: '/risk', title: `${exact(data.algorithmCount)} 个可用算法` },
   ];
 });
 const modelStats = computed(() => [
@@ -189,7 +189,7 @@ const onNavigate = (event: MouseEvent, href: string) => {
 
     <div class="dashboard-content" :class="{ 'dashboard-content--unavailable': !data }">
       <section class="command-bar" aria-label="驾驶舱功能导航">
-        <div class="command-title"><span class="eyebrow">PLATFORM COMMAND CENTER</span><h2>多域复杂系统态势感知驾驶舱</h2></div>
+        <div class="command-title"><span class="eyebrow">PLATFORM COMMAND CENTER</span><h2>领导驾驶舱</h2></div>
         <nav ref="navRoot" class="module-navigation" aria-label="按业务分类的功能入口" @focusout="handleFocusOut">
           <button v-for="group in navigation" :id="`category-${group.id}`" :key="group.id" type="button" :data-category="group.id" :class="{ 'is-active': activeNav === group.id }" :aria-expanded="activeNav === group.id" aria-controls="category-panel" @click="toggleNav(group.id)">
             <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[group.id]" /></svg><span>{{ group.label }}</span><svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path :d="icons.chevron" /></svg>
@@ -208,7 +208,7 @@ const onNavigate = (event: MouseEvent, href: string) => {
         <a v-for="metric in metrics" :key="metric.label" class="metric-card" :class="{ 'count--long': metric.value.length > 5 || (metric.unit.length > 2 && metric.value.length > 3) }" :href="metric.href" :style="{ '--accent': metric.color }" :title="metric.title" @click="onNavigate($event, metric.href)">
           <div class="metric-top"><span>{{ metric.label }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[metric.icon]" /></svg></div>
           <div class="metric-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></div>
-          <div class="metric-bottom"><span>{{ metric.detail }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons.arrow" /></svg></div>
+          <div class="metric-bottom"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons.arrow" /></svg></div>
           <span class="metric-watermark" aria-hidden="true"></span>
         </a>
       </section>
@@ -216,12 +216,12 @@ const onNavigate = (event: MouseEvent, href: string) => {
       <section class="overview-grid" aria-label="平台态势与运营数据">
         <aside class="left-panels">
           <section class="panel members-panel">
-            <div class="panel-heading"><span class="panel-number">01</span><h3>场景成员分布</h3><a href="/users" aria-label="进入用户管理" @click="onNavigate($event, '/users')">用户管理 <span>↗</span></a></div>
+            <div class="panel-heading"><span class="panel-number">01</span><h3>场景分布</h3></div>
             <table class="member-table"><thead><tr><th scope="col">场景</th><th scope="col">用户</th><th scope="col">管理员</th></tr></thead><tbody><tr v-for="scene in scenes" :key="scene.key"><th scope="row"><span class="scene-dot" :style="{ background: scene.color }"></span>{{ scene.name }}</th><td>{{ format(scene.users) }}</td><td>{{ format(scene.admins) }}</td></tr><tr v-if="!scenes.length" class="member-empty"><td colspan="3">暂无场景成员</td></tr></tbody></table>
           </section>
 
           <section class="panel distribution-panel">
-            <div class="panel-heading"><span class="panel-number">02</span><h3>场景样本构成</h3><a href="/datasets" aria-label="查看数据集中心" @click="onNavigate($event, '/datasets')">数据资源 <span>↗</span></a></div>
+            <div class="panel-heading"><span class="panel-number">02</span><h3>样本构成</h3></div>
             <div class="distribution-content">
               <svg class="donut" viewBox="0 0 160 160" role="img" aria-label="各场景有效样本占比">
                 <circle cx="80" cy="80" r="58" fill="none" stroke="#152f45" stroke-width="13" />
@@ -234,14 +234,14 @@ const onNavigate = (event: MouseEvent, href: string) => {
           </section>
 
           <section class="panel sample-risk-panel">
-            <div class="panel-heading"><span class="panel-number">03</span><h3>场景风险样本占比</h3><span class="panel-tag">数据画像</span></div>
+            <div class="panel-heading"><span class="panel-number">03</span><h3>风险占比</h3></div>
             <div class="risk-bars"><span v-if="!scenes.length" class="empty-hint">暂无场景数据</span><div v-for="scene in scenes" :key="scene.key" class="risk-bar-row" :style="{ '--accent': scene.color }"><span>{{ scene.name }}</span><div class="risk-bar-track"><span :style="{ width: riskWidth(scene.riskRate) }"></span></div><strong>{{ riskPercent(scene.riskRate) }}</strong></div></div>
             <p class="panel-footnote">按数据集标签统计的样本占比</p>
           </section>
         </aside>
 
         <section id="scene-overview" class="situation-stage" aria-label="四大场景态势与平台能力链路">
-          <div class="stage-heading"><div><span class="eyebrow">MULTI-SCENARIO SITUATION</span><h3>多域态势总览</h3></div><span class="scene-coverage"><i></i>{{ scenes.length }} 类场景已接入</span></div>
+          <div class="stage-heading"><div><span class="eyebrow">MULTI-SCENARIO SITUATION</span><h3>多域态势总览</h3></div></div>
           <div class="situation-map">
             <div class="map-grid" aria-hidden="true"></div><div class="radar-sweep" aria-hidden="true"></div><div class="orbit orbit-outer" aria-hidden="true"></div><div class="orbit orbit-middle" aria-hidden="true"></div><div class="orbit orbit-inner" aria-hidden="true"></div>
             <svg class="scene-connections" viewBox="0 0 700 440" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="overview-line"><stop stop-color="#66b9f2" stop-opacity=".12"/><stop offset=".5" stop-color="#67d8e1" stop-opacity=".6"/><stop offset="1" stop-color="#66b9f2" stop-opacity=".12"/></linearGradient></defs><path d="M350 211Q260 125 133 98 M350 211Q440 125 567 98 M350 211Q260 285 133 330 M350 211Q440 285 567 330" stroke="url(#overview-line)" fill="none" stroke-width="1.5"/><path d="M350 211Q260 125 133 98 M350 211Q440 125 567 98 M350 211Q260 285 133 330 M350 211Q440 285 567 330" stroke="#65cedd" stroke-opacity=".5" stroke-dasharray="3 12" fill="none"/></svg>
@@ -252,7 +252,6 @@ const onNavigate = (event: MouseEvent, href: string) => {
               <div class="scene-card-stats"><div class="scene-stat scene-stat--samples" :class="{ 'count--long': format(scene.samples).length > 4 }"><strong>{{ format(scene.samples) }}</strong><span>有效样本</span></div><div class="scene-stat scene-stat--datasets" :class="{ 'count--long': format(scene.datasets).length > 2 }"><strong>{{ format(scene.datasets) }}</strong><span>数据集数量</span></div></div>
             </a>
             <span v-if="!scenes.length" class="scene-empty">暂无场景数据</span>
-            <span class="map-caption">点击场景卡片，进入对应数据画像</span>
           </div>
           <section class="pipeline-section" aria-label="平台业务能力链路">
             <div class="pipeline-heading"><h3>平台能力链路</h3><span>从数据接入到风险闭环</span></div>
@@ -262,22 +261,21 @@ const onNavigate = (event: MouseEvent, href: string) => {
 
         <aside class="right-panels">
           <section class="panel event-panel">
-            <div class="panel-heading"><span class="panel-number">04</span><h3>风险事件闭环</h3><a href="/alerts" aria-label="查看风险事件列表" @click="onNavigate($event, '/alerts')">事件列表 <span>↗</span></a></div>
+            <div class="panel-heading"><span class="panel-number">04</span><h3>事件状态</h3></div>
             <div class="event-summary"><div><strong>{{ format(data.eventCount) }}</strong><span>累计风险事件</span></div><div class="resolution"><span>处置率</span><strong>{{ resolvedPercent ?? '—' }}<small v-if="resolvedPercent !== null">%</small></strong></div></div>
             <div class="event-track" aria-label="风险事件状态分布"><span :style="{ width: eventWidth(runtime.pending) }"></span><span :style="{ width: eventWidth(runtime.processing) }"></span><span :style="{ width: eventWidth(runtime.resolved) }"></span></div>
             <div class="event-status"><a v-for="status in eventStatuses" :key="status.key" href="/alerts" :class="{ 'count--long': status.value >= 1e6 }" :title="`${status.label}：${exact(status.value)}`" @click="onNavigate($event, '/alerts')"><span><i :class="`status-${status.key}`"></i>{{ status.label }}</span><strong>{{ format(status.value) }}</strong></a></div>
           </section>
 
           <section class="panel model-panel">
-            <div class="panel-heading"><span class="panel-number">05</span><h3>模型与预测运行</h3><a href="/inference" aria-label="开始风险研判" @click="onNavigate($event, '/inference')">开始研判 <span>↗</span></a></div>
+            <div class="panel-heading"><span class="panel-number">05</span><h3>模型发布</h3></div>
             <div class="model-stat-grid"><a v-for="stat in modelStats" :key="stat.label" :class="{ 'count--long': stat.value !== null && stat.value >= 1e6 }" :title="`${stat.label}：${exact(stat.value)}`" :href="stat.href" @click="onNavigate($event, stat.href)"><span>{{ stat.label }}</span><strong>{{ format(stat.value) }}</strong><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[stat.icon]" /></svg></a></div>
           </section>
 
           <section class="panel users-panel">
-            <div class="panel-heading"><span class="panel-number">06</span><h3>用户与服务覆盖</h3><a href="/users" aria-label="管理平台用户" @click="onNavigate($event, '/users')">用户管理 <span>↗</span></a></div>
+            <div class="panel-heading"><span class="panel-number">06</span><h3>用户规模</h3></div>
             <div class="user-stats"><a href="/users" @click="onNavigate($event, '/users')"><span>平台注册用户</span><strong>{{ format(runtime.users) }}<small>人</small></strong></a><a href="/users" title="至少发起过一次推理或生成过报告的去重账号数" @click="onNavigate($event, '/users')"><span>研判服务用户</span><strong>{{ format(runtime.served) }}<small>人</small></strong></a></div>
             <div class="user-coverage"><span>研判服务覆盖率</span><strong>{{ servicePercent === null ? '—' : `${servicePercent}%` }}</strong></div><div class="coverage-track"><span :style="{ width: servicePercent === null ? '0%' : `${servicePercent}%` }"></span></div>
-            <p class="panel-footnote">服务用户：曾发起推理或生成报告的去重账号</p>
           </section>
         </aside>
       </section>

@@ -24,8 +24,8 @@ const previewOverview = {
   scenes: [
     { key: 'network' as const, name: '网络安全', shortName: '网络', path: '/scenarios/network_security/dashboard', userCount: null, adminCount: null, datasets: 2, samples: 31453, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.142 },
     { key: 'power' as const, name: '电力系统', shortName: '电力', path: '/scenarios/power_system/dashboard', userCount: null, adminCount: null, datasets: 1, samples: 2000, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.797 },
-    { key: 'flight_deck' as const, name: '舰面调度', shortName: '舰面', path: '/scenarios/flightdeck_operation/dashboard', userCount: null, adminCount: null, datasets: 1, samples: 507, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.254 },
-    { key: 'geological' as const, name: '地质风险', shortName: '地质', path: '/scenarios/geological_risk/dashboard', userCount: null, adminCount: null, datasets: 5, samples: 16385, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.28 },
+    { key: 'flight_deck' as const, name: '航保作业', shortName: '航保', path: '/scenarios/flightdeck_operation/dashboard', userCount: null, adminCount: null, datasets: 1, samples: 507, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.254 },
+    { key: 'geological' as const, name: '滑坡灾害', shortName: '滑坡', path: '/scenarios/geological_risk/dashboard', userCount: null, adminCount: null, datasets: 5, samples: 16385, trainedModels: null, publishedModels: null, inferences: null, events: null, pending: null, riskRate: 0.28 },
   ],
 };
 

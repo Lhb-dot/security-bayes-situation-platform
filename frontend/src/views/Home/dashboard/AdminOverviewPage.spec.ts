@@ -189,7 +189,7 @@ describe('正式管理员首页', () => {
     click('[data-category="scene"]');
     await flush();
     const links = [...host.querySelectorAll<HTMLAnchorElement>('#category-panel > a')];
-    expect(links.map((link) => link.querySelector('strong')?.textContent)).toEqual(['网络安全', '电力系统', '舰面调度', '地质风险']);
+    expect(links.map((link) => link.querySelector('strong')?.textContent)).toEqual(['网络安全', '电力系统', '航保作业', '滑坡灾害']);
     expect(links[0].getAttribute('href')).toBe('/scenarios/network%2F%E8%87%AA%E5%AE%9A%E4%B9%89/dashboard');
     links[0].click();
     await flush();

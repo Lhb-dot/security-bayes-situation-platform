@@ -34,8 +34,8 @@ export interface AdminOverviewData {
 export const SCENE_STYLES = {
   network: { name: '网络安全', english: 'NETWORK SECURITY', color: '#69b7ff', icon: 'network' },
   power: { name: '电力系统', english: 'POWER SYSTEM', color: '#4cdac6', icon: 'power' },
-  flight_deck: { name: '舰面调度', english: 'FLIGHT DECK', color: '#efc17a', icon: 'flight' },
-  geological: { name: '地质风险', english: 'GEOLOGICAL RISK', color: '#a999ee', icon: 'mountain' },
+  flight_deck: { name: '航保作业', english: 'AVIATION SUPPORT', color: '#efc17a', icon: 'flight' },
+  geological: { name: '滑坡灾害', english: 'LANDSLIDE DISASTER', color: '#a999ee', icon: 'mountain' },
 } satisfies Record<AdminSceneKey, { name: string; english: string; color: string; icon: string }>;
 
 const invalid = (): never => { throw new Error('首页接口返回的数据不完整，请稍后重试'); };
