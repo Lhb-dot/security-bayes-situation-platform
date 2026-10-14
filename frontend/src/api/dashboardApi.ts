@@ -82,7 +82,13 @@ export interface AdminTotals {
   risk_rate: number;
   algorithm_count: number;
   published_model_count: number;
+  /** 已完成训练的模型版本：DRAFT、PUBLISHED、DISABLED。 */
+  trained_model_count?: number;
   inference_count: number;
+  /** 全平台持久化报告记录数；定时报告重算更新原记录。 */
+  report_count?: number;
+  /** 至少发起过一次推理或生成过报告的去重账号数。 */
+  served_user_count?: number;
   risk_event_count: number;
   pending_event_count: number;
   user_count: number;
@@ -94,11 +100,16 @@ export interface AdminScenarioCard {
   scenario_key: ScenarioKey;
   name: string;
   access_status: string;
+  /** 绑定本场景的 SCENARIO_USER 注册账号数，含停用账号。 */
+  user_count: number;
+  /** 绑定本场景的 SCENARIO_ADMIN 注册账号数，含停用账号。 */
+  admin_count: number;
   dataset_count: number;
   effective_sample_count: number;
   risk_count: number;
   risk_rate: number;
   published_model_count: number;
+  trained_model_count?: number;
   model_count: number;
   inference_count: number;
   event_count: number;
@@ -111,6 +122,9 @@ export interface AdminRuntime {
   processing_event_count: number;
   resolved_event_count: number;
   inference_count: number;
+  report_count?: number;
+  served_user_count?: number;
+  trained_model_count?: number;
   user_count: number;
   published_model_count: number;
   algorithm_count: number;
@@ -446,7 +460,10 @@ export type ScenarioWorkspace =
 // ---------------------------------------------------------------------------
 
 export const getAdminDashboard = async (): Promise<DashboardOverview> =>
-  unwrapData(await request.get('/api/v1/dashboard/admin/overview'));
+  unwrapData(await request.get('/api/v1/dashboard/admin/overview', {
+    params: { _t: Date.now() },
+    timeout: 30_000,
+  }));
 
 export const getScenarioProfile = async (scenarioId: number | string): Promise<ScenarioProfile> => {
   const id = await resolveScenarioId(scenarioId);

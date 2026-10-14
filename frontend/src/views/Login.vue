@@ -57,9 +57,7 @@ const handleLogin = async () => {
     <div class="login-backdrop"></div>
     <div class="login-card">
       <div class="login-card__head">
-        <p class="eyebrow">AI Security Operations Center</p>
-        <h1>多场景贝叶斯分类态势感知系统</h1>
-        <p class="login-card__sub">网络 · 电力 · 地质 · 舰面调度态势</p>
+        <h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">
@@ -139,17 +137,12 @@ const handleLogin = async () => {
 }
 
 .login-card__head h1 {
-  margin: 10px 0 6px;
-  font-size: 1.35rem;
+  margin: 0;
+  font-size: 1.3rem;
+  line-height: 1.45;
   color: #eaf3ff;
   letter-spacing: 0.5px;
-}
-
-.login-card__sub {
-  margin: 0;
-  font-size: 0.85rem;
-  color: rgba(154, 214, 255, 0.75);
-  letter-spacing: 2px;
+  text-wrap: balance;
 }
 
 .login-form {

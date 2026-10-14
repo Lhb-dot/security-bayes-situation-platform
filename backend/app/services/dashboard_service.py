@@ -42,6 +42,7 @@ from app.models.app_user import AppUser
 from app.models.dataset import Dataset
 from app.models.inference_record import InferenceRecord
 from app.models.model_version import ModelVersion
+from app.models.report import Report
 from app.models.risk_event import RiskEvent
 from app.models.scenario import Scenario
 from app.schemas.common import ok
@@ -54,6 +55,8 @@ from app.services.constants import (
     DATASET_STATUS_ACTIVE,
     dataset_display_name_of,
     is_risk_label,
+    MODEL_STATUS_DISABLED,
+    MODEL_STATUS_DRAFT,
     MODEL_STATUS_PUBLISHED,
     RISK_LEVEL_HIGH,
     RISK_EVENT_STATUS_PENDING,
@@ -63,6 +66,7 @@ from app.services.constants import (
     RISK_TYPE_GEOLOGICAL,
     RISK_TYPE_NETWORK,
     RISK_TYPE_POWER,
+    ROLE_SCENARIO_ADMIN,
     ROLE_SCENARIO_USER,
     ROLE_SUPER_ADMIN,
 )
@@ -1081,15 +1085,34 @@ class DashboardService(ServiceBase):
         published_models = self.db.scalar(
             select(func.count()).select_from(ModelVersion).where(ModelVersion.status == MODEL_STATUS_PUBLISHED)
         ) or 0
+        trained_statuses = (MODEL_STATUS_DRAFT, MODEL_STATUS_PUBLISHED, MODEL_STATUS_DISABLED)
+        trained_models = self.db.scalar(
+            select(func.count()).select_from(ModelVersion).where(ModelVersion.status.in_(trained_statuses))
+        ) or 0
         algorithm_count = self.db.scalar(
             select(func.count()).select_from(Algorithm).where(Algorithm.status == ALGORITHM_STATUS_AVAILABLE)
         ) or 0
         inference_count = self.db.scalar(select(func.count()).select_from(InferenceRecord)) or 0
+        report_count = self.db.scalar(select(func.count()).select_from(Report)) or 0
+        # “服务用户”仅计至少发起过一次推理或生成过报告的去重账号。
+        service_user_ids = select(InferenceRecord.user_id).union(select(Report.generated_by)).subquery()
+        served_user_count = self.db.scalar(select(func.count()).select_from(service_user_ids)) or 0
         user_count = self.db.scalar(select(func.count()).select_from(AppUser)) or 0
+        # 场景成员包含启用和停用账号，与全平台 user_count 保持同一注册账号口径。
+        # SUPER_ADMIN 不绑定场景，不计入任一场景的管理员数。
+        member_counts_by_scenario = {
+            (scenario_id, role): count
+            for scenario_id, role, count in self.db.execute(
+                select(AppUser.scenario_id, AppUser.role, func.count())
+                .where(AppUser.scenario_id.is_not(None))
+                .where(AppUser.role.in_((ROLE_SCENARIO_USER, ROLE_SCENARIO_ADMIN)))
+                .group_by(AppUser.scenario_id, AppUser.role)
+            ).all()
+        }
         events = self.db.scalars(_event_scope(self.authz, select(RiskEvent), current_user)).all()
 
-        # 逐场景的模型 / 已发布模型 / 推理记录计数：各用一次分组查询取回，
-        # 避免在下面的场景循环里对每个场景各发 3 次 count（N+1）。
+        # 逐场景的模型版本、已发布模型、训练完成模型与推理记录分别分组统计，
+        # 避免在下面的场景循环里重复查询（N+1）。
         model_count_by_scenario = {
             scenario_id: count
             for scenario_id, count in self.db.execute(
@@ -1101,6 +1124,14 @@ class DashboardService(ServiceBase):
             for scenario_id, count in self.db.execute(
                 select(ModelVersion.scenario_id, func.count())
                 .where(ModelVersion.status == MODEL_STATUS_PUBLISHED)
+                .group_by(ModelVersion.scenario_id)
+            ).all()
+        }
+        trained_by_scenario = {
+            scenario_id: count
+            for scenario_id, count in self.db.execute(
+                select(ModelVersion.scenario_id, func.count())
+                .where(ModelVersion.status.in_(trained_statuses))
                 .group_by(ModelVersion.scenario_id)
             ).all()
         }
@@ -1126,12 +1157,15 @@ class DashboardService(ServiceBase):
                     "scenario_key": _scenario_key(scenario.code, None),
                     "name": scenario.name,
                     "access_status": scenario.access_status,
+                    "user_count": member_counts_by_scenario.get((scenario.id, ROLE_SCENARIO_USER), 0),
+                    "admin_count": member_counts_by_scenario.get((scenario.id, ROLE_SCENARIO_ADMIN), 0),
                     # 去重口径：内容完全相同的重复注册文件只计 1 个数据集
                     "dataset_count": dataset_count,
                     "effective_sample_count": samples,
                     "risk_count": risk,
                     "risk_rate": _percent(risk, samples),
                     "published_model_count": published_by_scenario.get(scenario.id, 0),
+                    "trained_model_count": trained_by_scenario.get(scenario.id, 0),
                     "model_count": model_count_by_scenario.get(scenario.id, 0),
                     "inference_count": inference_by_scenario.get(scenario.id, 0),
                     "event_count": len(scene_events),
@@ -1149,7 +1183,10 @@ class DashboardService(ServiceBase):
                     "risk_rate": _percent(effective_risk, effective_samples),
                     "algorithm_count": algorithm_count,
                     "published_model_count": published_models,
+                    "trained_model_count": trained_models,
                     "inference_count": inference_count,
+                    "report_count": report_count,
+                    "served_user_count": served_user_count,
                     "risk_event_count": len(events),
                     "pending_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_PENDING),
                     "user_count": user_count,
@@ -1161,6 +1198,9 @@ class DashboardService(ServiceBase):
                     "processing_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_PROCESSING),
                     "resolved_event_count": sum(1 for event in events if event.status == RISK_EVENT_STATUS_RESOLVED),
                     "inference_count": inference_count,
+                    "report_count": report_count,
+                    "served_user_count": served_user_count,
+                    "trained_model_count": trained_models,
                     "user_count": user_count,
                     "published_model_count": published_models,
                     "algorithm_count": algorithm_count,
