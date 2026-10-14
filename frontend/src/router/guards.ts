@@ -50,6 +50,10 @@ export const setupRouterGuards = (router: Router): void => {
     if (!user) {
       return '/login';
     }
+    // 系统管理员的场景选择与资源概览已融入首页；旧场景中心地址兼容回首页。
+    if (to.path === '/scenarios' && user.role === 'SUPER_ADMIN') {
+      return '/overview';
+    }
     // 角色白名单：声明了 meta.roles 的路由只有名单内角色可进（越权 → 落地页）。
     // 与 App.vue 的 navItems.roles 同源，避免「导航里隐藏了、手敲地址却进得去」。
     const allowed = to.meta.roles;

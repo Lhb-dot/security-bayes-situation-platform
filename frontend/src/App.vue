@@ -286,11 +286,11 @@ const goOverview = () => {
 };
 
 /**
- * 跳转场景中心：系统管理员 → 场景中心列表；管理员/用户 → 自己场景详情页
+ * 跳转场景首页：系统管理员 → 平台首页；管理员/用户 → 自己场景详情页
  */
 const goScenarioCenter = () => {
   if (isSuperAdmin.value) {
-    router.push({ path: '/scenarios' });
+    router.push({ path: '/overview' });
     return;
   }
   const bound = userStore.currentUser?.scenario_code;
@@ -392,11 +392,8 @@ const navItems: NavItem[] = [
   {
     path: '/scenarios',
     label: '首页',
-    superAdminLabel: '场景中心',
     action: goScenarioCenter,
-    // 系统管理员：场景中心列表高亮；管理员/用户：自己场景大屏（首页）高亮
-    isActive: () =>
-      isSuperAdmin.value ? atPath('/scenarios') : route.path.startsWith('/scenarios/') || atPath('/scenarios'),
+    isActive: () => route.path.startsWith('/scenarios/') || atPath('/scenarios'),
   },
   { path: '/datasets', label: '数据集中心', action: goDatasetCenter, isActive: () => atPath('/datasets') },
   { path: '/alerts', label: '风险事件', action: goAlertsList, isActive: () => atPath('/alerts') },
@@ -412,7 +409,7 @@ const navItems: NavItem[] = [
 /** 按当前角色过滤可见导航项（角色准入查 router/access.ts，唯一来源） */
 const visibleNavItems = computed(() => {
   const role = userStore.currentUser?.role;
-  return navItems.filter((item) => (role ? rolesForPath(item.path).includes(role) : false));
+  return navItems.filter((item) => role && !(role === 'SUPER_ADMIN' && item.path === '/scenarios') && rolesForPath(item.path).includes(role));
 });
 
 /** 导航显示文案：系统管理员用 superAdminLabel（缺省沿用 label） */

@@ -52,15 +52,16 @@ const icons: Record<string, string> = {
   user: 'M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0 M5 21v-3c0-6 14-6 14 0v3',
   chevron: 'M8 10l4 4 4-4',
 };
-const navigationGroups = [
-  { id: 'scene', label: '场景总览', description: '四大场景，统一查看', items: [{ label: '场景中心', detail: '查看场景资源与态势', href: '/scenarios' }] },
+interface NavigationItem { label: string; detail: string; href: string }
+const navigationGroups: Array<{ id: string; label: string; description: string; items: NavigationItem[] }> = [
+  { id: 'scene', label: '场景总览', description: '选择场景，直接查看数据画像', items: [] },
   { id: 'data', label: '数据管理', description: '从数据接入到资源管理', items: [{ label: '数据集中心', detail: '上传、查看与管理数据集', href: '/datasets' }] },
   { id: 'model', label: '模型训练', description: '训练、发布与版本管理', items: [{ label: 'AI 模型训练', detail: '选择数据集与算法，发起训练', href: '/risk' }, { label: '模型中心', detail: '模型版本、发布与禁用', href: '/models' }] },
   { id: 'prediction', label: '预测研判', description: '从风险推理到事件闭环', items: [{ label: '风险研判', detail: '使用已发布模型进行预测', href: '/inference' }, { label: '推理记录', detail: '查看历史推理及结果', href: '/inference-records' }, { label: '风险事件', detail: '追踪风险与处置进展', href: '/alerts' }, { label: '报告中心', detail: '生成与查看研判报告', href: '/reports' }] },
   { id: 'settings', label: '系统管理', description: '账号、权限与系统配置', items: [{ label: '用户管理', detail: '管理平台用户及角色', href: '/users' }, { label: '系统设置', detail: '账号安全、基础设置与风险阈值', href: '/settings' }] },
 ];
 const pipeline = [
-  { label: '场景接入', icon: 'scene', href: '/scenarios' },
+  { label: '场景接入', icon: 'scene', href: '#scene-overview' },
   { label: '数据管理', icon: 'data', href: '/datasets' },
   { label: '模型训练', icon: 'model', href: '/risk' },
   { label: '风险推理', icon: 'prediction', href: '/inference' },
@@ -69,14 +70,17 @@ const pipeline = [
 ];
 
 const navigation = computed(() => navigationGroups.map((group) => ({
-  ...group, items: group.items.filter((item) => props.role && rolesForPath(item.href).includes(props.role)),
-})).filter((group) => group.items.length > 0));
+  ...group,
+  items: (group.id === 'scene'
+    ? scenes.value.map((scene) => ({ label: scene.name, detail: '查看场景数据画像', href: scene.href }))
+    : group.items).filter((item) => props.role && rolesForPath(item.href).includes(props.role)),
+})).filter((group) => group.items.length > 0 || (group.id === 'scene' && props.role === 'SUPER_ADMIN')));
 const metrics = computed(() => {
   const data = props.data;
   if (!data) return [];
   const padded = (value: number) => value < 10 ? String(value).padStart(2, '0') : format(value);
   return [
-    { label: '多域态势覆盖', value: padded(data.scenarioCount), unit: '大场景', detail: '网络 / 电力 / 舰面 / 地质', icon: 'scene', color: '#69b7ff', href: '/scenarios', title: `${exact(data.scenarioCount)} 个场景` },
+    { label: '多域态势覆盖', value: padded(data.scenarioCount), unit: '大场景', detail: '网络 / 电力 / 舰面 / 地质', icon: 'scene', color: '#69b7ff', href: '#scene-overview', title: `${exact(data.scenarioCount)} 个场景，点击选择场景` },
     { label: '异构数据资源', value: padded(data.datasetCount), unit: '套数据集', detail: '去重有效数据集', icon: 'data', color: '#4cdac6', href: '/datasets', title: `${exact(data.datasetCount)} 个有效数据集` },
     { label: '有效样本规模', ...sampleMetric(data.sampleCount), detail: '按数据内容去重统计', icon: 'prediction', color: '#efc17a', href: '/datasets', title: `${exact(data.sampleCount)} 条有效样本` },
     { label: '算法能力储备', value: padded(data.algorithmCount), unit: '类算法', detail: '贝叶斯及加权算法', icon: 'model', color: '#a999ee', href: '/risk', title: `${exact(data.algorithmCount)} 个可用算法` },
@@ -156,6 +160,12 @@ onUnmounted(() => {
 
 watch(() => props.role, () => { activeNav.value = null; });
 const onNavigate = (event: MouseEvent, href: string) => {
+  if (href === '#scene-overview') {
+    event.preventDefault();
+    toggleNav('scene');
+    navRoot.value?.querySelector<HTMLButtonElement>('[data-category="scene"]')?.focus();
+    return;
+  }
   activeNav.value = null;
   // 预览保持普通链接；正式页面使用已有路由，同时保留新标签页 / Ctrl 点击行为。
   if (props.preview || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -187,6 +197,7 @@ const onNavigate = (event: MouseEvent, href: string) => {
           <div v-if="selectedNav" id="category-panel" class="category-panel" :style="menuPosition" :aria-labelledby="`category-${selectedNav.id}`">
             <div class="category-heading"><div><strong>{{ selectedNav.label }}</strong><span>{{ selectedNav.description }}</span></div><button type="button" class="close-menu" aria-label="关闭功能菜单" @click="closeNav">×</button></div>
             <a v-for="item in selectedNav.items" :key="item.href" :href="item.href" @click="onNavigate($event, item.href)"><span><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons.arrow" /></svg></a>
+            <p v-if="selectedNav.id === 'scene' && !selectedNav.items.length" class="category-empty" role="status">{{ loading ? '正在读取场景…' : '暂无已接入场景' }}</p>
             <button v-if="!preview && selectedNav.id === 'settings'" type="button" class="category-logout" :disabled="loggingOut" @click="activeNav = null; emit('logout')">{{ loggingOut ? '正在退出…' : '退出登录' }}</button>
           </div>
         </nav>
@@ -229,15 +240,16 @@ const onNavigate = (event: MouseEvent, href: string) => {
           </section>
         </aside>
 
-        <section class="situation-stage" aria-label="四大场景态势与平台能力链路">
+        <section id="scene-overview" class="situation-stage" aria-label="四大场景态势与平台能力链路">
           <div class="stage-heading"><div><span class="eyebrow">MULTI-SCENARIO SITUATION</span><h3>多域态势总览</h3></div><span class="scene-coverage"><i></i>{{ scenes.length }} 类场景已接入</span></div>
           <div class="situation-map">
             <div class="map-grid" aria-hidden="true"></div><div class="radar-sweep" aria-hidden="true"></div><div class="orbit orbit-outer" aria-hidden="true"></div><div class="orbit orbit-middle" aria-hidden="true"></div><div class="orbit orbit-inner" aria-hidden="true"></div>
             <svg class="scene-connections" viewBox="0 0 700 440" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="overview-line"><stop stop-color="#66b9f2" stop-opacity=".12"/><stop offset=".5" stop-color="#67d8e1" stop-opacity=".6"/><stop offset="1" stop-color="#66b9f2" stop-opacity=".12"/></linearGradient></defs><path d="M350 211Q260 125 133 98 M350 211Q440 125 567 98 M350 211Q260 285 133 330 M350 211Q440 285 567 330" stroke="url(#overview-line)" fill="none" stroke-width="1.5"/><path d="M350 211Q260 125 133 98 M350 211Q440 125 567 98 M350 211Q260 285 133 330 M350 211Q440 285 567 330" stroke="#65cedd" stroke-opacity=".5" stroke-dasharray="3 12" fill="none"/></svg>
             <div class="central-hub"><span class="hub-eyebrow">BAYESIAN NETWORK</span><strong>复杂系统<br/>态势感知</strong><span class="hub-rule"></span><span class="hub-caption">跨域融合 · 智能研判</span></div>
-            <a v-for="scene in scenes" :key="scene.key" :href="scene.href" class="scene-card" :class="[`scene-card--${scene.key}`, { 'count--long': scene.samples >= 1e6 }]" :style="{ '--accent': scene.color }" :aria-label="`进入${scene.name}场景，${exact(scene.samples)} 条有效样本`" :title="`有效样本：${exact(scene.samples)}；数据集：${exact(scene.datasets)}`" @click="onNavigate($event, scene.href)">
+            <a v-for="scene in scenes" :key="scene.key" :href="scene.href" class="scene-card" :class="`scene-card--${scene.key}`" :style="{ '--accent': scene.color }" :aria-label="`进入${scene.name}场景，${exact(scene.samples)} 条有效样本，${exact(scene.datasets)} 个数据集`" :title="`有效样本：${exact(scene.samples)}；数据集：${exact(scene.datasets)}`" @click="onNavigate($event, scene.href)">
               <div class="scene-card-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[scene.icon]" /></svg><span>{{ scene.name }}</span><span class="scene-enter">↗</span></div>
-              <span class="scene-english">{{ scene.english }}</span><strong>{{ format(scene.samples) }}</strong><div class="scene-card-footer"><span>有效样本</span><span>{{ format(scene.datasets) }} 个数据集</span></div>
+              <span class="scene-english">{{ scene.english }}</span>
+              <div class="scene-card-stats"><div class="scene-stat scene-stat--samples" :class="{ 'count--long': format(scene.samples).length > 4 }"><strong>{{ format(scene.samples) }}</strong><span>有效样本</span></div><div class="scene-stat scene-stat--datasets" :class="{ 'count--long': format(scene.datasets).length > 2 }"><strong>{{ format(scene.datasets) }}</strong><span>数据集数量</span></div></div>
             </a>
             <span v-if="!scenes.length" class="scene-empty">暂无场景数据</span>
             <span class="map-caption">点击场景卡片，进入对应数据画像</span>

@@ -167,18 +167,71 @@ describe('正式管理员首页', () => {
 
   it('普通链接由路由处理，Ctrl 点击保留浏览器的新标签行为', async () => {
     await mount();
-    const link = host.querySelector<HTMLAnchorElement>('.metric-card')!;
+    const link = host.querySelector<HTMLAnchorElement>('.metric-card:nth-child(2)')!;
     const normal = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     link.dispatchEvent(normal);
     await flush();
     expect(normal.defaultPrevented).toBe(true);
-    expect(routing.push).toHaveBeenCalledWith('/scenarios');
+    expect(routing.push).toHaveBeenCalledWith('/datasets');
     routing.push.mockClear();
     const modified = new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true });
     link.dispatchEvent(modified);
     expect(modified.defaultPrevented).toBe(false);
     expect(routing.push).not.toHaveBeenCalled();
     modified.preventDefault();
+  });
+
+  it('场景菜单直接进入接口编码对应的数据画像，卡片显式展示两项统计', async () => {
+    const payload = adminOverviewPayload();
+    payload.scenarios[0].code = 'network/自定义';
+    vi.mocked(getAdminDashboard).mockResolvedValueOnce(payload);
+    await mount();
+    click('[data-category="scene"]');
+    await flush();
+    const links = [...host.querySelectorAll<HTMLAnchorElement>('#category-panel > a')];
+    expect(links.map((link) => link.querySelector('strong')?.textContent)).toEqual(['网络安全', '电力系统', '舰面调度', '地质风险']);
+    expect(links[0].getAttribute('href')).toBe('/scenarios/network%2F%E8%87%AA%E5%AE%9A%E4%B9%89/dashboard');
+    links[0].click();
+    await flush();
+    expect(routing.push).toHaveBeenCalledWith('/scenarios/network%2F%E8%87%AA%E5%AE%9A%E4%B9%89/dashboard');
+    expect(host.querySelector('#category-panel')).toBeNull();
+    const card = host.querySelector('.scene-card--network')!;
+    expect(card.querySelector('.scene-stat--samples strong')?.textContent).toBe('1,000');
+    expect(card.querySelector('.scene-stat--datasets strong')?.textContent).toBe('2');
+    expect(card.textContent).toContain('数据集数量');
+    expect(host.querySelector('a[href="/scenarios"]')).toBeNull();
+  });
+
+  it('首页的场景概览和能力链路打开场景菜单，不刷新或改变路由', async () => {
+    await mount();
+    click('.metric-card');
+    await flush();
+    expect(host.querySelectorAll('#category-panel > a')).toHaveLength(4);
+    click('.pipeline a');
+    await flush();
+    expect(host.querySelector('#category-panel')).toBeNull();
+    click('.pipeline a');
+    await flush();
+    expect(host.querySelectorAll('#category-panel > a')).toHaveLength(4);
+    expect(routing.push).not.toHaveBeenCalled();
+  });
+
+  it('场景数据缺失时不生成虚假的场景链接，加载成功后菜单自动更新', async () => {
+    const pending = deferred<DashboardOverview>();
+    vi.mocked(getAdminDashboard).mockReturnValueOnce(pending.promise);
+    await mount(false);
+    click('[data-category="scene"]');
+    await flush();
+    expect(host.querySelectorAll('#category-panel > a')).toHaveLength(0);
+    expect(host.querySelector('.category-empty')?.textContent).toBe('正在读取场景…');
+    const payload = adminOverviewPayload();
+    payload.scenarios = [];
+    pending.resolve(payload);
+    await flush();
+    expect(host.querySelector('.category-empty')?.textContent).toBe('暂无已接入场景');
+    click('.runtime-badge');
+    await flush();
+    expect(host.querySelectorAll('#category-panel > a')).toHaveLength(4);
   });
 
   it('分类菜单支持再次点击、切换、外部点击和 Esc 关闭', async () => {
