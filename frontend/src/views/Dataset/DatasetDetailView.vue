@@ -24,7 +24,11 @@ const datasetId = computed(() => String(route.params.datasetId ?? ''));
 const loading = ref(true);
 const error = ref('');
 const notFound = ref(false);
-const activeTab = ref('fields');
+const activeTab = ref(route.query.tab === 'preview' ? 'preview' : 'fields');
+
+watch(() => route.query.tab, (tab) => {
+  activeTab.value = tab === 'preview' ? 'preview' : 'fields';
+}, { immediate: true });
 
 const dataset = ref<Dataset | null>(null);
 const loadedFields = ref<DatasetField[] | null>(null);

@@ -52,16 +52,14 @@
 .category-panel > a svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); color: #75d0e4; }
 .category-empty { margin: calc(8 * var(--u)) 0; color: var(--muted); font-size: calc(12 * var(--u)); }
 .headline-metrics { min-height: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: calc(14 * var(--u)); }
-.metric-card { position: relative; overflow: clip; min-width: 0; min-height: 0; padding: calc(11 * var(--u)) calc(18 * var(--u)); display: flex; flex-direction: column; justify-content: space-between; border: calc(1 * var(--u)) solid var(--border); border-radius: calc(7 * var(--u)); background: linear-gradient(125deg,#102b42bd,#0a1d2dbd); transition: border-color .18s,background .18s; }
+.metric-card { position: relative; overflow: clip; min-width: 0; min-height: 0; padding: calc(11 * var(--u)) calc(18 * var(--u)); display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: calc(11 * var(--u)); text-align: left; border: calc(1 * var(--u)) solid var(--border); border-radius: calc(7 * var(--u)); background: linear-gradient(125deg,#102b42bd,#0a1d2dbd); transition: border-color .18s,background .18s; }
 .metric-card::before { content: ''; position: absolute; left: 0; top: calc(20 * var(--u)); width: calc(3 * var(--u)); height: calc(28 * var(--u)); background: var(--accent); }
 .metric-card:hover { border-color: var(--accent); background: #14334b; }
-.metric-top { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: calc(8 * var(--u)); color: #aac1d2; font-size: calc(12 * var(--u)); }
-.metric-top svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); color: var(--accent); }
-.metric-value { position: relative; z-index: 1; display: flex; align-items: baseline; gap: calc(10 * var(--u)); }
-.metric-value strong { color: var(--accent); font: 500 calc(36 * var(--u))/1.1 'Bahnschrift','Segoe UI',sans-serif; letter-spacing: calc(1 * var(--u)); font-variant-numeric: tabular-nums; }
-.metric-value > span { font-size: calc(11 * var(--u)); color: #a4bccd; }
-.metric-bottom { position: relative; z-index: 1; display: flex; align-items: center; justify-content: flex-end; color: #89a3b7; }
-.metric-bottom svg { width: calc(14 * var(--u)); height: calc(14 * var(--u)); opacity: .65; }
+.metric-top { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: calc(9 * var(--u)); color: #aac1d2; font-size: calc(14 * var(--u)); }
+.metric-top svg { width: calc(21 * var(--u)); height: calc(21 * var(--u)); color: var(--accent); }
+.metric-value { position: relative; z-index: 1; display: flex; align-items: baseline; justify-content: flex-start; gap: calc(11 * var(--u)); }
+.metric-value strong { color: var(--accent); font: 500 calc(42 * var(--u))/1.1 'Bahnschrift','Segoe UI',sans-serif; letter-spacing: calc(1 * var(--u)); font-variant-numeric: tabular-nums; }
+.metric-value > span { font-size: calc(13 * var(--u)); color: #a4bccd; }
 .metric-watermark { position: absolute; right: calc(8 * var(--u)); top: calc(31 * var(--u)); width: calc(67 * var(--u)); height: calc(67 * var(--u)); pointer-events: none; opacity: .1; transform: rotate(45deg); border: calc(1 * var(--u)) solid var(--accent); box-shadow: 0 0 0 calc(10 * var(--u)) #0000,0 0 0 calc(11 * var(--u)) var(--accent); }
 .overview-grid { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0,.95fr) minmax(0,2.1fr) minmax(0,1fr); gap: calc(14 * var(--u)); }
 .left-panels,.right-panels { min-width: 0; min-height: 0; display: grid; grid-template-rows: repeat(3,minmax(0,1fr)); gap: calc(12 * var(--u)); }
@@ -190,12 +188,12 @@
   .module-icon { display: none; }
   .chevron { width: calc(10 * var(--u)); height: calc(10 * var(--u)); }
   .headline-metrics { gap: calc(6 * var(--u)); }
-  .metric-card { padding: calc(7 * var(--u)) calc(6 * var(--u)); }
-  .metric-top { font-size: calc(9 * var(--u)); }
-  .metric-top svg,.metric-bottom svg,.metric-watermark { display: none; }
-  .metric-value { gap: calc(3 * var(--u)); }
-  .metric-value strong { font-size: calc(24 * var(--u)); }
-  .metric-value > span { font-size: calc(7 * var(--u)); }
+  .metric-card { padding: calc(7 * var(--u)) calc(6 * var(--u)); gap: calc(5 * var(--u)); }
+  .metric-top { font-size: calc(10 * var(--u)); gap: calc(4 * var(--u)); }
+  .metric-top svg,.metric-watermark { display: none; }
+  .metric-value { gap: calc(4 * var(--u)); }
+  .metric-value strong { font-size: calc(27 * var(--u)); }
+  .metric-value > span { font-size: calc(8 * var(--u)); }
   .metric-card::before { top: calc(14 * var(--u)); height: calc(20 * var(--u)); width: calc(2 * var(--u)); }
   .overview-grid { grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-rows: minmax(0,.85fr) minmax(0,1.75fr); gap: calc(9 * var(--u)); }
   .situation-stage { grid-column: 1 / -1; grid-row: 1; --hub-size: calc(84 * var(--u)); --scene-card-width: calc(91 * var(--u)); grid-template-rows: calc(23 * var(--u)) minmax(0,1fr) calc(47 * var(--u)); }
@@ -300,12 +298,12 @@
 .scene-empty { position: relative; z-index: 1; grid-column: 1 / -1; grid-row: 1; align-self: start; justify-self: center; color: #8ba4b8; font-size: calc(12 * var(--u)); }
 .event-track { background: #19374b; }
 .metric-card,.scene-card,.model-stat-grid a,.event-status a { container-type: inline-size; }
-.metric-card.count--long .metric-value strong { font-size: min(calc(36 * var(--u)),14cqw); }
+.metric-card.count--long .metric-value strong { font-size: min(calc(42 * var(--u)),14cqw); }
 .model-stat-grid a.count--long strong { font-size: min(calc(25 * var(--u)),20cqw); }
 .event-status a.count--long strong { font-size: min(calc(23 * var(--u)),18cqw); }
 @media (max-width: 56.25em) {
   .dashboard-content--unavailable { grid-template-rows: calc(74 * var(--u)) minmax(0,1fr); }
-  .metric-card.count--long .metric-value strong { font-size: min(calc(24 * var(--u)),14cqw); }
+  .metric-card.count--long .metric-value strong { font-size: min(calc(27 * var(--u)),14cqw); }
   .model-stat-grid a.count--long strong { font-size: min(calc(18 * var(--u)),20cqw); }
   .event-status a.count--long strong { font-size: min(calc(17 * var(--u)),18cqw); }
 }

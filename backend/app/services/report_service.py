@@ -34,6 +34,7 @@ from app.models.report import Report
 from app.models.risk_event import RiskEvent
 from app.models.scenario import Scenario
 from app.schemas.common import ok
+from app.schemas.explanation_contract import normalize_calculation_method
 from app.services import risk_view
 from app.services.base import ServiceBase, ServiceError, service_call
 from app.services.report_export import (
@@ -717,7 +718,9 @@ class ReportService(ServiceBase):
                     "risk_count": g["risk_count"],
                     "views": view_entries,
                     "view_weights": explain.get("view_weights") or [],
-                    "calculation_method": explain.get("calculation_method"),
+                    "calculation_method": normalize_calculation_method(
+                        g["algorithm_code"], explain.get("calculation_method")
+                    ),
                     "has_views": len(view_entries) > 0,
                 }
             )
@@ -730,7 +733,10 @@ class ReportService(ServiceBase):
         for record, model in records:
             explain = record.explain_data or {}
             if explain.get("calculation_method"):
-                method = explain["calculation_method"]
+                algorithm_code = model.algorithm.code if model.algorithm else None
+                method = normalize_calculation_method(
+                    algorithm_code, explain["calculation_method"]
+                )
             logical_id = model.dataset.logical_id if model.dataset else None
             for fe in explain.get("feature_evidence") or []:
                 attr = fe.get("attribute")

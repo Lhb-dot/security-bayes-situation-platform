@@ -10,10 +10,9 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import type { Dataset, DatasetField, DatasetVersion, ScenarioId } from '@/types/security';
+import type { Dataset, DatasetVersion, ScenarioId } from '@/types/security';
 import {
   getDatasetList,
-  getDatasetFields,
   getDatasetVersions,
   uploadDatasetFile,
   appendDatasetRows,
@@ -26,7 +25,6 @@ import {
 import type { DatasetRevisionItem } from '@/api/datasetApi';
 import ScenarioSelector from '@/components/common/ScenarioSelector.vue';
 import { useUserStore } from '@/stores/userStore';
-import { stripArffQuotes } from '@/utils/arffValue';
 
 const router = useRouter();
 
@@ -56,12 +54,6 @@ const selectedScenario = ref<ScenarioId | 'all'>('all');
 const loading = ref(true);
 /** 错误信息 */
 const error = ref('');
-
-/** 弹窗：字段预览 */
-const fieldDialogVisible = ref(false);
-const fieldDialogTitle = ref('');
-const fieldDialogFields = ref<DatasetField[]>([]);
-const fieldDialogLoading = ref(false);
 
 /** current user (new uploads are available to all roles; version mutations remain admin-only) */
 const userStore = useUserStore();
@@ -295,26 +287,6 @@ watch(selectedScenario, () => {
   applyFilter();
 });
 
-// ===================== 字段预览弹窗 =====================
-const openFieldPreview = async (dataset: Dataset) => {
-  fieldDialogTitle.value = `字段预览 - ${dataset.name}`;
-  fieldDialogVisible.value = true;
-  fieldDialogLoading.value = true;
-  try {
-    const fields = await getDatasetFields(dataset.dataset_id);
-    fieldDialogFields.value = fields;
-  } catch {
-    fieldDialogFields.value = [];
-  } finally {
-    fieldDialogLoading.value = false;
-  }
-};
-
-const closeFieldPreview = () => {
-  fieldDialogVisible.value = false;
-  fieldDialogFields.value = [];
-};
-
 // ===================== AI 解析（算法适配，需求：判断数据集适合的算法） =====================
 /** 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done。 */
 const aiDialogVisible = ref(false);
@@ -446,9 +418,9 @@ onBeforeUnmount(() => {
   aiAbort = null;
 });
 
-/** 跳转数据集详情页（数据内容预览，需求 2.4） */
-const goDatasetDetail = (dataset: Dataset) => {
-  router.push({ path: `/datasets/${dataset.dataset_id}` });
+/** 跳转数据集详情页，并打开字段结构或数据内容页签。 */
+const goDatasetDetail = (dataset: Dataset, tab: 'fields' | 'preview') => {
+  router.push({ path: `/datasets/${dataset.dataset_id}`, query: { tab } });
 };
 
 // ===================== 生命周期 =====================
@@ -559,10 +531,10 @@ onMounted(async () => {
         <el-table-column label="操作" width="360" align="center" fixed="right">
           <template #default="{ row }: { row: Dataset }">
             <div class="dataset-ops">
-              <el-button size="small" plain @click="openFieldPreview(row)">
+              <el-button size="small" plain @click="goDatasetDetail(row, 'fields')">
                 字段预览
               </el-button>
-              <el-button size="small" plain @click="goDatasetDetail(row)">
+              <el-button size="small" plain @click="goDatasetDetail(row, 'preview')">
                 数据预览
               </el-button>
               <el-button size="small" plain @click="openAiAnalysis(row)">
@@ -577,81 +549,7 @@ onMounted(async () => {
       </el-table>
     </div>
 
-    <!-- 字段预览弹窗（append-to-body：逃出页面容器层叠上下文，不被 topbar 遮挡） -->
-    <el-dialog
-      v-model="fieldDialogVisible"
-      :title="fieldDialogTitle"
-      width="760px"
-      top="6vh"
-      append-to-body
-      :close-on-click-modal="false"
-      @close="closeFieldPreview"
-    >
-      <div v-if="fieldDialogLoading" class="dialog-loading">
-        <div class="loader"></div>
-        <p>加载字段信息...</p>
-      </div>
-
-      <el-table
-        v-else
-        :data="fieldDialogFields"
-        stripe
-        max-height="62vh"
-        style="width: 100%"
-        empty-text="该数据集暂无字段信息"
-      >
-        <el-table-column prop="field_name" label="字段名" min-width="140" show-overflow-tooltip />
-        <el-table-column prop="field_type" label="数据类型" width="90" align="center">
-          <template #default="{ row }: { row: DatasetField }">
-            <span
-              class="type-badge"
-              :class="row.field_type === '数值型' || row.field_type === 'float' || row.field_type === 'int' ? 'type-badge--numeric' : 'type-badge--string'"
-            >
-              {{ row.field_type }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="field_role" label="字段角色" width="100" align="center">
-          <template #default="{ row }: { row: DatasetField }">
-            <span
-              class="field-role-badge"
-              :class="row.field_role === '分类标签' ? 'field-role-label' : 'field-role-input'"
-            >
-              {{ row.field_role }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="nullable" label="允许为空" width="88" align="center">
-          <template #default="{ row }: { row: DatasetField }">
-            <span :class="row.nullable ? 'text-muted' : 'text-active'">
-              {{ row.nullable ? '是' : '否' }}
-            </span>
-          </template>
-        </el-table-column>
-        <!-- 样例数据：定宽截断，悬停由列的 show-overflow-tooltip 展示完整值 -->
-        <el-table-column label="样例数据" width="170" show-overflow-tooltip>
-          <template #default="{ row }: { row: { sample_value?: string } }">
-            {{ stripArffQuotes(row.sample_value) }}
-          </template>
-        </el-table-column>
-        <!-- 字段说明：只用一个圆点表示有/无（无=灰、有=绿），有说明时悬停展示文本 -->
-        <el-table-column label="字段说明" width="88" align="center">
-          <template #default="{ row }: { row: DatasetField }">
-            <el-tooltip
-              v-if="row.description"
-              :content="row.description"
-              placement="top"
-              :show-after="120"
-            >
-              <span class="field-desc-dot field-desc-dot--on" />
-            </el-tooltip>
-            <span v-else class="field-desc-dot field-desc-dot--off" />
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
-
-    <!-- AI 解析弹窗（算法适配；样式对齐字段预览弹窗，append-to-body 防 topbar 遮挡） -->
+    <!-- AI 解析弹窗（算法适配；append-to-body 防 topbar 遮挡） -->
     <el-dialog
       v-model="aiDialogVisible"
       :title="aiDialogTitle"
@@ -1028,19 +926,6 @@ onMounted(async () => {
   color: rgba(220, 234, 255, 0.65);
 }
 
-/* 弹窗加载 */
-.dialog-loading {
-  display: grid;
-  place-items: center;
-  gap: 16px;
-  padding: 48px 0;
-}
-
-.dialog-loading p {
-  margin: 0;
-  color: rgba(220, 234, 255, 0.65);
-}
-
 /* AI 解析弹窗（与模型评价正文同款排版） */
 .ai-analysis__status,
 .ai-analysis__notice,
@@ -1114,17 +999,6 @@ onMounted(async () => {
   color: #eaf3ff;
 }
 
-/* 字段角色标签 */
-.field-role-input {
-  background: rgba(91, 166, 255, 0.12);
-  color: #9ad6ff;
-}
-
-.field-role-label {
-  background: rgba(83, 229, 200, 0.12);
-  color: #53e5c8;
-}
-
 /* 格式徽章 */
 .format-badge {
   display: inline-block;
@@ -1148,44 +1022,6 @@ onMounted(async () => {
 .format-badge--json {
   background: rgba(154, 128, 255, 0.12);
   color: #b8a8ff;
-}
-
-/* 类型徽章（弹窗） */
-.type-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 0.76rem;
-  font-weight: 500;
-}
-
-.type-badge--numeric {
-  background: rgba(91, 166, 255, 0.10);
-  color: #7dbfff;
-}
-
-.type-badge--string {
-  background: rgba(220, 234, 255, 0.06);
-  color: rgba(220, 234, 255, 0.7);
-}
-
-/* 字段说明指示点：无说明=灰、有说明=绿（悬停展示说明文本） */
-.field-desc-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  vertical-align: middle;
-}
-
-.field-desc-dot--on {
-  background: #53e5c8;
-  box-shadow: 0 0 0 3px rgba(83, 229, 200, 0.14);
-  cursor: help;
-}
-
-.field-desc-dot--off {
-  background: rgba(180, 200, 235, 0.22);
 }
 
 /* 文本颜色 */

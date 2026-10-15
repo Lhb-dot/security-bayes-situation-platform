@@ -526,7 +526,7 @@ public final class NbAlgorithmService {
                         .put("model_score", kfdb.getMS())
                         .put("max_parents", kfdb.getMaxParentsForReport())
                         .put("available", true);
-                calculationMethod = "K-Free 依赖贝叶斯：按属性依赖结构聚合条件概率";
+                calculationMethod = "K自由依赖贝叶斯分类器：按属性依赖结构聚合条件概率";
             } else if (base instanceof FLNB) {
                 FLNB flnb = (FLNB) base;
                 JSONObject full = viewObj("FLNB 懒惰相似度视图", finalDistribution, header);
@@ -534,13 +534,13 @@ public final class NbAlgorithmService {
                 specific.put("full_view", full)
                         .put("weight_scheme", flnb.getWeightScheme())
                         .put("available", true);
-                calculationMethod = "频率懒惰朴素贝叶斯：训练样本按相似度加权后估计条件概率";
+                calculationMethod = "基于频率的消极加权朴素贝叶斯：训练样本按相似度加权后估计条件概率";
             } else if (base instanceof FTAWNB) {
                 JSONObject full = viewObj("FTAWNB 属性加权视图", finalDistribution, header);
                 views.put(full);
                 specific.put("full_view", full)
                         .put("available", true);
-                calculationMethod = "属性加权朴素贝叶斯：互信息微调属性权重后估计条件概率";
+                calculationMethod = "基于概率微调的属性加权朴素贝叶斯：互信息微调属性权重后估计条件概率";
             }
 
             explain.put("views", views);

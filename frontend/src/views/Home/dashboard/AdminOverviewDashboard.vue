@@ -208,7 +208,6 @@ const onNavigate = (event: MouseEvent, href: string) => {
         <a v-for="metric in metrics" :key="metric.label" class="metric-card" :class="{ 'count--long': metric.value.length > 5 || (metric.unit.length > 2 && metric.value.length > 3) }" :href="metric.href" :style="{ '--accent': metric.color }" :title="metric.title" @click="onNavigate($event, metric.href)">
           <div class="metric-top"><span>{{ metric.label }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[metric.icon]" /></svg></div>
           <div class="metric-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></div>
-          <div class="metric-bottom"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons.arrow" /></svg></div>
           <span class="metric-watermark" aria-hidden="true"></span>
         </a>
       </section>
@@ -268,7 +267,7 @@ const onNavigate = (event: MouseEvent, href: string) => {
           </section>
 
           <section class="panel model-panel">
-            <div class="panel-heading"><span class="panel-number">05</span><h3>模型发布</h3></div>
+            <div class="panel-heading"><span class="panel-number">05</span><h3>模型统计</h3></div>
             <div class="model-stat-grid"><a v-for="stat in modelStats" :key="stat.label" :class="{ 'count--long': stat.value !== null && stat.value >= 1e6 }" :title="`${stat.label}：${exact(stat.value)}`" :href="stat.href" @click="onNavigate($event, stat.href)"><span>{{ stat.label }}</span><strong>{{ format(stat.value) }}</strong><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[stat.icon]" /></svg></a></div>
           </section>
 

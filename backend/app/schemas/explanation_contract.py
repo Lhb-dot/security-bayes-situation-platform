@@ -210,6 +210,24 @@ def _normalize_algorithm_details(value: Any) -> dict[str, Any]:
     return details
 
 
+def normalize_calculation_method(algorithm_code: str | None, method: Any) -> Any:
+    """Use current algorithm names in calculation notes, including saved records."""
+    if not isinstance(method, str):
+        return method
+    replacements = {
+        "KFDB": (
+            ("K-Free 依赖贝叶斯", "K自由依赖贝叶斯分类器"),
+            ("K-Free依赖贝叶斯分类器", "K自由依赖贝叶斯分类器"),
+        ),
+        "FLNB": (("频率懒惰朴素贝叶斯", "基于频率的消极加权朴素贝叶斯"),),
+        "FTAWNB": (("属性加权朴素贝叶斯", "基于概率微调的属性加权朴素贝叶斯"),),
+    }
+    for old, new in replacements.get(str(algorithm_code or "").upper(), ()):
+        if method.startswith(old):
+            return new + method[len(old):]
+    return method
+
+
 def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
     """Fill and type-normalize the v1 envelope without changing model facts."""
     data = deepcopy(explanation or {})
@@ -243,6 +261,10 @@ def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
 
     data["model_quality"] = _normalize_model_quality(data.get("model_quality"))
     data["algorithm_details"] = _normalize_algorithm_details(data.get("algorithm_details"))
+    details = data["algorithm_details"]
+    details["calculation_method"] = normalize_calculation_method(
+        details.get("algorithm_code"), details.get("calculation_method")
+    )
     data["input_snapshot"] = _dict(data.get("input_snapshot"))
 
     # Keep legacy prediction fields when present, while making their types stable.
