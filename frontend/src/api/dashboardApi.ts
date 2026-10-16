@@ -466,12 +466,12 @@ export const getAdminDashboard = async (options?: { signal?: AbortSignal }): Pro
     timeout: 30_000,
   }));
 
-export const getScenarioProfile = async (scenarioId: number | string): Promise<ScenarioProfile> => {
+export const getScenarioProfile = async (scenarioId: number | string, options?: { signal?: AbortSignal }): Promise<ScenarioProfile> => {
   const id = await resolveScenarioId(scenarioId);
-  return unwrapData(await request.get(`/api/v1/dashboard/scenarios/${id}/profile`));
+  return unwrapData(await request.get(`/api/v1/dashboard/scenarios/${id}/profile`, { signal: options?.signal, timeout: 30_000 }));
 };
 
-export const getScenarioWorkspace = async (scenarioId: number | string): Promise<ScenarioWorkspace> => {
+export const getScenarioWorkspace = async (scenarioId: number | string, options?: { signal?: AbortSignal }): Promise<ScenarioWorkspace> => {
   const id = await resolveScenarioId(scenarioId);
-  return unwrapData(await request.get(`/api/v1/dashboard/scenarios/${id}/workspace`));
+  return unwrapData(await request.get(`/api/v1/dashboard/scenarios/${id}/workspace`, { signal: options?.signal, timeout: 30_000 }));
 };

@@ -1,84 +1,121 @@
 <script setup lang="ts">
-/**
- * AdminProfilePage —— 场景数据画像（场景管理员首页）。
- * 按 scenario_key 分发到 4 个场景分区组件，字段口径见 docs/首页字段口径说明.md。
- * 数据来自 /dashboard/scenarios/{id}/profile（全量数据集实测，不受运行态影响）。
- */
-import { computed, onMounted, ref, watch } from 'vue';
-import {
-  getScenarioProfile,
-  type FlightdeckProfile,
-  type GeologicalProfile,
-  type NetworkProfile,
-  type PowerProfile,
-  type ScenarioProfile,
-} from '@/api/dashboardApi';
-import DashShell from '@/components/dashboard/DashShell.vue';
-import ProfileNetwork from './sections/ProfileNetwork.vue';
-import ProfilePower from './sections/ProfilePower.vue';
-import ProfileFlightdeck from './sections/ProfileFlightdeck.vue';
-import ProfileGeological from './sections/ProfileGeological.vue';
-import { fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { getScenarioProfile, getScenarioWorkspace, type ScenarioProfile, type ScenarioWorkspace } from '@/api/dashboardApi';
+import { getScenarioList, resolveScenarioId, type ApiScenario } from '@/api/scenarioApi';
+import { getUserList } from '@/api/userApi';
+import { useUserStore } from '@/stores/userStore';
+import ScenarioScreenDashboard from './scenarioScreen/ScenarioScreenDashboard.vue';
 
 const props = defineProps<{ scenarioRef: string }>();
-
-const loading = ref(true);
-const error = ref('');
+const router = useRouter();
+const userStore = useUserStore();
 const profile = ref<ScenarioProfile | null>(null);
+const runtime = ref<ScenarioWorkspace | null>(null);
+const scenarios = ref<ApiScenario[]>([]);
+const members = ref<{ total: number; enabled: number; disabled: number } | null>(null);
+const loading = ref(false);
+const error = ref('');
+const runtimeError = ref('');
+const memberError = ref('');
+const sceneError = ref('');
+const loggingOut = ref(false);
+const updatedAt = ref('');
+const statusError = computed(() => error.value || runtimeError.value || memberError.value || sceneError.value);
+let mounted = false;
+let revision = 0;
+let controller: AbortController | null = null;
+let timer: number | undefined;
+const cancel = () => { revision += 1; controller?.abort(); controller = null; loading.value = false; };
+const errorText = (err: unknown, fallback: string) => err instanceof Error ? err.message : fallback;
 
-/** 按 scenario_key 收窄类型，模板中据此渲染对应场景分区（TS 无法在模板里自动收窄联合类型） */
-const networkData = computed<NetworkProfile | null>(() =>
-  profile.value?.scenario_key === 'network' ? (profile.value as NetworkProfile) : null,
-);
-const powerData = computed<PowerProfile | null>(() =>
-  profile.value?.scenario_key === 'power' ? (profile.value as PowerProfile) : null,
-);
-const flightdeckData = computed<FlightdeckProfile | null>(() =>
-  profile.value?.scenario_key === 'flight_deck' ? (profile.value as FlightdeckProfile) : null,
-);
-const geologicalData = computed<GeologicalProfile | null>(() =>
-  profile.value?.scenario_key === 'geological' ? (profile.value as GeologicalProfile) : null,
-);
-
-const subtitle = computed(() => {
-  const data = profile.value;
-  if (!data) return '以数据集字段为主线，全部为全量统计指标';
-  return `数据集全量统计 · ${data.dataset_count} 个有效数据集 · ${fmtInt(data.sample_count)} 条样本 · 风险占比 ${fmtPercent(data.risk_rate)}`;
-});
-
-const load = async () => {
+async function load() {
+  if (!mounted || loading.value || loggingOut.value || !userStore.isManagement) return;
+  const currentRevision = ++revision;
+  const requestController = new AbortController();
+  controller = requestController;
   loading.value = true;
-  error.value = '';
-  profile.value = null;
+  const current = () => mounted && currentRevision === revision && !requestController.signal.aborted;
+  const options = { signal: requestController.signal };
   try {
-    profile.value = await getScenarioProfile(props.scenarioRef);
+    // 数字 ID 只解析一次，画像和运行接口始终指向同一场景。
+    const id = await resolveScenarioId(props.scenarioRef);
+    if (!current()) return;
+    const tasks: Promise<unknown>[] = [
+      getScenarioProfile(id, options).then(result => {
+        if (!current()) return;
+        profile.value = result;
+        error.value = '';
+        updatedAt.value = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+      }).catch(err => { if (current()) error.value = errorText(err, '场景画像读取失败'); }),
+      getScenarioWorkspace(id, options).then(result => {
+        if (!current()) return;
+        runtime.value = result;
+        runtimeError.value = '';
+      }).catch(err => { if (current()) { runtime.value = null; runtimeError.value = errorText(err, '运行统计读取失败'); } }),
+      getScenarioList(options).then(result => { if (current()) { scenarios.value = result; sceneError.value = ''; } })
+        .catch(err => { if (current()) sceneError.value = errorText(err, '场景列表读取失败'); }),
+    ];
+    if (userStore.isScenarioAdmin) {
+      // /users 对场景管理员仅返回本场景普通用户；使用 total 而不是当前页长度。
+      tasks.push(Promise.all([
+        getUserList({ scenario_id: id, role: 'SCENARIO_USER', page_size: 1 }, options),
+        getUserList({ scenario_id: id, role: 'SCENARIO_USER', page_size: 1, status: 'ENABLED' }, options),
+        getUserList({ scenario_id: id, role: 'SCENARIO_USER', page_size: 1, status: 'DISABLED' }, options),
+      ]).then(([all, enabled, disabled]) => {
+        if (!current()) return;
+        members.value = { total: all.total, enabled: enabled.total, disabled: disabled.total };
+        memberError.value = '';
+      }).catch(err => { if (current()) { members.value = null; memberError.value = errorText(err, '场景用户统计读取失败'); } }));
+    }
+    await Promise.allSettled(tasks);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '场景画像加载失败';
+    if (current()) error.value = errorText(err, '场景数据读取失败');
   } finally {
-    loading.value = false;
+    if (current()) { loading.value = false; controller = null; }
   }
-};
-
-watch(() => props.scenarioRef, load);
-onMounted(load);
+}
+const refreshVisible = () => { if (document.visibilityState === 'visible') void load(); };
+watch(() => [props.scenarioRef, userStore.currentUser?.user_id, userStore.currentUser?.role], () => {
+  cancel();
+  profile.value = null; runtime.value = null; members.value = null; scenarios.value = [];
+  error.value = ''; runtimeError.value = ''; memberError.value = ''; sceneError.value = ''; updatedAt.value = '';
+  void load();
+});
+onMounted(() => {
+  mounted = true;
+  void load();
+  timer = window.setInterval(refreshVisible, 30_000);
+  document.addEventListener('visibilitychange', refreshVisible);
+});
+onUnmounted(() => {
+  mounted = false;
+  cancel();
+  window.clearInterval(timer);
+  document.removeEventListener('visibilitychange', refreshVisible);
+});
+async function navigate(href: string) {
+  try { await router.push(href); } catch { ElMessage.error('页面跳转失败，请稍后重试'); }
+}
+async function logout() {
+  if (loggingOut.value) return;
+  loggingOut.value = true;
+  cancel();
+  try { await userStore.logout(); } catch { ElMessage.warning('退出请求未完成，已清除本地登录状态'); }
+  finally {
+    try { await router.replace('/login'); } catch { ElMessage.error('登录页加载失败，请刷新页面'); }
+    loggingOut.value = false;
+  }
+}
 </script>
 
 <template>
-  <DashShell
-    eyebrow="Admin · Data Profile"
-    :title="profile ? `${profile.scenario_name} · 数据画像` : '场景数据画像'"
-    :subtitle="subtitle"
-    badge="实时数据"
-    :loading="loading"
-    :error="error"
-    @retry="load"
-  >
-    <template v-if="profile">
-      <ProfileNetwork v-if="networkData" :data="networkData" />
-      <ProfilePower v-else-if="powerData" :data="powerData" />
-      <ProfileFlightdeck v-else-if="flightdeckData" :data="flightdeckData" />
-      <ProfileGeological v-else-if="geologicalData" :data="geologicalData" />
-      <p v-else class="d-state">该场景暂未配置数据画像</p>
-    </template>
-  </DashShell>
+  <ScenarioScreenDashboard
+    :data="profile" :runtime="runtime" :scenarios="scenarios" :members="members"
+    :role="userStore.currentUser?.role ?? null" :user-name="userStore.currentUser?.display_name || userStore.currentUser?.username || ''"
+    :loading="loading" :error="statusError" :runtime-error="runtimeError" :member-error="memberError"
+    :logging-out="loggingOut" :updated-at="updatedAt"
+    @refresh="load" @navigate="navigate" @logout="logout"
+  />
 </template>

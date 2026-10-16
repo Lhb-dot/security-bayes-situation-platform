@@ -84,7 +84,7 @@ export interface UserListParams {
   scenario_id?: number;
 }
 
-export const getUserList = async (params?: UserListParams): Promise<UserListResult> => {
+export const getUserList = async (params?: UserListParams, options?: { signal?: AbortSignal }): Promise<UserListResult> => {
   const data = await unwrapData<{
     items?: ApiUser[];
     total?: number;
@@ -92,6 +92,7 @@ export const getUserList = async (params?: UserListParams): Promise<UserListResu
     page_size?: number;
   }>(
     await request.get('/api/v1/users', {
+      signal: options?.signal,
       timeout: USER_LIST_QUERY_TIMEOUT_MS,
       timeoutErrorMessage: '用户列表加载超时，请稍后重试',
       params: {

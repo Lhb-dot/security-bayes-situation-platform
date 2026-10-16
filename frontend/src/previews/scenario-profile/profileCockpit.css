@@ -1,0 +1,934 @@
+/* ==========================================================================
+   场景数据画像驾驶舱 —— 四个场景管理员首页共用的视觉系统
+   --------------------------------------------------------------------------
+   参照物是现有的「平台运行总览」（AdminOverviewDashboard.vue + CSS）：
+     · 同一套 --u 基准（1440×900 设计尺寸，宽度与可用高度双向约束）；
+     · 同一套深色底、边框透明度、面板渐变、标题层级（eyebrow / h2 / 面板序号 + h3）；
+     · 同一套图表语言：细轨道条形、分段事件条、环形图 + 图例、等宽数字。
+   与总览的差异只有一处：本页在应用外壳（顶栏 + 导航）之内，所以没有重复的
+   masthead，改为「页面头 + KPI 行 + 3×2 面板矩阵」，可用高度由外壳实测得出
+   （见 ProfileCockpitShell.vue），保证 1440×900 与 1920×1080 下核心内容一屏可读。
+
+   类名统一 pf- 前缀并全部挂在 .pf-cockpit 下，避免与全局 .card/.panel 冲突；
+   窄屏（<1024px）退回自然纵向布局，字号固定在设计基准，不做任何缩小。
+   ========================================================================== */
+
+.pf-cockpit {
+  /* JS 会用实测的可用宽高覆盖这两个变量；这里是首帧的兜底值（设计基准）。 */
+  --u: 1px;
+  --muted: #8ba4b8;
+  --border: rgba(117, 175, 212, 0.18);
+  --cyan: #74d8e8;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: calc(697 * var(--u));
+  display: grid;
+  grid-template-rows: calc(56 * var(--u)) minmax(0, 1fr);
+  gap: calc(12 * var(--u));
+  color: #e0edf6;
+  font: calc(13 * var(--u))/1.35 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+
+.pf-cockpit * {
+  box-sizing: border-box;
+}
+
+.pf-cockpit svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.pf-cockpit a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- 页面头（对应总览的 command-bar） ---------- */
+
+.pf-head {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(20 * var(--u));
+}
+
+.pf-eyebrow {
+  display: block;
+  color: #7397b2;
+  font-size: calc(9 * var(--u));
+  letter-spacing: calc(2 * var(--u));
+  text-transform: uppercase;
+}
+
+.pf-head h2 {
+  margin: calc(5 * var(--u)) 0 0;
+  font-size: calc(19 * var(--u));
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pf-head-meta {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  flex-shrink: 0;
+}
+
+.pf-chip {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--u));
+  height: calc(39 * var(--u));
+  padding: 0 calc(12 * var(--u));
+  border: calc(1 * var(--u)) solid #34546d99;
+  border-radius: calc(5 * var(--u));
+  background: linear-gradient(140deg, #183a5180, #0b203280);
+  color: #b8cfdf;
+  font-size: calc(11.5 * var(--u));
+  white-space: nowrap;
+}
+
+.pf-chip > span {
+  color: #8ba4b8;
+}
+
+.pf-chip strong {
+  color: #dcecf6;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf-chip svg {
+  width: calc(15 * var(--u));
+  height: calc(15 * var(--u));
+  color: #82c2dc;
+}
+
+.pf-badge {
+  display: flex;
+  align-items: center;
+  height: calc(39 * var(--u));
+  padding: 0 calc(12 * var(--u));
+  border-radius: calc(5 * var(--u));
+  font-size: calc(11 * var(--u));
+  white-space: nowrap;
+  color: #83d6ba;
+  border: calc(1 * var(--u)) solid #4b967d66;
+  background: #15413655;
+}
+
+.pf-badge--error {
+  color: #efc17a;
+  border-color: #b58b5466;
+  background: #45331b55;
+}
+
+.pf-badge--loading {
+  color: #9db8cc;
+  border-color: #34546d99;
+  background: #14314988;
+}
+
+/* ---------- 内容区：KPI 行 + 面板矩阵 ---------- */
+
+.pf-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: calc(98 * var(--u)) minmax(0, 1fr);
+  gap: calc(12 * var(--u));
+}
+
+.pf-board {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr) minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: calc(12 * var(--u));
+}
+
+/* ---------- KPI 卡片（与总览 .metric-card 同一形态） ---------- */
+
+.pf-kpis {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: calc(14 * var(--u));
+}
+
+.pf-kpi {
+  position: relative;
+  overflow: clip;
+  min-width: 0;
+  min-height: 0;
+  padding: calc(10 * var(--u)) calc(16 * var(--u));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(8 * var(--u));
+  border: calc(1 * var(--u)) solid var(--border);
+  border-radius: calc(7 * var(--u));
+  background: linear-gradient(125deg, #102b42bd, #0a1d2dbd);
+}
+
+.pf-kpi::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc(18 * var(--u));
+  width: calc(3 * var(--u));
+  height: calc(26 * var(--u));
+  background: var(--accent);
+}
+
+.pf-kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8 * var(--u));
+  color: #aac1d2;
+  font-size: calc(13 * var(--u));
+}
+
+.pf-kpi-top svg {
+  width: calc(19 * var(--u));
+  height: calc(19 * var(--u));
+  color: var(--accent);
+}
+
+.pf-kpi-value {
+  display: flex;
+  align-items: baseline;
+  gap: calc(9 * var(--u));
+  min-width: 0;
+}
+
+.pf-kpi-value strong {
+  color: var(--accent);
+  font: 500 calc(38 * var(--u))/1.05 'Bahnschrift', 'Segoe UI', sans-serif;
+  letter-spacing: calc(0.5 * var(--u));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pf-kpi-value span {
+  color: #a4bccd;
+  font-size: calc(12 * var(--u));
+  white-space: nowrap;
+}
+
+.pf-kpi-sub {
+  margin: 0;
+  color: #82a0b4;
+  font-size: calc(10 * var(--u));
+  line-height: 1.3;
+}
+
+/* 面板内的小号统计行（复用 KPI 卡片形态，尺寸收一档） */
+.pf-kpis--sm {
+  gap: calc(8 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi {
+  padding: calc(7 * var(--u)) calc(10 * var(--u));
+  gap: calc(5 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi::before {
+  top: calc(9 * var(--u));
+  height: calc(16 * var(--u));
+  width: calc(2 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi-top {
+  font-size: calc(10 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi-value strong {
+  font-size: calc(22 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi-value span {
+  font-size: calc(10 * var(--u));
+}
+
+.pf-kpis--sm .pf-kpi-sub {
+  font-size: calc(9 * var(--u));
+}
+
+/* ---------- 面板 ---------- */
+
+.pf-panel {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(11 * var(--u)) calc(13 * var(--u));
+  border: calc(1 * var(--u)) solid var(--border);
+  border-radius: calc(7 * var(--u));
+  background: linear-gradient(150deg, #0f293ecc, #0a1c2ecc);
+}
+
+.pf-panel-head {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--u));
+  padding-bottom: calc(8 * var(--u));
+  border-bottom: calc(1 * var(--u)) solid var(--border);
+}
+
+.pf-panel-num {
+  font: calc(11 * var(--u))/1.35 'Bahnschrift', 'Segoe UI', sans-serif;
+  color: #7cb6d3;
+}
+
+.pf-panel h3 {
+  margin: 0;
+  min-width: 0;
+  font-size: calc(13 * var(--u));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pf-panel-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #7c9eb4;
+  font-size: calc(9 * var(--u));
+  white-space: nowrap;
+}
+
+.pf-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(9 * var(--u));
+  padding-top: calc(9 * var(--u));
+  /* safe：内容放得下时居中，放不下时退回顶部对齐（不会把首行顶到面板外） */
+  justify-content: safe center;
+}
+
+.pf-panel-body--top {
+  justify-content: flex-start;
+}
+
+.pf-panel-foot {
+  margin: calc(7 * var(--u)) 0 0;
+  color: #82a0b4;
+  font-size: calc(8.5 * var(--u));
+  line-height: 1.35;
+}
+
+/* ---------- 表格（跨数据集矩阵） ---------- */
+
+.pf-table-wrap {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.pf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: calc(11 * var(--u));
+}
+
+.pf-table thead th {
+  padding: calc(2 * var(--u)) calc(6 * var(--u)) calc(4 * var(--u));
+  color: #829fb4;
+  font-size: calc(9.5 * var(--u));
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: calc(1 * var(--u)) solid var(--border);
+}
+
+.pf-table td {
+  padding: calc(5 * var(--u)) calc(6 * var(--u));
+  color: #cfebf9;
+  white-space: nowrap;
+  border-top: calc(1 * var(--u)) solid #699abb12;
+}
+
+.pf-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.pf-table tbody tr:hover td {
+  background: #6ea9c712;
+}
+
+.pf-table .is-num {
+  text-align: right;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf-table .is-name {
+  color: #e6f4ff;
+}
+
+.pf-ellipsis {
+  display: inline-block;
+  max-width: calc(var(--pf-ellipsis, 160) * var(--u));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ---------- 标签（管理告警 / 结论） ---------- */
+
+.pf-tag {
+  display: inline-block;
+  padding: calc(1 * var(--u)) calc(7 * var(--u));
+  border-radius: 999px;
+  font-size: calc(9.5 * var(--u));
+  white-space: nowrap;
+}
+
+.pf-tag--ok {
+  color: #62cdb4;
+  background: rgba(98, 205, 180, 0.14);
+  border: calc(1 * var(--u)) solid rgba(98, 205, 180, 0.32);
+}
+
+.pf-tag--warn {
+  color: #ebc07d;
+  background: rgba(235, 192, 125, 0.14);
+  border: calc(1 * var(--u)) solid rgba(235, 192, 125, 0.3);
+}
+
+.pf-tag--up {
+  color: #e99686;
+  background: rgba(233, 150, 134, 0.16);
+  border: calc(1 * var(--u)) solid rgba(233, 150, 134, 0.34);
+}
+
+.pf-tag--down {
+  color: #9ad6ff;
+  background: rgba(125, 201, 255, 0.14);
+  border: calc(1 * var(--u)) solid rgba(125, 201, 255, 0.3);
+}
+
+.pf-tag--muted {
+  color: #9fb3c4;
+  background: rgba(255, 255, 255, 0.05);
+  border: calc(1 * var(--u)) solid rgba(125, 201, 255, 0.14);
+}
+
+/* ---------- 条形（细轨道 + 数值） ---------- */
+
+.pf-bars {
+  display: grid;
+  gap: calc(9 * var(--u));
+  align-content: safe center;
+}
+
+.pf-bars--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: calc(22 * var(--u));
+}
+
+.pf-bar {
+  display: grid;
+  align-items: center;
+  grid-template-columns: minmax(0, calc(var(--pf-bar-label, 76) * var(--u))) minmax(0, 1fr) calc(var(--pf-bar-value, 46) * var(--u));
+  gap: calc(8 * var(--u));
+  font-size: calc(10 * var(--u));
+  color: #b7ccda;
+}
+
+.pf-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-bar-track {
+  height: calc(6 * var(--u));
+  border-radius: calc(3 * var(--u));
+  background: #1b3d536e;
+}
+
+.pf-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: calc(3 * var(--u));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent), transparent 62%), var(--accent));
+}
+
+.pf-bar-value {
+  text-align: right;
+  color: var(--accent);
+  font-size: calc(11 * var(--u));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 柱状（纵向对比） ---------- */
+
+.pf-columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: calc(10 * var(--u));
+  padding-top: calc(4 * var(--u));
+}
+
+.pf-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(5 * var(--u));
+}
+
+.pf-column-value {
+  color: #cfe3ff;
+  font-size: calc(10.5 * var(--u));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pf-column-track {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  border-bottom: calc(1 * var(--u)) solid #699abb1f;
+}
+
+.pf-column-fill {
+  width: min(100%, calc(44 * var(--u)));
+  border-radius: calc(4 * var(--u)) calc(4 * var(--u)) 0 0;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent), transparent 58%));
+}
+
+.pf-column-label {
+  max-width: 100%;
+  color: #9fb9cb;
+  font-size: calc(9.5 * var(--u));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 环形图 + 图例 ---------- */
+
+.pf-donut {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--u));
+}
+
+.pf-donut svg {
+  width: calc(104 * var(--u));
+  height: calc(104 * var(--u));
+  flex-shrink: 0;
+}
+
+.pf-donut svg text {
+  stroke: none;
+}
+
+.pf-legend {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: calc(8 * var(--u));
+  align-content: safe center;
+}
+
+.pf-legend-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  font-size: calc(10 * var(--u));
+  color: #adc6d8;
+  min-width: 0;
+}
+
+.pf-legend-row > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-legend-row strong {
+  margin-left: auto;
+  color: #dcecf6;
+  font: 500 calc(12 * var(--u))/1.2 'Bahnschrift', 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf-legend-row small {
+  margin-left: calc(2 * var(--u));
+  color: #92adbf;
+  font-size: calc(9 * var(--u));
+}
+
+.pf-dot {
+  width: calc(6 * var(--u));
+  height: calc(6 * var(--u));
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ---------- 分段事件条（处置状态构成） ---------- */
+
+.pf-stack {
+  display: flex;
+  height: calc(7 * var(--u));
+  gap: calc(3 * var(--u));
+  border-radius: calc(4 * var(--u));
+  background: #19374b;
+  overflow: hidden;
+}
+
+.pf-stack > span {
+  display: block;
+  border-radius: calc(4 * var(--u));
+}
+
+.pf-stack-legend {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(8 * var(--u));
+}
+
+.pf-stack-legend > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--u));
+  padding-left: calc(10 * var(--u));
+  border-left: calc(1 * var(--u)) solid var(--border);
+}
+
+.pf-stack-legend > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.pf-stack-legend span {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--u));
+  color: #b1c6d5;
+  font-size: calc(10 * var(--u));
+  white-space: nowrap;
+}
+
+.pf-stack-legend strong {
+  color: #d9ebf6;
+  font: 500 calc(19 * var(--u))/1 'Bahnschrift', 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 键值行 ---------- */
+
+.pf-rows {
+  display: grid;
+  gap: calc(7 * var(--u));
+  align-content: safe center;
+}
+
+.pf-rows--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: calc(10 * var(--u));
+}
+
+.pf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(10 * var(--u));
+  padding: calc(6 * var(--u)) calc(9 * var(--u));
+  border: calc(1 * var(--u)) solid #3b607b44;
+  border-radius: calc(5 * var(--u));
+  background: #18354b55;
+  font-size: calc(10.5 * var(--u));
+}
+
+.pf-row > span {
+  color: #a5bdcf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-row strong {
+  color: #b0dcf0;
+  font: 500 calc(15 * var(--u))/1 'Bahnschrift', 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 趋势（近 10 天活动） ---------- */
+
+.pf-trend {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(5 * var(--u));
+}
+
+.pf-trend-legend {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--u));
+  color: #9fb9cb;
+  font-size: calc(9.5 * var(--u));
+}
+
+.pf-trend-legend i {
+  display: inline-block;
+  width: calc(11 * var(--u));
+  height: calc(2 * var(--u));
+  margin-right: calc(4 * var(--u));
+  border-radius: 1px;
+  vertical-align: middle;
+}
+
+.pf-trend svg {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.pf-trend svg text {
+  stroke: none;
+  font-size: calc(9.5 * var(--u));
+}
+
+/* ---------- 覆盖网格（维度 × 数据集 打点矩阵） ---------- */
+
+.pf-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: calc(10 * var(--u));
+  align-content: safe center;
+}
+
+/* 分栏（条目多时用）：每栏各自带表头，行数减半，面板内不需要滚动 */
+.pf-grid--split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: calc(20 * var(--u));
+}
+
+.pf-grid-col {
+  display: grid;
+  gap: calc(6 * var(--u));
+  align-content: start;
+}
+
+.pf-grid-row {
+  display: grid;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  grid-template-columns: minmax(0, calc(72 * var(--u))) repeat(var(--pf-grid-cols, 2), minmax(0, 1fr)) calc(34 * var(--u));
+  font-size: calc(10 * var(--u));
+  color: #b7ccda;
+}
+
+.pf-grid-row--head {
+  color: #829fb4;
+  font-size: calc(9 * var(--u));
+}
+
+.pf-grid-row--head > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.pf-grid-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pf-grid-cell i {
+  width: calc(9 * var(--u));
+  height: calc(9 * var(--u));
+  border-radius: 50%;
+  border: calc(1 * var(--u)) solid #4c7d97;
+  background: #16344a;
+}
+
+.pf-grid-cell.is-on i {
+  background: var(--accent, #62cdb4);
+  border-color: transparent;
+  box-shadow: 0 0 calc(7 * var(--u)) color-mix(in srgb, var(--accent, #62cdb4), transparent 55%);
+}
+
+.pf-grid-count {
+  text-align: right;
+  color: #9ad6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 空态 / 加载 / 错误 ---------- */
+
+.pf-empty {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #8ba4b8;
+  font-size: calc(11 * var(--u));
+  text-align: center;
+}
+
+.pf-state {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  gap: calc(14 * var(--u));
+  border: calc(1 * var(--u)) dashed #4a7fa13d;
+  border-radius: calc(8 * var(--u));
+  background: #0b203288;
+  color: #9db8cc;
+  font-size: calc(13 * var(--u));
+  text-align: center;
+}
+
+.pf-state svg {
+  width: calc(38 * var(--u));
+  height: calc(38 * var(--u));
+  color: #80c8dd;
+}
+
+.pf-state strong {
+  font-size: calc(17 * var(--u));
+  font-weight: 500;
+  color: #d7e9f6;
+}
+
+.pf-state p {
+  margin: 0;
+  max-width: 70%;
+  color: #97b5c8;
+  overflow-wrap: anywhere;
+}
+
+.pf-state--error {
+  color: #e99686;
+  border-color: #e9968659;
+}
+
+.pf-state button {
+  padding: calc(8 * var(--u)) calc(18 * var(--u));
+  border: calc(1 * var(--u)) solid #60bad488;
+  border-radius: calc(5 * var(--u));
+  background: #16465e;
+  color: #d1effb;
+  font-size: calc(12.5 * var(--u));
+}
+
+/* 窄屏（<1024px）：退回自然纵向布局 —— 字号固定在设计基准，不做任何压缩或裁切 */
+@media (max-width: 1023px) {
+  .pf-cockpit {
+    --u: 1px;
+    height: auto;
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    gap: 12px;
+  }
+
+  .pf-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .pf-head h2 {
+    white-space: normal;
+  }
+
+  .pf-head-meta {
+    flex-wrap: wrap;
+  }
+
+  .pf-body {
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    gap: 12px;
+  }
+
+  .pf-board {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    gap: 12px;
+  }
+
+  .pf-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pf-panel {
+    min-height: 250px;
+  }
+
+  .pf-columns,
+  .pf-donut,
+  .pf-trend {
+    min-height: 150px;
+  }
+}
+
+@media (max-width: 560px) {
+  .pf-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pf-stack-legend {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pf-stack-legend > div {
+    padding-left: 0;
+    border-left: 0;
+  }
+}

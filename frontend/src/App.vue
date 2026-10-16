@@ -364,6 +364,8 @@ const isLoginPage = computed(() => route.path === '/login');
 const isRiskPage = computed(() => route.path === '/risk');
 // 平台总览使用完整驾驶舱布局与内置导航，避免重复渲染全站顶栏。
 const isAdminOverview = computed(() => route.path === '/overview' && isSuperAdmin.value);
+// 管理员场景首页自带全屏导航；普通场景用户仍使用原工作台和全站顶栏。
+const isScenarioScreen = computed(() => route.name === '场景大屏' && userStore.isManagement);
 // 内容区渲染不再维护「新页面白名单」：模板用 v-else 兜住所有非 /risk 路由。
 // 原先的白名单漏掉一条就会白屏（/situation 就这么烂了两年），且新增路由必须记得补。
 
@@ -419,7 +421,7 @@ const navLabel = (item: NavItem): string =>
 
 <template>
   <router-view v-if="isLoginPage" />
-  <router-view v-else-if="isAdminOverview" />
+  <router-view v-else-if="isAdminOverview || isScenarioScreen" />
   <div v-else class="app-shell">
     <div class="app-shell__backdrop"></div>
     <header class="topbar">

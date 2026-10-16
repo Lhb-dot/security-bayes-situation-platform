@@ -32,8 +32,8 @@ export interface ApiScenario {
 }
 
 /** 场景列表（GET /scenarios，data 为数组） */
-export const getScenarioList = async (): Promise<ApiScenario[]> =>
-  unwrapData(await request.get('/api/v1/scenarios'));
+export const getScenarioList = async (options?: { signal?: AbortSignal }): Promise<ApiScenario[]> =>
+  unwrapData(await request.get('/api/v1/scenarios', { signal: options?.signal, timeout: 30_000 }));
 
 /** 场景中心卡片（GET /scenarios/overview 的单个场景项，字段口径见 docs/首页字段口径说明.md） */
 export interface ApiScenarioOverviewCard {
