@@ -51,7 +51,10 @@ async function load() {
       }).catch(err => { if (current()) error.value = errorText(err, '场景画像读取失败'); }),
       getScenarioWorkspace(id, options).then(result => {
         if (!current()) return;
-        runtime.value = result;
+        // 后端明细策略中系统管理员只看本人，旧接口的 self_only 未涵盖该角色。
+        runtime.value = userStore.isSuperAdmin
+          ? { ...result, scope: { ...result.scope, self_only: true } }
+          : result;
         runtimeError.value = '';
       }).catch(err => { if (current()) { runtime.value = null; runtimeError.value = errorText(err, '运行统计读取失败'); } }),
       getScenarioList(options).then(result => { if (current()) { scenarios.value = result; sceneError.value = ''; } })

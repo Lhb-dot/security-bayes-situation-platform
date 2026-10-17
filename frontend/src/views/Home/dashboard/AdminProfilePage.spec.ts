@@ -44,10 +44,12 @@ beforeEach(() => {
 afterEach(() => { app?.unmount(); app = undefined; disposePinia(pinia); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('正式场景大屏', () => {
-  it('从接口加载四卡和图表，用户计数使用分页 total，卡片没有底部小字', async () => {
+  it('从接口加载四卡和图表，保留预览版指标说明与图标，用户计数使用分页 total', async () => {
     await mount();
     expect(host.querySelectorAll('.sp-metrics article')).toHaveLength(4);
-    expect(host.querySelectorAll('.sp-metrics article p')).toHaveLength(0);
+    expect(host.querySelectorAll('.sp-metrics article p')).toHaveLength(4);
+    expect(host.querySelector('.sp-metrics article p')?.textContent).toContain('按内容指纹去重');
+    expect(host.querySelectorAll('.sp-command nav svg')).toHaveLength(4);
     expect(host.querySelector('.sp-metrics strong')?.textContent).toBe('1');
     expect(host.querySelector('.sp-members')?.textContent).toContain('注册 8');
     expect(host.querySelector('.sp-members')?.textContent).toContain('启用 6');
@@ -83,7 +85,7 @@ describe('正式场景大屏', () => {
   });
   it('系统管理员不查询受限的场景用户列表，运行统计标明本人范围', async () => {
     useUserStore().currentUser = user('super-admin');
-    vi.mocked(getScenarioWorkspace).mockResolvedValue(workspaceFixture(true));
+    vi.mocked(getScenarioWorkspace).mockResolvedValue(workspaceFixture(false));
     await mount();
     expect(getUserList).not.toHaveBeenCalled();
     expect(host.textContent).toContain('本人范围');
@@ -97,20 +99,23 @@ describe('正式场景大屏', () => {
     props.scenarioRef = 'power_system'; await flush();
     expect(signal?.aborted).toBe(true);
     pending.resolve(networkProfile()); await flush();
-    expect(host.querySelector('h2')?.textContent).toContain('电力系统');
+    expect(host.querySelector('h2')?.textContent).toContain(powerProfile().scenario_name);
     expect(host.textContent).toContain('电参量基线');
   });
-  it('保留分类结构，但不把全局滑坡标签、诱因或规模推算成细分类数量', async () => {
-    vi.mocked(getScenarioProfile).mockResolvedValue(geologicalProfile());
+  it('滑坡页按附件使用覆盖矩阵和数据职责，分箱冲突来自接口', async () => {
+    const data = geologicalProfile();
+    data.factor_coverage[0] = { factor: 'Slope', datasets: ['test_source', 'another_source'], consistent_binning: false };
+    data.roles = [{ logical_id: 'test_source', name: '测试因子集', role: '因子表', attribute_count: 4, label_field: 'Label', label_kind: 'binary', participates_in_training: true, produces_risk_events: true, record_count: 28, risk_rate: .25 }];
+    vi.mocked(getScenarioProfile).mockResolvedValue(data);
     await mount();
-    expect(host.querySelectorAll('.geo-leaf-node strong')).toHaveLength(5);
-    expect([...host.querySelectorAll('.geo-leaf-node strong')].every(item => item.textContent === '—')).toBe(true);
-    expect(host.textContent).not.toContain('泥石流');
+    expect(host.querySelector('.sp-grid')).not.toBeNull();
+    expect(host.querySelectorAll('.geo-leaf-node')).toHaveLength(0);
     expect(host.textContent).not.toContain('类型 × 规模');
-    expect(host.textContent).toContain('数据源 × 地形因子覆盖');
-    clickText('填土滑坡—未统计'); await flush();
-    expect(host.querySelector('.geo-focus-bar')?.textContent).toContain('填土滑坡');
-    expect(host.querySelector('.geo-focus-bar')?.textContent).toContain('—');
+    expect(host.querySelector('[aria-label="数据集与地形因子的字段覆盖热力矩阵"]')).not.toBeNull();
+    expect(host.querySelector('.sp-governance')?.textContent).toContain('数据职责与风险口径');
+    expect(host.querySelector('.sp-governance')?.textContent).toContain('因子表 · Label');
+    expect(host.querySelector('.sp-governance-note')?.textContent).toContain('分箱不一致：Slope');
+    expect(host.querySelector('.sp-governance-note')?.textContent).not.toContain('工频');
   });
   it('刷新失败保留已读取画像，离开页面清理轮询、取消请求和全屏样式', async () => {
     await mount();

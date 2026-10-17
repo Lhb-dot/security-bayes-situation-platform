@@ -7,7 +7,6 @@ import { rolesForPath } from '@/router/access';
 import { SCENE_STYLES } from '../adminOverview';
 import ProfileChart from './ProfileChart.vue';
 import CoverageMatrix from './CoverageMatrix.vue';
-import GeologicalObservatory from './GeologicalObservatory.vue';
 import { governanceRows, modelingChart, profileNumber as number, profilePercent as percent, runtimeCharts, scenarioCharts } from './profileCharts';
 import './scenarioScreen.css';
 
@@ -29,6 +28,10 @@ const governance = computed(() => props.data ? governanceRows(props.data).slice(
 const governanceTitle = computed(() => ({ network: '风险标签口径', power: '遥测质量与基线', flight_deck: '编码形态与内容分组', geological: '数据职责与风险口径', unknown: '数据口径' })[props.data?.scenario_key ?? 'unknown']);
 const governanceNote = computed(() => {
   const d = props.data;
+  if (d?.scenario_key === 'geological') {
+    const conflicts = (d as GeologicalProfile).factor_coverage.filter(item => item.datasets.length > 1 && !item.consistent_binning).map(item => item.factor);
+    return conflicts.length ? `分箱不一致：${conflicts.join('、')}；跨源统计需先对齐口径` : '多源因子未发现分箱冲突';
+  }
   if (d?.scenario_key === 'flight_deck') return `同内容文件合并统计 · 内容冗余率 ${percent((d as FlightdeckProfile).redundancy.redundancy_rate)}`;
   if (d?.scenario_key === 'network') return '偏离 = 数据集正类占比 / 场景合并占比 · 全部口径见数据集详情';
   return '工频合格区间 49.8–50.2 Hz · 基线仅校验参量均值';
@@ -53,6 +56,12 @@ const nav = computed(() => [
   { label: '风险事件', href: '/alerts' }, { label: '报告中心', href: '/reports' },
   { label: '用户管理', href: '/users' }, { label: '设置', href: '/settings' },
 ].filter(item => props.role && rolesForPath(item.href).includes(props.role)));
+const navIcons: Record<string, string> = {
+  '/datasets': 'M4 5c0-2 16-2 16 0s-16 2-16 0 M4 5v14c0 2 16 2 16 0V5 M4 12c0 2 16 2 16 0',
+  '/risk': 'M12 3l8 5v8l-8 5-8-5V8z M4 8l8 5 8-5 M12 13v8',
+  '/models': 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
+  '/inference': 'M3 17l5-5 4 3 8-10 M14 5h6v6 M3 21h18',
+};
 const sceneKeys: Record<string, keyof typeof SCENE_STYLES> = { network_security: 'network', power_system: 'power', flightdeck_operation: 'flight_deck', geological_risk: 'geological' };
 const visibleScenes = computed(() => props.scenarios.map(item => ({ ...item, style: SCENE_STYLES[sceneKeys[item.code]!] })).filter(item => item.style));
 const minimumRows = computed(() => Math.max(3, governance.value.length));
@@ -73,31 +82,31 @@ onUnmounted(() => document.documentElement.classList.remove('scenario-screen-mod
     <header class="sp-masthead">
       <span class="sp-brand"><svg viewBox="0 0 24 24"><path d="M12 2 21 6v6c0 5-5 8-9 10-4-2-9-5-9-10V6z M8 12l3 3 5-6" /></svg>AI SECURITY OPERATIONS CENTER</span>
       <div class="sp-platform-title"><i></i><h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1><i></i></div>
-      <div class="sp-account"><button class="sp-status" :class="{ 'is-error': error }" :title="statusTitle" :disabled="loading" @click="emit('refresh')">{{ loading ? '更新中…' : error ? '更新失败 · 重试' : '实时数据 ↻' }}</button><span class="sp-user-name" :title="userName">{{ userName }}</span><button class="sp-logout" :disabled="loggingOut" @click="emit('logout')">退出</button><button class="sp-fullscreen" title="切换全屏" aria-label="切换全屏" @click="fullscreen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5" /></svg></button></div>
+      <div class="sp-account"><button class="sp-status" :class="{ 'is-error': error }" :title="statusTitle" :disabled="loading" @click="emit('refresh')">{{ loading ? '更新中…' : error ? '更新失败 · 重试' : '刷新数据 ↻' }}</button><span class="sp-user-name" :title="userName">{{ userName }}</span><button class="sp-logout" :disabled="loggingOut" @click="emit('logout')">退出</button><button class="sp-fullscreen" title="切换全屏" aria-label="切换全屏" @click="fullscreen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5" /></svg></button></div>
     </header>
     <div v-if="data && charts && models" class="sp-content">
       <section class="sp-command">
-        <div class="sp-scene-title"><span>{{ scene.english }} / DATA OBSERVATORY</span><h2>{{ scene.name }}<small>态势总览</small></h2></div>
-        <nav aria-label="场景功能入口"><button v-for="item in nav" :key="item.href" @click="emit('navigate', item.href)">{{ item.label }}</button></nav>
+        <div class="sp-scene-title"><span>{{ scene.english }} / DATA OBSERVATORY</span><h2>{{ data.scenario_name }}<small>态势总览</small></h2></div>
+        <nav aria-label="场景功能入口"><button v-for="item in nav" :key="item.href" @click="emit('navigate', item.href)"><svg v-if="navIcons[item.href]" viewBox="0 0 24 24" aria-hidden="true"><path :d="navIcons[item.href]" /></svg>{{ item.label }}</button></nav>
       </section>
       <section class="sp-metrics" aria-label="场景核心指标">
         <article v-for="(metric, i) in metrics" :key="metric.label" :style="{ '--metric-color': ['#69b7ff', '#4cdac6', '#efc17a', scene.color][i] }" :title="metric.detail">
           <div class="sp-metric-label">{{ metric.label }}<span>0{{ i + 1 }}</span></div>
           <div class="sp-metric-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></div>
+          <p>{{ metric.detail }}</p>
         </article>
       </section>
-      <GeologicalObservatory :runtime-error="runtimeError" v-if="data.scenario_key === 'geological'" :data="data as GeologicalProfile" :runtime="runtime" />
-      <div v-else :key="data.scenario_key" class="sp-grid">
+      <div :key="data.scenario_key" class="sp-grid">
         <div class="sp-column"><ProfileChart :spec="charts.left[0]" index="01" /><ProfileChart :spec="charts.left[1]" index="02" /><ProfileChart :spec="models" index="03" /></div>
         <div class="sp-center">
           <section class="sp-panel sp-hero">
             <div class="sp-hero-heading"><div><span>SCENARIO DATA LANDSCAPE</span><h3>{{ charts.main.title }}</h3></div><span class="sp-source-badge"><i></i>全量数据画像</span></div>
-            <CoverageMatrix v-if="data.scenario_key === 'network'" :data="data" />
+            <CoverageMatrix v-if="['network', 'geological'].includes(data.scenario_key)" :data="data" />
             <ProfileChart v-else :spec="charts.main" index="04" />
             <div class="sp-governance" :style="{ '--gov-rows': minimumRows }">
               <header><h3><i></i>{{ governanceTitle }}</h3><span>GOVERNANCE</span></header>
               <div v-for="(row, i) in governance" :key="row.name" class="sp-governance-row"><span class="sp-row-index">{{ String(i + 1).padStart(2, '0') }}</span><span class="sp-governance-name" :title="row.name">{{ row.name }}</span><span class="sp-governance-detail" :title="row.detail">{{ row.detail }}</span><strong :class="{ 'is-warning': row.warn }" :title="row.status">{{ row.status }}</strong></div>
-              <p class="sp-governance-note">{{ governanceNote }}</p>
+              <p class="sp-governance-note" :title="governanceNote">{{ governanceNote }}</p>
             </div>
           </section>
           <section class="sp-panel sp-assets">

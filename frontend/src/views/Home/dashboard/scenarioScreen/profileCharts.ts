@@ -20,12 +20,12 @@ export const profileNumber = (value: number | null | undefined, digits = 1) => v
 export const profilePercent = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '—' : `${(value * 100).toFixed(1)}%`;
 const shorten = (value: string) => value.length > 22 ? `${value.slice(0, 20)}…` : value;
 // 环图必须保留剩余量，不能把 TOP N 重新归一化成全量比例。
-export const composition = (items: CountItem[], total: number | undefined, limit = 5): CountItem[] => {
+export const composition = (items: CountItem[], total: number | undefined, limit = 5, remainderLabel = '其余 / 缺失'): CountItem[] => {
   const shown = items.slice(0, limit);
   const remainder = total === undefined
     ? items.slice(limit).reduce((sum, item) => sum + item.count, 0)
     : Math.max(0, total - shown.reduce((sum, item) => sum + item.count, 0));
-  return remainder > 0 ? [...shown, { value: total === undefined ? '其余已返回类别' : '其余 / 缺失', count: remainder }] : shown;
+  return remainder > 0 ? [...shown, { value: total === undefined ? '其余已返回类别' : remainderLabel, count: remainder }] : shown;
 };
 export function bars(title: string, items: CountItem[], note: string, color = colors[0]!, percent = false): ProfileChartSpec {
   return {
@@ -66,7 +66,7 @@ export function scenarioCharts(data: ScenarioProfile): { left: [ProfileChartSpec
   if (data.scenario_key === 'network') {
     const d = data as NetworkProfile;
     return {
-      left: [donut('网络协议构成', d.protocol_distribution, 'NF-UNSW · 协议字段有效记录'), bars('目的端口 TOP 6', d.top_ports.slice(0, 6), 'NF-UNSW · 按连接样本数排序')],
+      left: [donut('网络协议构成', composition(d.protocol_distribution, d.protocol_total, 5, '其他协议'), 'NF-UNSW · TOP 5 协议，其余合并展示'), bars('目的端口 TOP 6', d.top_ports.slice(0, 6), 'NF-UNSW · 按连接样本数排序')],
       main: bars('流量维度 · 数据覆盖全景', d.dimension_coverage.map(i => ({ value: i.dimension, count: i.datasets.length })), '各维度具备对应字段的数据集数；悬停查看覆盖数量', '#69b7ff'),
       right: bars('应用服务 TOP 5', d.services.slice(0, 5), 'KDD · 服务字段有效记录', '#a999ee'),
     };

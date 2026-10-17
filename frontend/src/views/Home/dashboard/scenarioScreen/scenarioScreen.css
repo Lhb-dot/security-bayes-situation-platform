@@ -34,7 +34,7 @@ html.scenario-screen-mode, html.scenario-screen-mode body, html.scenario-screen-
 .sp-command nav svg { width: calc(14 * var(--u)); height: calc(14 * var(--u)); color: #82c2dc; }
 .sp-command nav button:hover { color: #e1f8ff; background: #17445d; border-color: #63bfdb; }
 .sp-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(14 * var(--u)); min-height: 0; }
-.sp-metrics article { position: relative; overflow: hidden; padding: calc(12 * var(--u)) calc(18 * var(--u)); display: flex; flex-direction: column; justify-content: center; align-items: stretch; text-align: left; border: 1px solid var(--sp-border); border-radius: calc(7 * var(--u)); background: linear-gradient(125deg, #102b42bd, #0a1d2dbd); }
+.sp-metrics article { position: relative; overflow: hidden; padding: calc(12 * var(--u)) calc(18 * var(--u)); border: 1px solid var(--sp-border); border-radius: calc(7 * var(--u)); background: linear-gradient(125deg, #102b42bd, #0a1d2dbd); }
 .sp-metrics article::before { content: ''; position: absolute; left: 0; top: calc(20 * var(--u)); width: calc(3 * var(--u)); height: calc(29 * var(--u)); background: var(--metric-color); }
 .sp-metrics article::after { content: ''; position: absolute; right: calc(-7 * var(--u)); top: calc(38 * var(--u)); width: calc(55 * var(--u)); height: calc(55 * var(--u)); border: 1px solid var(--metric-color); opacity: .1; transform: rotate(45deg); box-shadow: 0 0 0 calc(10 * var(--u)) #0000, 0 0 0 calc(11 * var(--u)) var(--metric-color); }
 .sp-metric-label { display: flex; justify-content: space-between; color: #aac1d2; font-size: calc(13 * var(--u)); }
@@ -42,6 +42,7 @@ html.scenario-screen-mode, html.scenario-screen-mode body, html.scenario-screen-
 .sp-metric-value { display: flex; align-items: baseline; gap: calc(10 * var(--u)); margin-top: calc(4 * var(--u)); white-space: nowrap; }
 .sp-metric-value strong { color: var(--metric-color); font: 500 calc(35 * var(--u))/1.15 'Bahnschrift', 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .015em; }
 .sp-metric-value > span { color: #a4bccd; font-size: calc(11 * var(--u)); }
+.sp-metrics p { margin: calc(5 * var(--u)) 0 0; color: #7897ad; font-size: calc(9 * var(--u)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-grid { min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.95fr) minmax(0, 1fr); gap: calc(14 * var(--u)); }
 .sp-column { min-width: 0; min-height: 0; display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: calc(12 * var(--u)); }
 .sp-center { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 2.06fr) minmax(0, 1fr); gap: calc(12 * var(--u)); }
