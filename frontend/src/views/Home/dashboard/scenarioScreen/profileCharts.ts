@@ -76,7 +76,7 @@ export function scenarioCharts(data: ScenarioProfile): { left: [ProfileChartSpec
     // 量纲各异的电参量采用独立纵轴小图，避免把 V / A / Hz 混在同一刻度。
     const available = d.params.filter(i => i.stats !== null);
     const main: ProfileChartSpec = {
-      title: '电参量基线 · 遥测全景', tag: 'TELEMETRY BASELINE', note: '各参量独立刻度 · 柱为均值，横线为最小值与最大值；单位见标题', available: available.length > 0,
+      title: '电参量基线 · 遥测全景', tag: 'TELEMETRY BASELINE', note: '各参量独立刻度 · 柱为均值，横线为最小值与最大值；窄屏可横向浏览', available: available.length > 0,
       option: {
         ...base(), tooltip: { trigger: 'item', confine: true },
         title: available.map((p, i) => ({ text: `${p.name} / ${p.unit || '无量纲'}`, left: `${(i + .5) / available.length * 100}%`, top: 4, textAlign: 'center', textStyle: { color: '#a9c4d5', fontSize: 10, fontWeight: 'normal' } })),

@@ -5,9 +5,9 @@ import { use } from 'echarts/core';
 import { MarkLineComponent } from 'echarts/components';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 use([MarkLineComponent]);
-const props = defineProps<{ spec: ProfileChartSpec; index: string; error?: string }>();
+const props = defineProps<{ spec: ProfileChartSpec; error?: string }>();
 const scale = ref(1);
-const resize = () => { scale.value = Math.min(window.innerWidth / 1440, window.innerHeight / 900); };
+const resize = () => { scale.value = window.innerWidth <= 1180 ? 1 : Math.max(.9, Math.min(window.innerWidth / 1440, window.innerHeight / 900)); };
 const pixelKeys = new Set(['fontSize', 'itemHeight', 'itemWidth', 'itemGap', 'symbolSize', 'barMaxWidth']);
 const option = computed(() => {
   const adapt = (value: unknown, key = '', parent = ''): unknown => {
@@ -24,7 +24,7 @@ onUnmounted(() => window.removeEventListener('resize', resize));
 
 <template>
   <section class="sp-panel sp-chart-panel" :aria-label="spec.title">
-    <header class="sp-panel-heading"><span>{{ index }}</span><h3>{{ spec.title }}</h3><small>{{ spec.tag }}</small></header>
+    <header class="sp-panel-heading"><h3>{{ spec.title }}</h3></header>
     <div class="sp-chart-area">
       <EChartBase v-if="spec.available && !error" :option="option" not-merge />
       <div v-else-if="error" class="sp-empty sp-chart-error" :title="error"><span>—</span>运行数据读取失败，请点击顶部重试</div>
