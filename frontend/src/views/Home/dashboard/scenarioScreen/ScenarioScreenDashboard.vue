@@ -57,10 +57,16 @@ const nav = computed(() => [
   { label: '用户管理', href: '/users' }, { label: '设置', href: '/settings' },
 ].filter(item => props.role && rolesForPath(item.href).includes(props.role)));
 const navIcons: Record<string, string> = {
+  '/overview': 'M3 10.5 12 3l9 7.5 M5 9v11h14V9 M9 20v-6h6v6',
   '/datasets': 'M4 5c0-2 16-2 16 0s-16 2-16 0 M4 5v14c0 2 16 2 16 0V5 M4 12c0 2 16 2 16 0',
   '/risk': 'M12 3l8 5v8l-8 5-8-5V8z M4 8l8 5 8-5 M12 13v8',
   '/models': 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
   '/inference': 'M3 17l5-5 4 3 8-10 M14 5h6v6 M3 21h18',
+  '/inference-records': 'M6 3h9l4 4v14H6z M15 3v5h4 M9 12h7 M9 16h7',
+  '/alerts': 'M12 3l8 4v5c0 4.5-3.3 7.6-8 9-4.7-1.4-8-4.5-8-9V7z M12 8v5 M12 16h.01',
+  '/reports': 'M5 3h14v18H5z M8 16v-3 M12 16V8 M16 16v-5',
+  '/users': 'M16 11a3 3 0 1 0-2.4-4.8 M4 20v-2c0-2.2 2.1-4 5-4s5 1.8 5 4v2z M17 14c2 .5 3 1.8 3 4v2',
+  '/settings': 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
 };
 const sceneKeys: Record<string, keyof typeof SCENE_STYLES> = { network_security: 'network', power_system: 'power', flightdeck_operation: 'flight_deck', geological_risk: 'geological' };
 const visibleScenes = computed(() => props.scenarios.map(item => ({ ...item, style: SCENE_STYLES[sceneKeys[item.code]!] })).filter(item => item.style));

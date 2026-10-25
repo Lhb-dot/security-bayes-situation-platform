@@ -33,7 +33,9 @@ html.scenario-screen-mode, html.scenario-screen-mode body, html.scenario-screen-
 .sp-command nav svg { width: calc(14 * var(--u)); height: calc(14 * var(--u)); color: #82c2dc; }
 .sp-command nav button:hover { color: #e1f8ff; background: #17445d; border-color: #63bfdb; }
 .sp-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-height: 0; border-block: 1px solid var(--sp-border); background: linear-gradient(100deg, #0d263a88, #102d4188 52%, #0d263a88); }
-.sp-metrics article { min-width: 0; display: grid; grid-template-rows: auto auto auto; align-content: center; overflow: hidden; padding: calc(8 * var(--u)) calc(18 * var(--u)); }
+.sp-metrics article { position: relative; isolation: isolate; min-width: 0; display: grid; grid-template-rows: auto auto auto; align-content: center; overflow: hidden; padding: calc(8 * var(--u)) calc(18 * var(--u)); }
+.sp-metrics article::after { content: ''; position: absolute; z-index: 0; top: 50%; right: calc(18 * var(--u)); width: calc(62 * var(--u)); height: calc(62 * var(--u)); pointer-events: none; opacity: .1; transform: translateY(-50%) rotate(45deg); border: 1px solid var(--metric-color); box-shadow: 0 0 0 calc(8 * var(--u)) #0000, 0 0 0 calc(9 * var(--u)) var(--metric-color); }
+.sp-metrics article > * { position: relative; z-index: 1; }
 .sp-metrics article + article { border-left: 1px solid #75afd426; }
 .sp-metric-label { color: #b4c8d6; font-size: calc(12 * var(--u)); }
 .sp-metric-value { display: flex; align-items: baseline; gap: calc(10 * var(--u)); margin-top: calc(4 * var(--u)); white-space: nowrap; }

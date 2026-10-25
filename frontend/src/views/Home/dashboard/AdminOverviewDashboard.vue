@@ -41,6 +41,7 @@ const sampleDistributionTotal = computed(() => scenes.value.reduce((sum, scene) 
 const icons: Record<string, string> = {
   scene: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
   data: 'M4 5c0-2 16-2 16 0s-16 2-16 0 M4 5v14c0 2 16 2 16 0V5 M4 12c0 2 16 2 16 0',
+  report: 'M5 3h14v18H5z M8 16v-3 M12 16V8 M16 16v-5',
   model: 'M12 3l8 5v8l-8 5-8-5V8z M4 8l8 5 8-5 M12 13v8 M8 5l8 5',
   prediction: 'M3 17l5-5 4 3 8-10 M14 5h6v6 M3 21h18',
   settings: 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
@@ -66,7 +67,7 @@ const pipeline = [
   { label: '模型训练', icon: 'model', href: '/risk' },
   { label: '风险推理', icon: 'prediction', href: '/inference' },
   { label: '事件处置', icon: 'network', href: '/alerts' },
-  { label: '报告生成', icon: 'data', href: '/reports' },
+  { label: '报告生成', icon: 'report', href: '/reports' },
 ];
 
 const navigation = computed(() => navigationGroups.map((group) => ({
@@ -90,7 +91,7 @@ const modelStats = computed(() => [
   { label: '训练完成模型', value: runtime.value.trained, href: '/models', icon: 'model' },
   { label: '已发布模型', value: runtime.value.published, href: '/models', icon: 'network' },
   { label: '推理记录', value: runtime.value.inferences, href: '/inference-records', icon: 'prediction' },
-  { label: '已生成报告', value: runtime.value.reports, href: '/reports', icon: 'data' },
+  { label: '已生成报告', value: runtime.value.reports, href: '/reports', icon: 'report' },
 ]);
 const donutSegments = computed(() => {
   let offset = 0;
