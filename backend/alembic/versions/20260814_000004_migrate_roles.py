@@ -4,9 +4,9 @@ Revision ID: 20260814_000004
 Revises: 20260814_000003
 Create Date: 2026-08-14 00:00:04.000000
 
-旧两级角色 → 三级角色：
-- ADMIN  → SUPER_ADMIN（最外层管理员）
-- USER   → SCENARIO_USER（场景用户）
+旧两级角色 -> 三级角色：
+- ADMIN  -> SUPER_ADMIN（最外层管理员）
+- USER   -> SCENARIO_USER（场景用户）
 并按用户名启发式给旧普通用户绑定场景（alice/bob/carol），保持演示数据可用。
 """
 import sqlalchemy as sa
@@ -22,7 +22,7 @@ def upgrade() -> None:
     op.execute("UPDATE app_user SET role = 'SUPER_ADMIN' WHERE role = 'ADMIN'")
     op.execute("UPDATE app_user SET role = 'SCENARIO_USER' WHERE role = 'USER'")
 
-    # 旧普通用户按用户名绑定场景（演示账号），场景编码 → id 子查询
+    # 旧普通用户按用户名绑定场景（演示账号），场景编码 -> id 子查询
     bindings = {
         "alice": "network_security",
         "bob": "power_system",

@@ -1,11 +1,3 @@
-<script setup lang="ts">
-import { useRouter } from 'vue-router';
-
-// 不在这里复刻角色落地逻辑：回 '/' 交给路由的 redirect 与守卫处理，
-// 避免出现第三份 roleLanding 副本。
-const router = useRouter();
-</script>
-
 <template>
   <section class="not-found">
     <p class="not-found__code">404</p>
@@ -13,7 +5,12 @@ const router = useRouter();
     <button class="ghost-button" @click="router.replace('/')">返回首页</button>
   </section>
 </template>
+<script setup lang="ts">
+import { useRouter } from 'vue-router';
 
+// 回 '/' 由路由的 redirect 和守卫决定落到哪个角色首页，这里不做判断。
+const router = useRouter();
+</script>
 <style scoped>
 .not-found {
   max-width: 380px;

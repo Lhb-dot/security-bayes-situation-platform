@@ -1,11 +1,13 @@
 """定时报告调度器（后台守护线程）。
 
-部署形态是单进程 FastAPI（uvicorn app.main:app），所以不引入 celery / APScheduler
+部署形态是单进程 FastAPI（uvicorn app.main:app），所以不引入
+celery / APScheduler
 这类外部调度组件 —— 多一个中间件就多一处运维面。报告以「天」为周期，用一条常驻
 线程按分钟级间隔扫描数据库里到期的定时报告足够，且不依赖任何外部状态。
 
 多进程 / 多副本部署：抢占由 ReportService.run_due_scheduled_reports 里的
-SELECT ... FOR UPDATE SKIP LOCKED 保证，同一条记录只会被一个进程处理，不会重复生成。
+SELECT ... FOR UPDATE SKIP LOCKED 保证，
+同一条记录只会被一个进程处理，不会重复生成。
 
 环境变量：
 - REPORT_SCHEDULER_ENABLED   默认 1；置 0 关闭（例如只让某一个副本跑调度）

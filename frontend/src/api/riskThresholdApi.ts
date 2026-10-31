@@ -1,6 +1,5 @@
 /**
- * riskThresholdApi.ts — 风险阈值配置接口（与后端 /api/v1/risk-thresholds 对齐）
- *
+ * 风险阈值配置接口（与后端 /api/v1/risk-thresholds 对齐）
  * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
  * 阈值按登录账号绑定；系统管理员可配置全部场景，其余账号仅配置绑定场景。
  */
@@ -14,15 +13,9 @@ import type {
   ThresholdConfig,
 } from '@/types/security';
 
-/**
- * 账号未配置该场景阈值时的兜底值（0~1）。
- * 必须与后端 app/services/constants.py 的 DEFAULT_MEDIUM_THRESHOLD / DEFAULT_HIGH_THRESHOLD 保持一致，
- * 否则同一张卡片会出现「状态按 0.5 判、分数颜色按 0.45 判」这种自相矛盾的显示。
- */
 export const DEFAULT_MEDIUM_THRESHOLD = 0.5;
 export const DEFAULT_HIGH_THRESHOLD = 0.8;
 
-/** 场景种子映射取逆：编码 → 数字 ID（后端 /scenarios 不可达时的兜底；种子表来自 scenarioApi） */
 const SCENARIO_CODE_TO_ID = Object.fromEntries(
   Object.entries(SCENARIO_CODE_BY_ID).map(([id, code]) => [code, Number(id)])
 ) as Record<ScenarioId, number>;
@@ -34,7 +27,6 @@ interface ApiScenario {
 let scenarioIdByCode: Partial<Record<ScenarioId, number>> | null = null;
 let scenarioCodeById: Record<number, ScenarioId> = { ...SCENARIO_CODE_BY_ID };
 
-/** Resolve database scenario IDs instead of assuming sequence values. */
 const ensureScenarioMaps = async (): Promise<void> => {
   if (scenarioIdByCode) return;
   const byCode: Partial<Record<ScenarioId, number>> = { ...SCENARIO_CODE_TO_ID };
@@ -46,12 +38,10 @@ const ensureScenarioMaps = async (): Promise<void> => {
       scenarioCodeById[scenario.id] = code;
     }
   } catch {
-    // Keep the known seed mapping as a local fallback when the scenario API is unavailable.
   }
   scenarioIdByCode = byCode;
 };
 
-/** 数字主键 → 场景编码；后端下发的 `scenario_id` 恒为数字，转换点只在此处。 */
 const normalizeThreshold = (item: ApiThresholdConfig): ThresholdConfig => ({
   ...item,
   scenario_id: scenarioCodeById[item.scenario_id] ?? SCENARIO_CODE_BY_ID[item.scenario_id],
@@ -61,14 +51,12 @@ const backendScenarioId = async (scenarioId: ScenarioId | number): Promise<numbe
   return typeof scenarioId === 'number' ? scenarioId : scenarioIdByCode?.[scenarioId] ?? SCENARIO_CODE_TO_ID[scenarioId];
 };
 
-/** 查询当前账号全部阈值（GET /risk-thresholds） */
 export const getRiskThresholds = async (): Promise<ThresholdConfig[]> => {
   await ensureScenarioMaps();
   const data = await unwrapData(await request.get('/api/v1/risk-thresholds'));
   return (Array.isArray(data) ? data : []).map(normalizeThreshold);
 };
 
-/** 查询当前账号全部阈值修改记录 */
 export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]> => {
   await ensureScenarioMaps();
   const data = await unwrapData<{ items?: ApiThresholdChangeLog[] }>(
@@ -80,7 +68,6 @@ export const getRiskThresholdAuditLogs = async (): Promise<ThresholdChangeLog[]>
   }));
 };
 
-/** 更新当前账号场景风险阈值（实时生效并写审计日志） */
 export const updateRiskThreshold = async (
   scenarioId: ScenarioId | number,
   params: { medium_threshold: number; high_threshold: number }

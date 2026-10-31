@@ -1,16 +1,318 @@
+<template>
+  <div class="settings-page">
+    <div class="settings-page__header">
+      <div>
+        <p class="eyebrow">{{ isSuperAdmin ? 'System Settings' : 'My Settings' }}</p>
+        <h2>{{ isSuperAdmin ? '系统设置' : '设置' }}</h2>
+        <p v-if="isSuperAdmin" class="settings-page__desc">账号安全与风险阈值配置</p>
+        <p v-else class="settings-page__desc">关注场景与账号安全设置</p>
+      </div>
+    </div>
+
+    <!-- 横向页签 -->
+    <nav class="settings-tabs">
+      <button
+        v-for="tab in tabs"
+        :key="tab.key"
+        type="button"
+        class="settings-tab"
+        :class="{ 'is-active': activeTab === tab.key }"
+        @click="activeTab = tab.key"
+      >
+        {{ tab.label }}
+      </button>
+    </nav>
+
+    <!-- 账号与安全 -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'account' }">
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Account</p>
+            <h3>账号信息</h3>
+          </div>
+        </div>
+        <div class="detail-info">
+          <div>
+            <span>用户名</span>
+            <strong>{{ currentUser?.username ?? '-' }}</strong>
+          </div>
+          <div>
+            <span>绑定场景</span>
+            <strong>
+              <span v-if="isSuperAdmin">{{ accountScenarioLabel }}</span>
+              <span v-else class="scenario-tag">{{ accountScenarioLabel }}</span>
+            </strong>
+          </div>
+          <div>
+            <span>角色</span>
+            <strong><span class="role-badge" :class="accountRoleBadge">{{ accountRoleLabel }}</span></strong>
+          </div>
+          <div>
+            <span>账号状态</span>
+            <strong>
+              <span class="status-badge" :class="accountEnabled ? 'status-badge--on' : 'status-badge--off'">
+                {{ accountEnabled ? '启用' : '禁用' }}
+              </span>
+            </strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Security</p>
+            <h3>安全设置</h3>
+          </div>
+        </div>
+        <div class="settings-form">
+          <div class="settings-form__item settings-form__item--row">
+            <span class="settings-form__label">登录密码</span>
+            <button class="settings-btn settings-btn--primary" @click="openPwdDialog">修改密码</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 基础设置 -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'general' }">
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">AI Provider</p>
+            <h3>AI 解释服务</h3>
+          </div>
+          <span
+            class="ai-badge"
+            :class="aiSetting?.configured ? 'ai-badge--on' : 'ai-badge--off'"
+          >{{ aiSetting?.configured ? '已配置' : '未配置' }}</span>
+        </div>
+
+        <div class="detail-info ai-readonly">
+          <div v-for="row in aiReadonlyRows" :key="row.label">
+            <span>{{ row.label }}</span>
+            <strong :class="{ 'detail-info__empty': !row.value }">{{ row.value || '未填入' }}</strong>
+          </div>
+        </div>
+
+        <div class="settings-switches">
+          <div class="settings-switches__item">
+            <span class="settings-switches__label">启用 AI 解释</span>
+            <button
+              class="settings-switches__toggle"
+              :class="{ 'is-on': !!aiSetting?.enabled }"
+              :disabled="!aiSetting?.configured || togglingAI"
+              @click="toggleAI"
+            >
+              <span class="settings-switches__knob"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="settings-btn" :disabled="testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
+          <button class="settings-btn settings-btn--primary" @click="openAIEdit">编辑</button>
+        </div>
+      </section>
+
+      <section class="card settings-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Refresh</p>
+            <h3>自动刷新设置</h3>
+          </div>
+        </div>
+        <div class="settings-form">
+          <div class="settings-form__item settings-form__item--row">
+            <label class="settings-form__label">启用自动刷新</label>
+            <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
+              <span class="settings-switches__knob"></span>
+            </button>
+          </div>
+          <div class="settings-form__item">
+            <label class="settings-form__label">刷新间隔</label>
+            <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
+              <option v-for="sec in ALLOWED_INTERVALS" :key="sec" :value="sec">{{ sec }} 秒</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 风险阈值 -->
+    <div class="settings-panel" :class="{ 'is-active': activeTab === 'threshold' }">
+      <section class="card settings-section settings-section--span">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Threshold</p>
+            <h3>我的风险阈值</h3>
+          </div>
+          <button class="settings-btn" type="button" @click="showChangeLogs = true; loadChangeLogs()">
+            查看阈值修改记录
+          </button>
+        </div>
+
+        <div v-if="isSuperAdmin" class="threshold-scenario-pick">
+          <label class="settings-form__label">选择场景</label>
+          <select v-model="thresholdScenario" class="settings-form__input threshold-scenario-pick__select">
+            <option v-for="sc in activeScenarios" :key="sc" :value="sc">{{ SCENARIO_LABEL[sc] ?? sc }}</option>
+          </select>
+        </div>
+
+        <!-- 阈值长条框：系统管理员可切换场景，其余账号固定为绑定场景 -->
+        <div class="threshold-bar">
+          <div class="threshold-bar__head">
+            <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
+          </div>
+          <div class="threshold-bar__form">
+            <div class="threshold-field">
+              <label>中风险阈值</label>
+              <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <div class="threshold-field">
+              <label>高风险阈值</label>
+              <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
+            </div>
+            <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
+              {{ saving ? '保存中...' : '保存并生效' }}
+            </button>
+          </div>
+          <p v-if="thresholdUnconfigured[thresholdScenario]" class="threshold-bar__hint">
+            该场景尚未配置，输入框内是系统当前生效的兜底值（中风险 {{ DEFAULT_MEDIUM_THRESHOLD.toFixed(2) }} /
+            高风险 {{ DEFAULT_HIGH_THRESHOLD.toFixed(2) }}）。保存后即成为本账号在该场景的正式阈值。
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <!-- 改密弹窗 -->
+    <el-dialog
+      v-model="pwdDialogVisible"
+      title="修改密码"
+      class="pwd-setting-dialog"
+      width="480px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="ai-dialog-form">
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">原密码</label>
+          <input v-model="pwdForm.oldPassword" type="password" class="ai-dialog-input" autocomplete="current-password" placeholder="请输入原密码" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">新密码</label>
+          <input v-model="pwdForm.newPassword" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="至少 6 位" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">确认新密码</label>
+          <input v-model="pwdForm.confirm" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="再次输入新密码" />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="pwdDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="changingPwd" @click="changePwd">
+          {{ changingPwd ? '提交中...' : '确认修改' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 阈值修改记录弹窗 -->
+    <el-dialog
+      v-model="showChangeLogs"
+      title="本账号阈值修改记录"
+      class="threshold-log-dialog"
+      width="760px"
+      top="6vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-table
+        :data="changeLogs"
+        stripe
+        :max-height="logTableMaxHeight"
+        style="width: 100%"
+        :empty-text="logsLoading ? '加载中…' : ''"
+      >
+        <el-table-column label="变更时间" min-width="170" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ row.operated_at ?? '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="场景" width="130" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            {{ SCENARIO_LABEL[row.scenario_id] ?? row.scenario_id }}
+          </template>
+        </el-table-column>
+        <el-table-column label="中风险阈值" min-width="150" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'medium') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--medium">{{ newValueText(row, 'medium') }}</span>
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="高风险阈值" min-width="150" align="center">
+          <template #default="{ row }: { row: ThresholdChangeLog }">
+            <span class="thr-change">
+              <span class="thr-change__old">{{ oldValueText(row, 'high') }}</span>
+              <span class="thr-change__arrow">→</span>
+              <span class="thr-change__new thr-change__new--high">{{ newValueText(row, 'high') }}</span>
+            </span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- 编辑 AI 解释服务弹窗 -->
+    <el-dialog
+      v-model="aiDialogVisible"
+      title="编辑 AI 解释服务"
+      class="ai-setting-dialog"
+      width="520px"
+      top="10vh"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <div class="ai-dialog-form">
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">接口地址</label>
+          <input v-model="aiEditForm.base_url" class="ai-dialog-input" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">模型名称</label>
+          <input v-model="aiEditForm.model" class="ai-dialog-input" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="ai-dialog-field">
+          <label class="ai-dialog-field__label">API key</label>
+          <input
+            v-model="aiEditForm.api_key"
+            type="password"
+            class="ai-dialog-input"
+            autocomplete="new-password"
+            placeholder="留空则保留已保存的 key"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="savingAI" @click="saveAI">
+          {{ savingAI ? '保存中...' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
 <script setup lang="ts">
-/**
- * Settings — 设置（场景用户）/ 系统设置（管理员）
- *
- * - 顶部横向页签：账号与安全 / 基础设置 / 风险阈值（按角色过滤可见性）
- * - 每个页签内容为左右两栏卡片；需要横向空间的卡片用 .settings-section--span 占满整行
- *
- * 功能口径保持不变：
- * - 场景用户：账号与安全（账号信息 + 改密）、基础设置（自动刷新 + AI 解释服务）
- * - 管理员：额外可见风险阈值（按账号 + 场景，[0,1]、high>medium、变更日志）
- *
- * 注：原「场景管理（场景启停控制）」卡片只是本地开关、不落库，已整层移除。
- */
+// 设置页。场景用户两个页签：账号与安全、基础设置；管理员多一个风险阈值。
+// 页签按角色过滤，每个页签里是左右两栏卡片，需要横向空间的卡片用
+// .settings-section--span 占满整行。
+// 风险阈值按账号 + 场景配置，取值 [0,1]，high 必须大于 medium，每次改动写一条审计日志。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -29,13 +331,13 @@ import type { ScenarioId, ThresholdChangeLog, ThresholdConfig, UserAccount } fro
 const userStore = useUserStore();
 const settingsStore = useSettingsStore();
 const router = useRouter();
-/** 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据） */
+// 当前账号：直接用 store 的实时值（快照 ref 会在切换账号后残留旧数据）
 const currentUser = computed<UserAccount | null>(() => userStore.currentUser);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
-/** 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行） */
+// 阈值可配置场景：系统管理员=全部；其他账号=绑定场景（后端按绑定场景放行）
 const canConfigureThresholds = computed(() => isSuperAdmin.value || !!currentUser.value?.scenario_code);
 
-/** 全部场景编码（与后端 seed 一致）：管理员可逐个配置，其余账号只有绑定场景 */
+// 全部场景编码（与后端 seed 一致）：管理员可逐个配置，其余账号只有绑定场景
 const ALL_SCENARIO_IDS: ScenarioId[] = [
   'network_security',
   'power_system',
@@ -55,7 +357,7 @@ const ROLE_LABEL: Record<string, string> = {
   SCENARIO_USER: '场景用户',
 };
 
-// ===================== 页签 =====================
+// 页签
 type TabKey = 'account' | 'general' | 'threshold';
 const activeTab = ref<TabKey>('account');
 const tabs = computed<{ key: TabKey; label: string }[]>(() => {
@@ -71,7 +373,7 @@ watch(tabs, list => {
   if (!list.some(t => t.key === activeTab.value)) activeTab.value = list[0]?.key ?? 'account';
 });
 
-// ===================== 账号信息 =====================
+// 账号信息
 const accountRoleLabel = computed(() => ROLE_LABEL[currentUser.value?.role ?? ''] ?? '-');
 const accountRoleBadge = computed(() => {
   const role = currentUser.value?.role;
@@ -87,8 +389,8 @@ const accountScenarioLabel = computed(() => {
 });
 const accountEnabled = computed(() => currentUser.value?.status !== 'disabled');
 
-// ===================== 修改密码（弹窗） =====================
-/** 改密表单初值：打开弹窗与提交成功后都要清空，抽成工厂避免两处字面量漂移 */
+// 改密弹窗
+// 改密表单初值：打开弹窗和提交成功后都要清空
 const emptyPwdForm = () => ({ oldPassword: '', newPassword: '', confirm: '' });
 
 const pwdDialogVisible = ref(false);
@@ -128,19 +430,19 @@ const changePwd = async () => {
   }
 };
 
-// ===================== 自动刷新（个人设置） =====================
+// 自动刷新
 const savePersonalSettings = () => {
   settingsStore.saveRefreshSettings();
   ElMessage.success('个人设置已保存');
 };
 
-// ===================== AI 解释服务 =====================
+// AI 解释服务
 const aiSetting = ref<AISetting | null>(null);
 const savingAI = ref(false);
 const testingAI = ref(false);
 const togglingAI = ref(false);
 const aiDialogVisible = ref(false);
-/** 编辑弹窗临时表单：取消不影响已保存配置；api_key 留空表示保留服务端已保存的 key。 */
+// 编辑弹窗临时表单：取消不影响已保存配置；api_key 留空表示保留服务端已保存的 key。
 const aiEditForm = ref({
   provider: 'openai-compatible',
   base_url: '',
@@ -148,7 +450,7 @@ const aiEditForm = ref({
   api_key: '',
 });
 
-/** 只读展示行：未配置的字段统一显示「未填入」，key 只显示服务端下发的掩码。 */
+// 只读展示行：未配置的字段统一显示"未填入"，key 只显示服务端下发的掩码。
 const aiReadonlyRows = computed(() => [
   { label: '接口地址', value: aiSetting.value?.base_url?.trim() ?? '' },
   { label: '模型名称', value: aiSetting.value?.model?.trim() ?? '' },
@@ -173,7 +475,7 @@ const openAIEdit = () => {
   aiDialogVisible.value = true;
 };
 
-/** 卡片上的「启用 AI 解释」开关：直接落库，失败保持原状态。 */
+// 卡片上的"启用 AI 解释"开关：直接落库，失败保持原状态。
 const toggleAI = async () => {
   const s = aiSetting.value;
   if (!s?.configured || togglingAI.value) return;
@@ -247,7 +549,7 @@ const testAI = async () => {
   }
 };
 
-// ===================== 风险阈值 =====================
+// 风险阈值
 const activeScenarios = computed<ScenarioId[]>(() =>
   isSuperAdmin.value
     ? [...ALL_SCENARIO_IDS]
@@ -260,13 +562,13 @@ const changeLogs = ref<ThresholdChangeLog[]>([]);
 const showChangeLogs = ref(false);
 const logsLoading = ref(false);
 const saving = ref(false);
-/** 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景 */
+// 阈值长条框当前选中场景：系统管理员可切换，其余账号固定为绑定场景
 const thresholdScenario = ref<ScenarioId>('network_security');
-/** 输入框初值：全部场景留空，loadThresholds 会按账号可见场景回填后端值或兜底值 */
+// 输入框初值：全部场景留空，loadThresholds 会按账号可见场景回填后端值或兜底值
 const editing = ref<Record<string, { medium: number | null; high: number | null }>>(
   Object.fromEntries(ALL_SCENARIO_IDS.map(id => [id, { medium: null, high: null }])),
 );
-/** 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。 */
+// 该场景是否尚未配置阈值（输入框里显示的是后端兜底值，而非已保存的值）。
 const thresholdUnconfigured = ref<Record<string, boolean>>({});
 
 const loadThresholds = async () => {
@@ -279,8 +581,8 @@ const loadThresholds = async () => {
   const nextEditing: Record<string, { medium: number | null; high: number | null }> = {};
   const nextUnconfigured: Record<string, boolean> = {};
   for (const scenarioId of activeScenarios.value) {
-    // 未配置的场景也回填兜底值，让输入框显示**系统当前实际生效**的阈值（0.5 / 0.8）。
-    // 留空会让人以为「没有阈值、不做风险判定」，而实际上后端一直在用兜底值判级。
+    // 未配置的场景也回填兜底值，让输入框显示系统当前实际生效的阈值（0.5 / 0.8）。
+    // 留空会让人以为"没有阈值、不做风险判定"，而实际上后端一直在用兜底值判级。
     nextEditing[scenarioId] = {
       medium: DEFAULT_MEDIUM_THRESHOLD,
       high: DEFAULT_HIGH_THRESHOLD,
@@ -296,8 +598,8 @@ const loadThresholds = async () => {
   }
   editing.value = nextEditing;
   thresholdUnconfigured.value = nextUnconfigured;
-  // 只在当前选中场景已不可见时才回落到第一个场景。
-  // 保存成功后也会走这里刷新，若无条件重置，管理员刚改完「电力系统」就会被弹回「网络安全」。
+  // 只在当前选中场景已不可见时才回落到第一个场景。保存成功后也会走这里刷新，
+  // 若无条件重置，管理员刚改完"电力系统"就会被弹回"网络安全"。
   if (!activeScenarios.value.includes(thresholdScenario.value)) {
     thresholdScenario.value = activeScenarios.value[0] ?? 'network_security';
   }
@@ -321,18 +623,16 @@ const toFixed2 = (v: number | string | null | undefined): string => {
   return Number.isFinite(n) ? n.toFixed(2) : '—';
 };
 
-/** 阈值精度：后端列为 Numeric(4,2)，故校验与提交统一按「两位小数」取整 */
+// 阈值精度：后端列是 Numeric(4,2)，校验和提交都按两位小数取整
 const roundTo2 = (v: number): number => Math.round(v * 100) / 100;
 
-/** 记录唯一标识：后端审计表自增主键（ThresholdAuditLog.id，非空）；类型上可选，缺失时退回「场景@时间」 */
+// 记录唯一标识：后端审计表自增主键（ThresholdAuditLog.id）；类型上可选，
+// 缺失时退回"场景@时间"。
 const logKey = (log: ThresholdChangeLog): string =>
   log.id != null ? String(log.id) : `${log.scenario_id}@${log.operated_at ?? ''}`;
 
-/**
- * 首次配置的行：该场景在列表里最早的一条记录，且旧值等于新值。
- * 后端在「该账号该场景还没有阈值行」时把 old 记成 new（语义是"从无到有"），
- * 所以这些行的旧值不该当成数字展示，统一渲染成「—」。
- */
+// 首次配置的行：该场景最早一条记录，且旧值等于新值。后端在该账号该场景还没阈值行时
+// 把 old 记成 new（语义是从无到有），这些行的旧值不能当数字展示，统一渲染成 —。
 const initialLogKeys = computed(() => {
   const earliest = new Map<string, ThresholdChangeLog>();
   for (const log of changeLogs.value) {
@@ -351,17 +651,13 @@ const initialLogKeys = computed(() => {
   return keys;
 });
 
-/**
- * 修改记录表的高度。
- * 直接用 vh 做 max-height 会把最后一行切掉一半（露出半截胶囊），
- * 所以按「表头 + 整数行」算一个像素值，配合下面 style 块里固定的行高。
- * 三个常量与第二个 <style> 块里 .el-table th/td 的 40px / 42px 必须一起改。
- */
+// 修改记录表的高度。直接用 vh 做 max-height 会把最后一行切掉一半，露出半截胶囊，
+// 所以按表头 + 整数行算一个像素值，配下面 style 块里固定的行高。
+// 这几个常量跟第二个 <style> 块里 .el-table th/td 的 40px / 42px 得一起改。
 const LOG_TABLE_HEADER_HEIGHT = 40;
 const LOG_TABLE_ROW_HEIGHT = 42;
-/** 弹窗表体占视口高度的比例（同步用于首帧默认值与 resize 计算，避免两处各写一个魔数） */
+// 弹窗表体占视口高度的比例（同步用于首帧默认值与 resize 计算，避免两处各写一个魔数）
 const LOG_TABLE_VIEWPORT_RATIO = 0.64;
-/** 至少显示的行数：视口过矮时也不再压缩，靠弹窗自身滚动兜底 */
 const LOG_TABLE_MIN_ROWS = 4;
 const logTableMaxHeight = ref(`${Math.round(LOG_TABLE_VIEWPORT_RATIO * 100)}vh`);
 const syncLogTableMaxHeight = () => {
@@ -392,7 +688,7 @@ const saveScenarioThreshold = async (scenarioId: ScenarioId) => {
     ElMessage.warning('阈值最多只能有两位小数');
     return;
   }
-  // 值没变就不提交：后端每次 PUT 都会写一条审计日志，重复点「保存」会把记录刷成噪声。
+  // 值没变就不提交：后端每次 PUT 都会写一条审计日志，重复点"保存"会把记录刷成噪声。
   const stored = thresholds.value.find(t => t.scenario_id === scenarioId);
   if (stored
     && Number(stored.medium_threshold) === e.medium
@@ -430,318 +726,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', syncLogTableMaxHeight);
 });
 </script>
-
-<template>
-  <div class="settings-page">
-    <div class="settings-page__header">
-      <div>
-        <p class="eyebrow">{{ isSuperAdmin ? 'System Settings' : 'My Settings' }}</p>
-        <h2>{{ isSuperAdmin ? '系统设置' : '设置' }}</h2>
-        <p v-if="isSuperAdmin" class="settings-page__desc">账号安全与风险阈值配置</p>
-        <p v-else class="settings-page__desc">关注场景与账号安全设置</p>
-      </div>
-    </div>
-
-    <!-- ==================== 横向页签 ==================== -->
-    <nav class="settings-tabs">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        type="button"
-        class="settings-tab"
-        :class="{ 'is-active': activeTab === tab.key }"
-        @click="activeTab = tab.key"
-      >
-        {{ tab.label }}
-      </button>
-    </nav>
-
-    <!-- ==================== 账号与安全 ==================== -->
-    <div class="settings-panel" :class="{ 'is-active': activeTab === 'account' }">
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Account</p>
-            <h3>账号信息</h3>
-          </div>
-        </div>
-        <div class="detail-info">
-          <div>
-            <span>用户名</span>
-            <strong>{{ currentUser?.username ?? '-' }}</strong>
-          </div>
-          <div>
-            <span>绑定场景</span>
-            <strong>
-              <span v-if="isSuperAdmin">{{ accountScenarioLabel }}</span>
-              <span v-else class="scenario-tag">{{ accountScenarioLabel }}</span>
-            </strong>
-          </div>
-          <div>
-            <span>角色</span>
-            <strong><span class="role-badge" :class="accountRoleBadge">{{ accountRoleLabel }}</span></strong>
-          </div>
-          <div>
-            <span>账号状态</span>
-            <strong>
-              <span class="status-badge" :class="accountEnabled ? 'status-badge--on' : 'status-badge--off'">
-                {{ accountEnabled ? '启用' : '禁用' }}
-              </span>
-            </strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Security</p>
-            <h3>安全设置</h3>
-          </div>
-        </div>
-        <div class="settings-form">
-          <div class="settings-form__item settings-form__item--row">
-            <span class="settings-form__label">登录密码</span>
-            <button class="settings-btn settings-btn--primary" @click="openPwdDialog">修改密码</button>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <!-- ==================== 基础设置 ==================== -->
-    <div class="settings-panel" :class="{ 'is-active': activeTab === 'general' }">
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">AI Provider</p>
-            <h3>AI 解释服务</h3>
-          </div>
-          <span
-            class="ai-badge"
-            :class="aiSetting?.configured ? 'ai-badge--on' : 'ai-badge--off'"
-          >{{ aiSetting?.configured ? '已配置' : '未配置' }}</span>
-        </div>
-
-        <div class="detail-info ai-readonly">
-          <div v-for="row in aiReadonlyRows" :key="row.label">
-            <span>{{ row.label }}</span>
-            <strong :class="{ 'detail-info__empty': !row.value }">{{ row.value || '未填入' }}</strong>
-          </div>
-        </div>
-
-        <div class="settings-switches">
-          <div class="settings-switches__item">
-            <span class="settings-switches__label">启用 AI 解释</span>
-            <button
-              class="settings-switches__toggle"
-              :class="{ 'is-on': !!aiSetting?.enabled }"
-              :disabled="!aiSetting?.configured || togglingAI"
-              @click="toggleAI"
-            >
-              <span class="settings-switches__knob"></span>
-            </button>
-          </div>
-        </div>
-
-        <div class="settings-actions">
-          <button class="settings-btn" :disabled="testingAI || !aiSetting?.configured" @click="testAI">{{ testingAI ? '测试中...' : '测试连通性' }}</button>
-          <button class="settings-btn settings-btn--primary" @click="openAIEdit">编辑</button>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Refresh</p>
-            <h3>自动刷新设置</h3>
-          </div>
-        </div>
-        <div class="settings-form">
-          <div class="settings-form__item settings-form__item--row">
-            <label class="settings-form__label">启用自动刷新</label>
-            <button class="settings-switches__toggle" :class="{ 'is-on': settingsStore.autoRefresh }" @click="settingsStore.autoRefresh = !settingsStore.autoRefresh">
-              <span class="settings-switches__knob"></span>
-            </button>
-          </div>
-          <div class="settings-form__item">
-            <label class="settings-form__label">刷新间隔</label>
-            <select v-model.number="settingsStore.refreshInterval" class="settings-form__input" :disabled="!settingsStore.autoRefresh">
-              <option v-for="sec in ALLOWED_INTERVALS" :key="sec" :value="sec">{{ sec }} 秒</option>
-            </select>
-          </div>
-        </div>
-        <div class="settings-actions">
-          <button class="settings-btn" @click="savePersonalSettings">保存个人设置</button>
-        </div>
-      </section>
-    </div>
-
-    <!-- ==================== 风险阈值 ==================== -->
-    <div class="settings-panel" :class="{ 'is-active': activeTab === 'threshold' }">
-      <section class="card settings-section settings-section--span">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Threshold</p>
-            <h3>我的风险阈值</h3>
-          </div>
-          <button class="settings-btn" type="button" @click="showChangeLogs = true; loadChangeLogs()">
-            查看阈值修改记录
-          </button>
-        </div>
-
-        <div v-if="isSuperAdmin" class="threshold-scenario-pick">
-          <label class="settings-form__label">选择场景</label>
-          <select v-model="thresholdScenario" class="settings-form__input threshold-scenario-pick__select">
-            <option v-for="sc in activeScenarios" :key="sc" :value="sc">{{ SCENARIO_LABEL[sc] ?? sc }}</option>
-          </select>
-        </div>
-
-        <!-- 阈值长条框：系统管理员可切换场景，其余账号固定为绑定场景 -->
-        <div class="threshold-bar">
-          <div class="threshold-bar__head">
-            <h4>{{ SCENARIO_LABEL[thresholdScenario] ?? thresholdScenario }}</h4>
-          </div>
-          <div class="threshold-bar__form">
-            <div class="threshold-field">
-              <label>中风险阈值</label>
-              <input v-model.number="editing[thresholdScenario].medium" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-            </div>
-            <div class="threshold-field">
-              <label>高风险阈值</label>
-              <input v-model.number="editing[thresholdScenario].high" type="number" min="0" max="1" step="0.01" class="settings-form__input" />
-            </div>
-            <button class="settings-btn" :disabled="saving" @click="saveScenarioThreshold(thresholdScenario)">
-              {{ saving ? '保存中...' : '保存并生效' }}
-            </button>
-          </div>
-          <p v-if="thresholdUnconfigured[thresholdScenario]" class="threshold-bar__hint">
-            该场景尚未配置，输入框内是系统当前生效的兜底值（中风险 {{ DEFAULT_MEDIUM_THRESHOLD.toFixed(2) }} /
-            高风险 {{ DEFAULT_HIGH_THRESHOLD.toFixed(2) }}）。保存后即成为本账号在该场景的正式阈值。
-          </p>
-        </div>
-      </section>
-    </div>
-
-    <!-- ==================== 修改密码弹窗 ==================== -->
-    <el-dialog
-      v-model="pwdDialogVisible"
-      title="修改密码"
-      class="pwd-setting-dialog"
-      width="480px"
-      top="10vh"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <div class="ai-dialog-form">
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">原密码</label>
-          <input v-model="pwdForm.oldPassword" type="password" class="ai-dialog-input" autocomplete="current-password" placeholder="请输入原密码" />
-        </div>
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">新密码</label>
-          <input v-model="pwdForm.newPassword" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="至少 6 位" />
-        </div>
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">确认新密码</label>
-          <input v-model="pwdForm.confirm" type="password" class="ai-dialog-input" autocomplete="new-password" placeholder="再次输入新密码" />
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="pwdDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="changingPwd" @click="changePwd">
-          {{ changingPwd ? '提交中...' : '确认修改' }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- ==================== 阈值修改记录弹窗 ==================== -->
-    <el-dialog
-      v-model="showChangeLogs"
-      title="本账号阈值修改记录"
-      class="threshold-log-dialog"
-      width="760px"
-      top="6vh"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <el-table
-        :data="changeLogs"
-        stripe
-        :max-height="logTableMaxHeight"
-        style="width: 100%"
-        :empty-text="logsLoading ? '加载中…' : ''"
-      >
-        <el-table-column label="变更时间" min-width="170" align="center">
-          <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ row.operated_at ?? '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="场景" width="130" align="center">
-          <template #default="{ row }: { row: ThresholdChangeLog }">
-            {{ SCENARIO_LABEL[row.scenario_id] ?? row.scenario_id }}
-          </template>
-        </el-table-column>
-        <el-table-column label="中风险阈值" min-width="150" align="center">
-          <template #default="{ row }: { row: ThresholdChangeLog }">
-            <span class="thr-change">
-              <span class="thr-change__old">{{ oldValueText(row, 'medium') }}</span>
-              <span class="thr-change__arrow">→</span>
-              <span class="thr-change__new thr-change__new--medium">{{ newValueText(row, 'medium') }}</span>
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="高风险阈值" min-width="150" align="center">
-          <template #default="{ row }: { row: ThresholdChangeLog }">
-            <span class="thr-change">
-              <span class="thr-change__old">{{ oldValueText(row, 'high') }}</span>
-              <span class="thr-change__arrow">→</span>
-              <span class="thr-change__new thr-change__new--high">{{ newValueText(row, 'high') }}</span>
-            </span>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
-
-    <!-- ==================== 编辑 AI 解释服务弹窗 ==================== -->
-    <el-dialog
-      v-model="aiDialogVisible"
-      title="编辑 AI 解释服务"
-      class="ai-setting-dialog"
-      width="520px"
-      top="10vh"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <div class="ai-dialog-form">
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">接口地址</label>
-          <input v-model="aiEditForm.base_url" class="ai-dialog-input" placeholder="https://api.openai.com/v1" />
-        </div>
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">模型名称</label>
-          <input v-model="aiEditForm.model" class="ai-dialog-input" placeholder="gpt-4o-mini" />
-        </div>
-        <div class="ai-dialog-field">
-          <label class="ai-dialog-field__label">API key</label>
-          <input
-            v-model="aiEditForm.api_key"
-            type="password"
-            class="ai-dialog-input"
-            autocomplete="new-password"
-            placeholder="留空则保留已保存的 key"
-          />
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="aiDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="savingAI" @click="saveAI">
-          {{ savingAI ? '保存中...' : '保存' }}
-        </el-button>
-      </template>
-    </el-dialog>
-  </div>
-</template>
-
 <style scoped>
 .settings-page {
   position: relative;
@@ -769,7 +753,7 @@ onBeforeUnmount(() => {
   font-size: 0.95rem;
 }
 
-/* ===================== 横向页签 ===================== */
+/* 横向页签 */
 .settings-tabs {
   display: flex;
   align-items: center;
@@ -818,7 +802,7 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #5ba6ff, #407acc);
 }
 
-/* ===================== 页签内容：左右两栏 ===================== */
+/* 页签内容：左右两栏 */
 .settings-panel {
   display: none;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -994,9 +978,8 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
-/* 未配置提示：说明输入框里显示的是后端兜底值，而不是已保存的阈值。
-   .threshold-bar 是 flex + wrap 容器，这里用 flex-basis:100% 让它独占一行，
-   否则会作为第三个横向子项被挤到输入框右边。 */
+/* .threshold-bar 是 flex + wrap 容器，flex-basis:100% 让提示独占一行，*/
+/* 否则它会作为第三个横向子项被挤到输入框右边。 */
 .threshold-bar__hint {
   flex: 1 0 100%;
   width: 100%;
@@ -1025,7 +1008,7 @@ onBeforeUnmount(() => {
   width: 150px;
 }
 
-/* ===================== 表单 ===================== */
+/* 表单 */
 .settings-form {
   display: grid;
   gap: 16px;
@@ -1067,7 +1050,7 @@ select.settings-form__input option {
   color: #e8f1ff;
 }
 
-/* ===================== 开关 ===================== */
+/* 开关 */
 .settings-switches {
   display: grid;
   gap: 14px;
@@ -1127,7 +1110,7 @@ select.settings-form__input option {
   transform: translateX(20px);
 }
 
-/* ===================== 按钮：与全站 .el-button 同一套描边样式 ===================== */
+/* 按钮：与全站 .el-button 同一套描边样式 */
 .settings-btn {
   padding: 10px 20px;
   border: 1px solid rgba(125, 201, 255, 0.35);
@@ -1183,7 +1166,6 @@ select.settings-form__input option {
   }
 }
 </style>
-
 <style>
 /* 弹窗 append-to-body 后挂到 body，scoped 样式不生效，故在此补齐。 */
 .pwd-setting-dialog,
@@ -1226,8 +1208,8 @@ select.settings-form__input option {
   background-color: transparent !important;
 }
 
-/* 行高固定成整数，配合 Settings.vue 的 logTableMaxHeight 把表体高度对齐到整行，
-   否则最后一行会被 max-height 切掉一半。两个常量要一起改。 */
+/* 行高固定成整数，配合 logTableMaxHeight 把表体高度对齐到整行，*/
+/* 否则最后一行会被 max-height 切掉一半。两个常量要一起改。 */
 .threshold-log-dialog .el-table th.el-table__cell {
   background-color: rgba(16, 34, 60, 0.9) !important;
   color: rgba(155, 195, 240, 0.85) !important;
@@ -1254,10 +1236,9 @@ select.settings-form__input option {
   color: rgba(180, 200, 235, 0.3) !important;
 }
 
-/* 阈值变更单元格：旧值 → 新值。
-   新值沿用 RiskLevelTag 的深色胶囊（中风险蓝 / 高风险橙），
-   不用 Element Plus 的 el-tag——它在深色弹窗里会渲染成白底绿字，
-   而且不管阈值升还是降都是同一个绿色。 */
+/* 阈值变更单元格：旧值 -> 新值。新值沿用 RiskLevelTag 的深色胶囊，*/
+/* 中风险蓝 / 高风险橙。不用 el-tag，它在深色弹窗里渲染成白底绿字，*/
+/* 而且阈值升还是降都是同一个绿色。 */
 .threshold-log-dialog .thr-change {
   display: inline-flex;
   align-items: center;
@@ -1300,8 +1281,8 @@ select.settings-form__input option {
   color: #ffc37d;
 }
 
-/* 表体超出一屏时 EP 的滚动条只在 hover 时出现（且是灰色细条），
-   而 max-height 会把最后一行切一半 —— 把滚动条做粗一点、染成主题蓝，提示还能往下滚。 */
+/* 表体超出一屏时 EP 滚动条只在 hover 出现、还是灰色细条，*/
+/* 这里做粗一点染成主题蓝，提示还能往下滚。 */
 .threshold-log-dialog .el-scrollbar__bar.is-vertical {
   width: 7px;
 }
@@ -1316,8 +1297,8 @@ select.settings-form__input option {
   border-bottom: 1px solid rgba(125, 201, 255, 0.08);
 }
 
-/* style.css 里的 .el-button 暗色覆盖与 Element Plus 自身样式同权重、且 EP 在后，
-   实际不生效（实测取消按钮渲染成白底）。此处用 !important 兜住。 */
+/* style.css 的 .el-button 暗色覆盖与 Element Plus 同权重且 EP 在后，不生效 */
+/* （实测取消按钮渲染成白底），这里用 !important 兜住。 */
 .pwd-setting-dialog .el-button,
 .ai-setting-dialog .el-button {
   background: rgba(91, 166, 255, 0.1) !important;

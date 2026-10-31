@@ -1,10 +1,10 @@
 """split dataset.ai_analysis into per-audience slots
 
-数据集 AI 解析产物由单格 ``latest`` 改为按受众分格（management / user），
-与研判解释、模型评价同一套机制：场景用户重新生成时只覆盖 ``user`` 格，
+数据集 AI 解析产物由单格 `latest` 改为按受众分格（management / user），
+与研判解释、模型评价同一套机制：场景用户重新生成时只覆盖 `user` 格，
 不会冲掉管理员看到的平台级解析。
 
-存量数据只有 ``latest`` 一格，其内容由管理级账号生成，因此迁移为 ``management``。
+存量数据只有 `latest` 一格，其内容由管理级账号生成，因此迁移为 `management`。
 """
 
 from alembic import op

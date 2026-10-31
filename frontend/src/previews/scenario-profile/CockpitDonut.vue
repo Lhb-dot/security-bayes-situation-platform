@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * CockpitDonut —— 环形占比图 + 图例（与管理员首页「样本构成」同一画法：
+ * CockpitDonut，环形占比图 + 图例（与管理员首页「样本构成」同一画法：
  * viewBox 160、半径 58、pathLength=100 的 dasharray 分段，圆心写合计）。
  * 图例数值默认按占比展示（percent=true），便于回答「谁占大头」。
  */
@@ -16,11 +16,9 @@ const props = withDefaults(
   defineProps<{
     items: CockpitDonutItem[];
     centerLabel?: string;
-    /** 图例数值是否展示为占比 */
     percent?: boolean;
-    /** 图例数值后缀（percent=false 时生效） */
+    // 图例数值后缀（percent=false 时生效）
     suffix?: string;
-    /** 最多几个扇区，其余归入「其他」 */
     limit?: number;
   }>(),
   { centerLabel: '合计', percent: true, suffix: '', limit: 0 },

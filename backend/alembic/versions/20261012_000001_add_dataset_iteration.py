@@ -1,18 +1,16 @@
 """add dataset iteration metadata and dataset_revision log
 
 把「数据集迭代」提升为一等公民（见 app/services/dataset_iteration.py）：
+dataset 增加三个迭代元数据列 —— change_type（本版是怎么产生的：create /
+schema_change / append_rows 等）、base_version_id（血缘，本版从哪一版迭代而来）
+、is_breaking（是否破坏结构兼容，旧模型能否复用本版）；同时新建
+dataset_revision 表，每次迭代一条记录（原地更新也留痕），dataset
+被物理删除时随 ON DELETE CASCADE 清理。
 
-1. dataset 增加三个迭代元数据列
-   - change_type：本版是怎么产生的（create / schema_change / append_rows …）
-   - base_version_id：血缘，本版从哪一版迭代而来
-   - is_breaking：是否破坏结构兼容（旧模型能否复用本版）
-2. 新建 dataset_revision 表：每次迭代一条记录（原地更新也留痕），
-   dataset 被物理删除时随 ON DELETE CASCADE 清理。
-
-存量回填（迁移前只有「上传」与「修改字段」两条写入路径）：
-- version = 1 → change_type='create'，is_breaking=false
-- version > 1 → change_type='schema_change'，is_breaking=true（旧路径只有改字段会升版本）
-- base_version_id 指向同 logical_id 的上一版
+存量回填（迁移前只有「上传」与「修改字段」两条写入路径）：version = 1 回填
+change_type='create'、is_breaking=false；version > 1 回填
+change_type='schema_change'、is_breaking=true（旧路径只有改字段会升版本）；
+base_version_id 指向同 logical_id 的上一版。
 """
 
 import sqlalchemy as sa

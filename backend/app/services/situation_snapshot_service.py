@@ -7,7 +7,7 @@
 
 业务规则（需求 6.8）：
 1. 普通用户态势页面只统计本人数据（compute_user_stats，动态统计本人风险事件）。
-2. 系统管理员态势为**平台全量聚合统计**（compute_scene_stats），不含事件明细，并可按场景过滤。
+2. 系统管理员态势为平台全量聚合统计（compute_scene_stats），不含事件明细，并可按场景过滤。
 3. 快照表（situation_snapshot）为定期/事件触发的场景级统计落库，仅 ADMIN 或
    定时任务写入；登录用户可读取用于展示。
 4. 未接入场景不得使用虚构数据（需求 6.2 态势展示）——统计一律基于真实 RiskEvent。
@@ -34,7 +34,7 @@ class SituationSnapshotService(ServiceBase):
     # ------------------------------------------------------------------
     # 统计（需求 6.8：口径按风险等级与处置状态）
     #
-    # 风险等级一律按**当前账号**的阈值重算（见 app/services/risk_view.py）：
+    # 风险等级一律按当前账号的阈值重算（见 app/services/risk_view.py）：
     # RiskEvent.risk_level 是创建者视角的落库值，不能代表其他账号看到的等级。
     # 处置状态（pending/processing/resolved）与阈值无关，沿用落库值。
     # ------------------------------------------------------------------
@@ -63,7 +63,8 @@ class SituationSnapshotService(ServiceBase):
     ):
         """平台总览态势（需求 0.2 / 6.8.3 / 6.11）。
 
-        SUPER_ADMIN 看**平台全量统计**（系统统计信息，不含明细，见 Authz.scope_event_stats）。
+        SUPER_ADMIN 看平台全量统计（系统统计信息，不含明细，见
+        Authz.scope_event_stats）。
         统计口径：等级按 current_user 自己的阈值判定 —— 同一批事实，
         不同管理员按各自阈值会看到不同的高/中/低分布，这是预期行为。
         """
@@ -81,7 +82,7 @@ class SituationSnapshotService(ServiceBase):
         """场景态势（动态统计 + 最近风险事件），供场景大屏使用。
 
         返回 {scenario_id, stats, recent_events}：
-        - stats：按**当前账号**阈值重算的等级计数 + 落库的处置状态计数；
+        - stats：按当前账号阈值重算的等级计数 + 落库的处置状态计数；
         - recent_events：最近 20 条真实风险事件（按发生时间倒序），
           risk_level 同样按当前账号阈值重算，不直接透传创建者视角的落库值。
         """
@@ -116,11 +117,13 @@ class SituationSnapshotService(ServiceBase):
         """生成场景态势快照并落库（管理级角色；SUPER_ADMIN 统计该场景全量事件）。
 
         注意：SituationSnapshot 表只有 pending_count/resolved_count 列（无
-        processing_count），"处理中"口径仅出现在动态统计（compute_*）中，不落库。
+        processing_count），
+        "处理中"口径仅出现在动态统计（compute_*）中，不落库。
 
-        ⚠️ 视角说明：快照把等级计数**落库**，因此它固化的是**生成者当时的视角**。
+        ⚠️ 视角说明：快照把等级计数落库，因此它固化的是生成者当时的视角。
         阈值改为跟随账号后，「另一个账号查这张快照」得到的不是他自己的视图。
-        实时展示请走 compute_user_stats / compute_scene_stats / get_scene_situation
+        实时展示请走 compute_user_stats / compute_scene_stats /
+        get_scene_situation
         （这三者都按调用者阈值重算）。此处按生成者阈值计算并留痕。
         """
         self.require_scenario_admin_of(current_user, scenario_id)

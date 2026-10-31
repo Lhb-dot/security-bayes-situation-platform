@@ -1,7 +1,8 @@
 """数据集相关请求模型（/api/v1/datasets）。
 
 对应 Service：DatasetService（backend/app/services/dataset_service.py）。
-fields_schema 结构（需求 3.1）：字段列表，每项含 name / type / role(feature|label) / enum_values(可选)。
+fields_schema 结构（需求 3.1）：字段列表，每项含 name / type /
+role(feature|label) / enum_values(可选)。
 """
 from typing import Any, Dict, List, Optional
 
@@ -62,7 +63,8 @@ class DatasetRevisionRequest(BaseModel):
 class DatasetAnalysisRequest(BaseModel):
     """数据集 AI 解析请求。
 
-    regenerate=false 且已保存结果仍然有效时直接下发缓存；true 时忽略缓存重新解析。
+    regenerate=false 且已保存结果仍然有效时直接下发缓存；true
+    时忽略缓存重新解析。
     """
 
     regenerate: bool = Field(False, description="是否忽略已保存结果，重新调用 AI 解析")

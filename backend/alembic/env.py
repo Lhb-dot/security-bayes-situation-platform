@@ -29,16 +29,11 @@ config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
+    """以离线模式跑迁移。
 
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
+    这种模式下 context 只配一个 URL、不建 Engine（其实给 Engine 也行）。
+    既然跳过了 Engine 创建，连 DBAPI 都不需要有。这里调 context.execute() 会把
+    SQL 字符串直接打到脚本输出。
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -53,11 +48,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
+    """以在线模式跑迁移。
 
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
+    这种模式要建 Engine，并把连接关联到 context。
     """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),

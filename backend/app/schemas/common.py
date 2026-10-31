@@ -10,7 +10,8 @@
 
 使用示例：
     from app.schemas.common import ok, fail
-    return ok(data=user_dict)                # {"code": 0, "data": ..., "message": "success"}
+    return ok(data=user_dict)                # {"code": 0, "data": ...,
+    "message": "success"}
     return fail(code=400, message="缺少必填字段: username")
 """
 from typing import Any

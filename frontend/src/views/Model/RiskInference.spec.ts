@@ -57,7 +57,7 @@ const choose = async (select: HTMLSelectElement, value: string) => {
 const mount = async () => { app.mount(host); await flush(); };
 const chooseDataset = (id = '1') => choose(selects()[0], id);
 const chooseModel = (id: string) => choose(selects()[1], id);
-/** 切到「样本库」标签：样本表与分页条只在「样本库」这一类里渲染 */
+// 切到「样本库」标签：样本表与分页条只在「样本库」这一类里渲染
 const showSampleTab = async () => {
   host.querySelectorAll<HTMLButtonElement>('.source-tab')[1].click();
   await flush();

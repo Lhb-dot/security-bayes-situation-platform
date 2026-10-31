@@ -1,12 +1,14 @@
 """处置记录 Service（HandlingRecord）。
 
-对应需求文档章节：4（风险结果统一为 RiskEvent 后跟进处置）、5.2（处置状态流转）、
+对应需求文档章节：4（风险结果统一为 RiskEvent 后跟进处置）、
+5.2（处置状态流转）、
 6.5.2（权限矩阵）。
 
 模型：app.models.handling_record.HandlingRecord。
 
 权限要点：普通用户仅能记录/查看与本人风险事件相关的处置；管理员可查看全部。
-处置操作 action 值域：ASSIGN / UPDATE_STATUS / ADD_COMMENT（数据库设计文档 v2 2.8）。
+处置操作 action 值域：ASSIGN / UPDATE_STATUS /
+ADD_COMMENT（数据库设计文档 v2 2.8）。
 """
 from datetime import datetime, timezone
 
@@ -37,7 +39,7 @@ class HandlingRecordService(ServiceBase):
         return self.authz.can_view_event(current_user, event)
 
     def _can_access_record(self, current_user, record: HandlingRecord) -> bool:
-        """Check the parent event before exposing a handling/audit record."""
+        """先查父事件，再决定这条处理/审计记录能不能露出去。"""
         event = record.risk_event or self.db.get(RiskEvent, record.risk_event_id)
         return bool(event) and self._can_access_event(current_user, event)
 
@@ -56,11 +58,15 @@ class HandlingRecordService(ServiceBase):
     ):
         """登记处置操作（USER 仅本人事件；ADMIN 全部）。
 
-        action=UPDATE_STATUS 时必须提供 status_after（与 risk_event 状态流转配合）。
+        action=UPDATE_STATUS 时必须提供 status_after（与
+        risk_event 状态流转配合）。
 
-        ⚠️ 审计完整性：``status_before`` / ``status_after`` 两个入参**一律以事件真实状态为准**，
-        不接受调用方自填 —— 处置记录是审计凭据，若允许调用方写入任意状态，一条 ASSIGN
-        记录就能被伪造成「已处置 → 待处置」，把状态历史洗白。参数保留只为兼容签名。
+        ⚠️ 审计完整性：`status_before` / `status_after`
+        两个入参一律以事件真实状态为准，
+        不接受调用方自填 —— 处置记录是审计凭据，
+        若允许调用方写入任意状态，一条 ASSIGN
+        记录就能被伪造成「已处置 -> 待处置」，把状态历史洗白。
+        参数保留只为兼容签名。
         """
         self.require_login(current_user)
         event = self.db.get(RiskEvent, risk_event_id)
@@ -114,7 +120,7 @@ class HandlingRecordService(ServiceBase):
         page: int = 1,
         page_size: int = 10,
     ):
-        """处置记录列表。普通用户仅可见**本人风险事件**上的处置记录。"""
+        """处置记录列表。普通用户仅可见本人风险事件上的处置记录。"""
         self.require_login(current_user)
         # 处置记录跟随父事件可见性：join 到 RiskEvent 后套用同一套事件范围条件。
         stmt = select(HandlingRecord).join(

@@ -3,7 +3,7 @@
 对应《数据库设计文档v2》2.3。
 
 迭代模型（见 app/services/dataset_iteration.py）：
-- 每一行 = 一个**版本快照**；`version` 在 logical_id 内单调递增。
+- 每一行 = 一个版本快照；`version` 在 logical_id 内单调递增。
 - `change_type` 记录这一版是怎么来的（初次登记 / 字段变更 / 追加样本 …），
   由 DatasetService 在生成版本时写入，原地迭代不会改写它。
 - `base_version_id` 记录血缘：本版从哪一版迭代而来，便于回溯「加了什么」。
@@ -65,7 +65,7 @@ class Dataset(Base):
     # 按数据集缓存最近一次解析结果，打开弹窗时直接读，不重复调用 AI。
     ai_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # ========== 迭代元数据（见 app/services/dataset_iteration.py） ==========
-    # 本版本的产生方式；历史行由迁移回填（v1 → create，其余 → schema_change）。
+    # 本版本的产生方式；历史行由迁移回填（v1 -> create，其余 -> schema_change）。
     change_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # 血缘：本版从哪一版迭代而来；初次登记为 NULL。
     base_version_id: Mapped[int | None] = mapped_column(

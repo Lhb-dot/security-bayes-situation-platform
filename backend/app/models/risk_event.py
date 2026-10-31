@@ -1,7 +1,9 @@
 """风险事件表 risk_event —— 由推理结果生成的风险事件。
 
-对应《数据库设计文档v2》2.7。冗余字段（original_label / risk_type / risk_level /
-risk_score / dataset_version / raw_features）来源于主表，仅为查询展示与跨场景统计，
+对应《数据库设计文档v2》2.7。冗余字段（original_label / risk_type / risk_level
+/
+risk_score / dataset_version / raw_features）来源于主表，
+仅为查询展示与跨场景统计，
 写入时与来源保持一致，避免联表。
 """
 from datetime import datetime

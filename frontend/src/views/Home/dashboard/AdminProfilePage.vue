@@ -1,3 +1,12 @@
+<template>
+  <ScenarioScreenDashboard
+    :data="profile" :runtime="runtime" :scenarios="scenarios" :members="members"
+    :role="userStore.currentUser?.role ?? null" :user-name="userStore.currentUser?.display_name || userStore.currentUser?.username || ''"
+    :loading="loading" :error="statusError" :runtime-error="runtimeError" :member-error="memberError"
+    :logging-out="loggingOut" :updated-at="updatedAt"
+    @refresh="load" @navigate="navigate" @logout="logout"
+  />
+</template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -112,13 +121,3 @@ async function logout() {
   }
 }
 </script>
-
-<template>
-  <ScenarioScreenDashboard
-    :data="profile" :runtime="runtime" :scenarios="scenarios" :members="members"
-    :role="userStore.currentUser?.role ?? null" :user-name="userStore.currentUser?.display_name || userStore.currentUser?.username || ''"
-    :loading="loading" :error="statusError" :runtime-error="runtimeError" :member-error="memberError"
-    :logging-out="loggingOut" :updated-at="updatedAt"
-    @refresh="load" @navigate="navigate" @logout="logout"
-  />
-</template>

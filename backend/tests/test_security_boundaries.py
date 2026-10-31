@@ -224,7 +224,7 @@ class RouteDependencyTests(unittest.TestCase):
             def rollback(self):
                 pass
 
-        # 超管只能看自己训练的模型：该模型 trained_by 不是本人 → 403。
+        # 超管只能看自己训练的模型：该模型 trained_by 不是本人 -> 403。
         model = SimpleNamespace(id=5, scenario_id=2, trained_by=99, status="DRAFT", dataset_id=1)
         payload = ExplanationStreamRequest(model_version_id=5)
         response = stream_model_explanation(

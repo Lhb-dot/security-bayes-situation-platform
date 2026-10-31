@@ -1,4 +1,4 @@
-"""Unified streaming explanation API."""
+"""统一的流式解释接口。"""
 import json
 
 from fastapi import APIRouter, Depends

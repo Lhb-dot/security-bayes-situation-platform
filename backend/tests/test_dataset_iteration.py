@@ -5,7 +5,8 @@
 2. 追加样本依赖的文件读写工具（ARFF / CSV 合并往返）；
 3. DatasetService._revise 的产物 —— 原地更新 vs 新建版本。
 
-不依赖真实数据库：用 FakeDb 承载 _revise 需要的 get / scalar / add / flush / commit。
+不依赖真实数据库：用 FakeDb 承载 _revise 需要的 get / scalar / add / flush /
+commit。
 """
 import sys
 import tempfile

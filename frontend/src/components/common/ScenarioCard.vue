@@ -1,50 +1,3 @@
-<script setup lang="ts">
-/**
- * ScenarioCard - 场景卡片组件
- *
- * 展示场景名称、描述、风险等级，以及后端真实聚合指标：
- * 有效数据集数（去重口径）/ 已发布模型数 / 有效样本量。
- * 点击后跳转至对应场景大屏。
- */
-import { computed } from 'vue';
-import type { Scenario } from '@/types/security';
-import RiskLevelTag from './RiskLevelTag.vue';
-
-const props = defineProps<{
-  /** 场景对象（统计字段来自 GET /scenarios/overview） */
-  scenario: Scenario;
-}>();
-
-defineEmits<{
-  /** 点击卡片进入场景大屏 */
-  click: [scenarioId: string];
-}>();
-
-/** 场景中文名映射（当 name 字段未提供时回退使用） */
-const scenarioNameMap: Record<string, string> = {
-  network_security: '网络安全态势感知',
-  power_system: '电力系统风险态势感知',
-  flightdeck_operation: '舰面调度态势',
-};
-
-/** 已发布模型数（新数据源带该字段；缺省回退到 model_count） */
-const publishedModelCount = computed(
-  () => props.scenario.published_model_count ?? props.scenario.model_count ?? 0
-);
-
-/** 有效样本量（千分位展示，便于阅读 31453 → 31,453） */
-const sampleCountText = computed(() => {
-  const value = props.scenario.sample_count;
-  if (value == null) return '—';
-  return value.toLocaleString('zh-CN');
-});
-
-/** 数据集类型图标 */
-const datasetIcon = '📊';
-const modelIcon = '🧠';
-const sampleIcon = '📈';
-</script>
-
 <template>
   <div
     class="scenario-card card"
@@ -109,7 +62,51 @@ const sampleIcon = '📈';
     </div>
   </div>
 </template>
+<script setup lang="ts">
+/**
+ * ScenarioCard - 场景卡片组件
+ * 展示场景名称、描述、风险等级，以及后端真实聚合指标：
+ * 有效数据集数（去重口径）/ 已发布模型数 / 有效样本量。
+ * 点击后跳转至对应场景大屏。
+ */
+import { computed } from 'vue';
+import type { Scenario } from '@/types/security';
+import RiskLevelTag from './RiskLevelTag.vue';
 
+const props = defineProps<{
+  // 场景对象（统计字段来自 GET /scenarios/overview）
+  scenario: Scenario;
+}>();
+
+defineEmits<{
+  // 点击卡片进入场景大屏
+  click: [scenarioId: string];
+}>();
+
+// 场景中文名映射（当 name 字段未提供时回退使用）
+const scenarioNameMap: Record<string, string> = {
+  network_security: '网络安全态势感知',
+  power_system: '电力系统风险态势感知',
+  flightdeck_operation: '舰面调度态势',
+};
+
+// 已发布模型数（新数据源带该字段；缺省回退到 model_count）
+const publishedModelCount = computed(
+  () => props.scenario.published_model_count ?? props.scenario.model_count ?? 0
+);
+
+// 有效样本量（千分位展示，便于阅读 31453 → 31,453）
+const sampleCountText = computed(() => {
+  const value = props.scenario.sample_count;
+  if (value == null) return '—';
+  return value.toLocaleString('zh-CN');
+});
+
+// 数据集类型图标
+const datasetIcon = '📊';
+const modelIcon = '🧠';
+const sampleIcon = '📈';
+</script>
 <style scoped>
 .scenario-card {
   padding: 0;

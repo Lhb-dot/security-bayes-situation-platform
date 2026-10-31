@@ -1,9 +1,11 @@
 """场景 Service（Scenario）。
 
-对应需求文档章节：1（三个/四个场景及使用约束）、6.2（场景管理 P0）、6.5.2（权限矩阵）。
+对应需求文档章节：1（三个/四个场景及使用约束）、6.2（场景管理 P0）
+、6.5.2（权限矩阵）。
 
 模型：app.models.scenario.Scenario。
-需求 1.1：场景编码是固定数据字典（4 个场景），创建时用 SCENARIO_CODES 硬编码校验。
+需求 1.1：场景编码是固定数据字典（4 个场景），创建时用
+SCENARIO_CODES 硬编码校验。
 权限要点（需求 6.5.2）：查看场景列表/切换场景所有登录用户允许；增删改仅 ADMIN。
 """
 import os
@@ -40,7 +42,7 @@ class ScenarioService(ServiceBase):
     """场景管理：查看（所有登录用户）/ 维护（仅 ADMIN）。"""
 
     # ------------------------------------------------------------------
-    # 查询（需求 6.5.2：查看场景列表及状态、切换场景 → 允许/允许）
+    # 查询（需求 6.5.2：查看场景列表及状态、切换场景 -> 允许/允许）
     # ------------------------------------------------------------------
     @service_call
     def get_list(self, current_user: Optional[AppUser]):
@@ -58,7 +60,8 @@ class ScenarioService(ServiceBase):
     def get(self, current_user: Optional[AppUser], scenario_id: int):
         """场景详情。
 
-        SUPER_ADMIN 可查看全部场景；场景角色仅可查看绑定场景（需求 0.2 / 1.1.6）。
+        SUPER_ADMIN 可查看全部场景；场景角色仅可查看绑定场景（需求 0.2 /
+        1.1.6）。
         """
         self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)
@@ -78,7 +81,8 @@ class ScenarioService(ServiceBase):
 
         读取指定场景数据集 ARFF 的前 sample_rows 行，按场景分发计算
         （网络端口聚合/电力设备健康度/地质因子合成/航母轨迹特征）。
-        权限：登录用户仅能访问有权场景；SUPER_ADMIN 仅可读 platform 数据集内容。
+        权限：登录用户仅能访问有权场景；SUPER_ADMIN 仅可读
+        platform 数据集内容。
         """
         self.require_scenario_access(current_user, scenario_id)
         scenario = self.db.get(Scenario, scenario_id)

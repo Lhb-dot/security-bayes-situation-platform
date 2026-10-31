@@ -18,7 +18,7 @@ const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-/** 清单由数据库生成，断言跟着清单走，避免把口令写死在用例里。 */
+// 清单由数据库生成，断言跟着清单走，避免把口令写死在用例里。
 const accountsOf = (code: string, role: string): string[] => {
   const scenario = DEV_QUICK_SCENARIOS.find((item) => item.code === code);
   return (scenario?.accounts ?? []).filter((a) => a.role === role).map((a) => a.username);
@@ -34,14 +34,14 @@ const mount = (): void => {
   app.mount(host);
 };
 
-/** 两个下拉按出现顺序取。 */
+// 两个下拉按出现顺序取。
 const selects = (): HTMLSelectElement[] => Array.from(host.querySelectorAll('select'));
 const choose = async (el: HTMLSelectElement, value: string): Promise<void> => {
   el.value = value;
   el.dispatchEvent(new Event('change'));
   await flush();
 };
-/** 下拉下方「符合要求的账号」列表（不含第一行的超级管理员）。 */
+// 下拉下方「符合要求的账号」列表（不含第一行的超级管理员）。
 const listNames = (): string[] =>
   Array.from(host.querySelectorAll('.quick-login__accounts .quick-login__account-name')).map(
     (el) => el.textContent ?? '',

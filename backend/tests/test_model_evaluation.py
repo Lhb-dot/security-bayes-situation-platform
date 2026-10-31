@@ -123,7 +123,7 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertEqual(next(data for event, data in events if event == "error")["reason_code"], "not_configured")
         self.assertEqual(events[-1][1]["source"], "fallback")
         self.assertEqual((model.ai_evaluation or {}).get("management", {}).get("source"), "fallback")
-        self.assertEqual(db.commits, 2)  # model attributes + evaluation; no inference record is touched
+        self.assertEqual(db.commits, 2)  # 只动模型属性与评价，不碰任何推理记录
 
     def test_cached_stream_does_not_call_ai_again(self):
         model = make_model()

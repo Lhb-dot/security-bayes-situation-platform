@@ -1,26 +1,3 @@
-<script setup lang="ts">
-/**
- * DashShell —— 首页看板外壳：加载/错误/空态 + 顶部标题区 + 内容插槽。
- * 9 个首页共用，保证视觉与交互一致。
- */
-import { SHOW_DASH_HINTS } from './dashHints';
-
-withDefaults(
-  defineProps<{
-    eyebrow: string;
-    title: string;
-    subtitle?: string;
-    badge?: string;
-    badgeTone?: 'success' | 'info';
-    loading?: boolean;
-    error?: string;
-  }>(),
-  { subtitle: '', badge: '', badgeTone: 'success', loading: false, error: '' },
-);
-
-const emit = defineEmits<{ retry: [] }>();
-</script>
-
 <template>
   <div class="dash-page">
     <div class="d-wrap">
@@ -45,3 +22,25 @@ const emit = defineEmits<{ retry: [] }>();
     </div>
   </div>
 </template>
+<script setup lang="ts">
+/**
+ * DashShell，首页看板外壳：加载/错误/空态 + 顶部标题区 + 内容插槽。
+ * 9 个首页共用，保证视觉与交互一致。
+ */
+import { SHOW_DASH_HINTS } from './dashHints';
+
+withDefaults(
+  defineProps<{
+    eyebrow: string;
+    title: string;
+    subtitle?: string;
+    badge?: string;
+    badgeTone?: 'success' | 'info';
+    loading?: boolean;
+    error?: string;
+  }>(),
+  { subtitle: '', badge: '', badgeTone: 'success', loading: false, error: '' },
+);
+
+const emit = defineEmits<{ retry: [] }>();
+</script>

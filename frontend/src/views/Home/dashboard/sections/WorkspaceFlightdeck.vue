@@ -1,49 +1,5 @@
-<script setup lang="ts">
-/**
- * WorkspaceFlightdeck —— 舰面调度 · 我的工作台（场景用户首页）。
- * 字段口径见 docs/首页字段口径说明.md。
- * 口径：散点图为后端用双机平均航向角映射的占位坐标，非真实甲板位置（图内已标注）。
- */
-import type { FlightdeckWorkspace } from '@/api/dashboardApi';
-import DashKpis from '@/components/dashboard/DashKpis.vue';
-import DashCard from '@/components/dashboard/DashCard.vue';
-import DashColumns from '@/components/dashboard/DashColumns.vue';
-import DashScatter from '@/components/dashboard/DashScatter.vue';
-import DashRadar from '@/components/dashboard/DashRadar.vue';
-import DashLine from '@/components/dashboard/DashLine.vue';
-import DashEvents from '@/components/dashboard/DashEvents.vue';
-import { fmtDate, fmtNum } from '@/components/dashboard/dashFormat';
-
-const props = defineProps<{ data: FlightdeckWorkspace }>();
-
-const radarSeries = () => [
-  {
-    name: '1 号机',
-    color: '#5ba6ff',
-    values: [
-      props.data.direction_stats[0]?.stats?.mean ?? null,
-      props.data.direction_stats[0]?.stats?.max ?? null,
-      props.data.direction_stats[0]?.stats?.min ?? null,
-      props.data.direction_stats[0]?.stats?.std ?? null,
-    ],
-  },
-  {
-    name: '2 号机',
-    color: '#a78bfa',
-    values: [
-      props.data.direction_stats[1]?.stats?.mean ?? null,
-      props.data.direction_stats[1]?.stats?.max ?? null,
-      props.data.direction_stats[1]?.stats?.min ?? null,
-      props.data.direction_stats[1]?.stats?.std ?? null,
-    ],
-  },
-];
-</script>
-
 <template>
-  <!-- KPI：后两项的值已是 fmtNum 格式化结果，必须带 raw —— 否则 DashKpis 会再过一遍
-       fmtInt（fmtInt("0.87") → Number("0.87") → Math.round → "1"，小数被吞掉，
-       0.87 的风险分会显示成 100%）。 -->
+  <!-- KPI：后两项的值已是 fmtNum 格式化结果 -->
   <DashKpis
     :items="[
       { label: '我的待处置告警', value: data.summary.pending, unit: '条', tone: 'danger', sub: '待处置' },
@@ -90,3 +46,44 @@ const radarSeries = () => [
     <DashEvents :items="data.recent_events" />
   </DashCard>
 </template>
+<script setup lang="ts">
+/**
+ * WorkspaceFlightdeck，舰面调度 · 我的工作台（场景用户首页）。
+ * 字段口径见 docs/首页字段口径说明.md。
+ * 口径：散点图为后端用双机平均航向角映射的占位坐标，非真实甲板位置（图内已标注）。
+ */
+import type { FlightdeckWorkspace } from '@/api/dashboardApi';
+import DashKpis from '@/components/dashboard/DashKpis.vue';
+import DashCard from '@/components/dashboard/DashCard.vue';
+import DashColumns from '@/components/dashboard/DashColumns.vue';
+import DashScatter from '@/components/dashboard/DashScatter.vue';
+import DashRadar from '@/components/dashboard/DashRadar.vue';
+import DashLine from '@/components/dashboard/DashLine.vue';
+import DashEvents from '@/components/dashboard/DashEvents.vue';
+import { fmtDate, fmtNum } from '@/components/dashboard/dashFormat';
+
+const props = defineProps<{ data: FlightdeckWorkspace }>();
+
+const radarSeries = () => [
+  {
+    name: '1 号机',
+    color: '#5ba6ff',
+    values: [
+      props.data.direction_stats[0]?.stats?.mean ?? null,
+      props.data.direction_stats[0]?.stats?.max ?? null,
+      props.data.direction_stats[0]?.stats?.min ?? null,
+      props.data.direction_stats[0]?.stats?.std ?? null,
+    ],
+  },
+  {
+    name: '2 号机',
+    color: '#a78bfa',
+    values: [
+      props.data.direction_stats[1]?.stats?.mean ?? null,
+      props.data.direction_stats[1]?.stats?.max ?? null,
+      props.data.direction_stats[1]?.stats?.min ?? null,
+      props.data.direction_stats[1]?.stats?.std ?? null,
+    ],
+  },
+];
+</script>

@@ -1,54 +1,34 @@
-"""报告导出：把报告正文（Markdown）转成 Markdown / HTML / PDF 三种格式的文件。
+"""报告导出：把报告正文（Markdown）转成 Markdown / HTML / PDF 三种文件。
 
-依赖与选型
-----------
-- **md → html**：markdown-it-py（`markdown-it-py`，纯 Python，无系统依赖）。
-  用 CommonMark 预设而不是 Python-Markdown：报告正文里子项是**缩进 2 空格**的
-  （`_render_content` 的写法），CommonMark 认为这就是嵌套列表，Python-Markdown 却
-  要求 4 空格、会把父子项拍平成同级。前端预览用的是 `marked`（同为 CommonMark 系），
-  所以这里也走 CommonMark 才能和界面上看到的结构一致。
-  另外把 `html` 关掉：正文里夹带的标签会被转义成文本，而不是当 HTML 执行。
-- **html → pdf**：Playwright + Chromium 的 `page.pdf()`。
-  选它而不是 weasyprint / xhtml2pdf 的原因：weasyprint 依赖 GTK/Pango 等原生库，
-  Windows 上装不动、和 Linux 服务器不一致；xhtml2pdf 只支持 CSS 子集、中文还要自己塞字体。
-  Chromium 用系统字体（中文开箱可用）、CSS 支持完整，且 md→html 与 html→pdf
-  共用同一份 HTML，两种格式产物天然一致。
+md->html 用 markdown-it-py 的 CommonMark 预设。正文子项缩进 2 空格，
+CommonMark 认作嵌套列表，Python-Markdown 却要 4 空格、会把父子项拍平；
+前端预览用 marked 同属 CommonMark 系，这里跟着走，界面和导出文件的结构才一致。
+同时关掉 html 透传，正文里夹带的标签按文本转义。
 
-部署注意
---------
-服务器上需要：
-    pip install -r requirements.txt
-    playwright install chromium          # 首次需下载浏览器内核
-Debian/Ubuntu 若缺中文字体，再装 `fonts-noto-cjk`，否则 PDF 里中文会变方块。
+html->pdf 用 Playwright + Chromium 的 page.pdf()。weasyprint 依赖 GTK/Pango，
+Windows 装不动、和 Linux 服务器不一致；xhtml2pdf 只支持 CSS 子集、
+中文还得自己塞字体。
+Chromium 用系统字体、CSS 支持完整，且 md->html 与 html->pdf 共用同一份 HTML，
+两种格式产物天然一致。
 
-线程模型
---------
-Playwright 的同步 API 绑定在「创建它的那个线程」上，而 FastAPI 的同步端点跑在
-threadpool 里（同一端点的多次请求可能落在不同线程），所以**不能让请求线程直接持有
-浏览器**。这里用一个常驻后台线程独占 Chromium，请求方把 HTML 丢进队列、等结果，
-既避开线程亲和性问题，也让浏览器只启动一次。
+Playwright 同步 API 绑在创建它的线程上，而同步端点跑在 threadpool 里，
+不能让请求线程直接持有浏览器。这里用一个常驻后台线程独占 Chromium，
+请求方投队列等结果，既避开线程亲和性问题，也让浏览器只启动一次。
+浏览器常驻约 280 MB（217 MB 内存 + 65 MB swap），而 PDF 导出是低频操作，
+渲染线程在队列空闲 IDLE_EXIT_SECONDS 后主动退出，下次导出重新拉起，
+代价是空闲后首次导出多 1-2 秒冷启动；PDF_IDLE_EXIT_SECONDS
+可覆盖（置 0 永不退出）。
 
-空闲退出
---------
-浏览器常驻约 280 MB（217 MB 内存 + 65 MB swap），而 PDF 导出是低频操作（历史上
-只被用过个位数次）。所以渲染线程在队列空闲 IDLE_EXIT_SECONDS 后主动退出并关闭浏览器，
-下一次导出再重新拉起 —— 代价是空闲后的首次导出多约 1–2 秒冷启动。
-环境变量 PDF_IDLE_EXIT_SECONDS 可覆盖（置 0 表示永不退出，即改动前的行为）。
+「报告详情」里的图表是前端用 report_data 现画的，report.content
+只有文字和表格，
+导出的文件里原本一张图都没有。这里用纯 Python 把 report_data 的分布 / 概率数据
+生成 SVG 塞进导出的 HTML，PDF 走同一份 HTML 渲染，两种格式的图一致。
+不用 ECharts 是因为导出的 HTML 要能离线打开，引 CDN 在断网 / 内网会变空白，
+PDF 由服务端 Chromium 渲染还要求服务器出网，多一个失败点；SVG 在 PDF 里是矢量，
+缩放不糊，比位图截图更适合打印。markdown 格式仍是纯文本，这是有意保留的差异。
 
-图表
-----
-界面上「报告详情」里的图表是前端拿 `report_data` 用 ECharts 现画的，而 `report.content`
-（Markdown 正文）里只有文字和表格，所以导出文件里一张图都没有。
-这里补上：把 `report_data` 里的分布/概率数据用**纯 Python 生成 SVG** 塞进导出的 HTML，
-PDF 走同一份 HTML 渲染，于是两种格式的图一致。
-
-选 SVG 手写而不是在导出页里引 ECharts，原因是：
-- 导出的 HTML 是给人下载后**离线打开**的，引 CDN 会在断网/内网环境里变成空白；
-- PDF 由服务端 Chromium 渲染，引 CDN 还要求服务器能出网，多一个失败点；
-- SVG 在 PDF 里是矢量，缩放不糊，比位图截图更适合打印。
-
-markdown 格式仍然是纯文本（Markdown 本身没有可靠的图表表达方式，嵌 base64 图片
-会让文件不可读），这是有意保留的差异。
+部署要先 pip install -r requirements.txt、playwright install chromium；
+Debian/Ubuntu 缺中文字体时装 fonts-noto-cjk，否则 PDF 里中文变方块。
 """
 from __future__ import annotations
 
@@ -70,10 +50,10 @@ from app.utils.common import get_logger
 # 只是统一走项目的 logger 工厂，日志前缀口径与其它 service 一致。
 logger = get_logger("report_export")
 
-#: 单次 PDF 渲染的等待上限（秒）。冷启动 + 多页渲染实测 1 秒出头，留足余量。
+# 单次 PDF 渲染的等待上限（秒）。冷启动 + 多页渲染实测 1 秒出头，留足余量。
 PDF_TIMEOUT_SECONDS = 120
 
-#: 渲染线程空闲多久后退出并释放浏览器（秒）。0 = 常驻不退出。
+# 渲染线程空闲多久后退出并释放浏览器（秒）。0 = 常驻不退出。
 IDLE_EXIT_SECONDS = 600
 
 EXTENSIONS = {"markdown": "md", "html": "html", "pdf": "pdf"}
@@ -181,7 +161,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-#: Chromium 的页脚模板：字号必须显式写在行内，否则会掉到极小
+# Chromium 的页脚模板：字号必须显式写在行内，否则会掉到极小
 _FOOTER_TEMPLATE = (
     '<div style="width:100%;font-size:9px;color:#8896ab;text-align:center;'
     'font-family:sans-serif;">第 <span class="pageNumber"></span> / '
@@ -199,15 +179,15 @@ class ExportFile:
     media_type: str
 
 
-#: CommonMark + 表格；html=False 表示正文里的原始标签一律转义成文本
+# CommonMark + 表格；html=False 表示正文里的原始标签一律转义成文本
 _MD = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False}).enable(
     "table"
 )
 
 # ---------------------------------------------------------------------------
-# 图表：report_data → SVG
+# 图表：report_data -> SVG
 # ---------------------------------------------------------------------------
-#: 与报告正文同一套浅色「蓝墨稿纸」配色
+# 与报告正文同一套浅色「蓝墨稿纸」配色
 _BAR_FILL = "#2f6fb5"
 _PALETTE = [
     "#1f5fa9",
@@ -268,7 +248,7 @@ def _fmt_num(v) -> str:
 
 
 def _fmt_tick(v: float) -> str:
-    """坐标轴刻度：0.25 → 0.25、0.5 → 0.5、1.0 → 1。"""
+    """坐标轴刻度：0.25 -> 0.25、0.5 -> 0.5、1.0 -> 1。"""
     if abs(v - round(v)) < 1e-9:
         return str(int(round(v)))
     if abs(v) < 1:
@@ -561,15 +541,15 @@ def _grouped_bar_svg(
     return "".join(parts)
 
 
-#: 图表插到哪一段之后：锚点是「下一节的标题」，插在它之前。
-#: 这两个字符串必须与 report_service._render_content 渲染出的 <h2> 标题逐字一致
-#: （那里直接 import 本模块的常量来拼标题，避免两处各写一份而静默失配）。
+# 图表插到哪一段之后：锚点是「下一节的标题」，插在它之前。
+# 这两个字符串必须与 report_service._render_content 渲染出的 <h2> 标题逐字一致
+# （那里直接 import 本模块的常量来拼标题，避免两处各写一份而静默失配）。
 SECTION_VIEWS = "四、不同视图预测结果与概率"
 SECTION_FEATURES = "五、特征加权条件概率（Top 10）"
 
 
 def build_chart_blocks(report_data) -> list:
-    """report_data → [(锚点标题, 图表 HTML)]。
+    """report_data -> [(锚点标题, 图表 HTML)]。
 
     没有 report_data（旧报告）或数据全空时返回空列表，导出结果与改动前一致。
     """
@@ -665,12 +645,12 @@ def _inject_charts(body: str, report_data) -> str:
 
 
 def markdown_to_html(markdown_text: str) -> str:
-    """Markdown 正文 → HTML 片段。"""
+    """Markdown 正文 -> HTML 片段。"""
     return _MD.render(markdown_text or "")
 
 
 def render_html_document(title: str, markdown_text: str, report_data=None) -> str:
-    """Markdown 正文 → 完整的 HTML 文档（带打印友好样式 + 图表）。"""
+    """Markdown 正文 -> 完整的 HTML 文档（带打印友好样式 + 图表）。"""
     body = _inject_charts(markdown_to_html(markdown_text), report_data)
     # 标题只出现在 <title> 里。原来手写 replace 只挡了 < >，标题里的 & 会原样落进文档
     # （非法 HTML，且与 _xml/_html.escape 的其它转义点口径不一致），统一走 _html.escape。
@@ -713,7 +693,7 @@ class _PdfRenderer:
             return self._thread is not None and self._thread.is_alive()
 
     def _ensure_thread_locked(self) -> None:
-        """确保渲染线程在跑（调用方必须已持 ``_guard``）。"""
+        """确保渲染线程在跑（调用方必须已持 `_guard`）。"""
         if self._thread is not None and self._thread.is_alive():
             return
         self._thread = threading.Thread(
@@ -789,7 +769,8 @@ class _PdfRenderer:
     def _retire(self, exc: BaseException) -> None:
         """线程退出前的收尾：先标记线程已退出，再让排队的请求统一失败。
 
-        两步必须同锁：否则 render() 可能在「排空队列」与「置空 _thread」之间塞进新任务，
+        两步必须同锁：否则 render() 可能在「排空队列」与「置空
+        _thread」之间塞进新任务，
         任务落到一个已经死掉的线程上，调用方白等 120 秒。
         """
         with self._guard:
@@ -820,7 +801,7 @@ _renderer = _PdfRenderer()
 
 
 def html_to_pdf(html: str) -> bytes:
-    """HTML 文档 → PDF 字节流。"""
+    """HTML 文档 -> PDF 字节流。"""
     return _renderer.render(html)
 
 
@@ -849,7 +830,8 @@ def build_export(
 ) -> ExportFile:
     """按目标格式产出可下载文件。
 
-    report_data 用于给 html / pdf 补图表（见模块头「图表」一节）；不传或为 None 时
+    report_data 用于给 html / pdf 补图表（见模块头「图表」一节）；不传或为
+    None 时
     产物与改动前完全一致，markdown 格式也始终只用正文。
     """
     if fmt == "markdown":

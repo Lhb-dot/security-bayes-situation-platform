@@ -1,6 +1,6 @@
 import type { DashboardOverview } from '@/api/dashboardApi';
 
-/** 回归测试接口数据，数值刻意与设计预览不同。 */
+// 回归测试接口数据，数值刻意与设计预览不同。
 export const adminOverviewPayload = (): DashboardOverview => ({
   totals: {
     scenario_count: 4, effective_dataset_count: 9, effective_sample_count: 4000,

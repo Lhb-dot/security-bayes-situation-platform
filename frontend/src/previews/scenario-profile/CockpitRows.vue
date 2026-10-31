@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * CockpitRows —— 键值行列表（对应管理员首页的 .model-stat-grid / .user-stats 语族）。
+ * CockpitRows，键值行列表（对应管理员首页的 .model-stat-grid / .user-stats 语族）。
  * columns=2 时两列排布，适合「成员 + 角色」这类短行。
  * value 为 null 渲染「—」：调用方用 null 表达「未取到」，不能写成 0。
  */

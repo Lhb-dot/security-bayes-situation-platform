@@ -1,19 +1,18 @@
-"""report_nl.py — 态势报告自然语言生成（6.10.4：规则+场景模板，LLM 仅 P2 可选润色）。
+"""态势报告自然语言生成（6.10.4：规则 + 场景模板，LLM 仅 P2 可选润色）。
 
-输入统一为 report_data dict（由 report_service._build_report_data 生成），关键键：
-- report_info：报告期 / 数据范围 / 场景 / 涉及算法
-- overview：态势概况（推理总量、风险/正常占比、风险等级、平均风险概率、变化方向）
-- prediction：预测标签分布、类别概率、风险概率区间、低置信度样本数
-- model_analysis：逐模型的多视图预测与一致性
-- feature_analysis：特征加权条件概率（Top-K + 全量）
-- trend / key_events：风险趋势与重点事件
+输入统一为 report_data dict（由 report_service._build_report_data 生成），
+关键键：report_info（报告期 / 数据范围 / 场景 / 涉及算法）、
+overview（态势概况：推理总量、风险与正常占比、风险等级、平均风险概率、
+变化方向）、prediction（预测标签分布、类别概率、风险概率区间、低置信度样本数）
+、model_analysis（逐模型的多视图预测与一致性）、
+feature_analysis（特征加权条件概率，Top-K + 全量）、trend /
+key_events（风险趋势与重点事件）。
 
-规则（6.10.4）：
-1. 每条关键分析必须引用对应数值，不输出无依据的通用文本；
-2. 风险规避指导按场景（network_security / power_system / geological_risk /
-   flightdeck_operation）给出对应建议，含优先级、触发概率/特征、动作、人工复核项；
-3. 样本不足、概率接近阈值、视图分歧、解释缺失时说明不确定性；
-4. LLM（本地 vLLM）仅作为 P2 可选润色，失败/不可达一律回退模板原文。
+规则（6.10.4）：每条关键分析必须引用对应数值，不输出无依据的通用文本；
+风险规避指导按场景（network_security / power_system / geological_risk /
+flightdeck_operation）给出对应建议，含优先级、触发概率或特征、动作、
+人工复核项；样本不足、概率接近阈值、视图分歧、解释缺失时要说明不确定性；
+LLM（本地 vLLM）仅作为 P2 可选润色，失败或不可达一律回退模板原文。
 """
 from __future__ import annotations
 

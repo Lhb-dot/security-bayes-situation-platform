@@ -1,6 +1,5 @@
 /**
- * scenarioStore.ts — 场景列表/详情
- *
+ * 场景列表/详情
  * 数据源：src/api/scenarioApi（真实后端）+ situationApi（真实态势统计）。
  * 后端场景用数字 ID、编码 code；页面沿用 code 作为 scenario_id，详情补充真实统计与近期事件。
  */
@@ -13,12 +12,6 @@ import {
 } from '@/api/scenarioApi';
 import type { Scenario, ScenarioId } from '@/types/security';
 
-/**
- * 场景元数据映射（`GET /scenarios`）。
- *
- * ⚠️ 该接口**不含任何统计字段**，所以这里的 dataset_count / model_count /
- * high_risk_count / risk_score 只能是 0 —— 需要真实指标请用 `fetchScenarioOverview()`。
- */
 function mapScenario(raw: ApiScenario): Scenario {
   return {
     scenario_id: raw.code as ScenarioId,
@@ -54,10 +47,6 @@ export const useScenarioStore = defineStore('scenario', {
         this.loading = false;
       }
     },
-    /**
-     * 场景卡片列表（真实聚合：去重口径数据集数 / 有效样本量 / 已发布模型数 / 风险分）。
-     * 场景中心必须用这个，`fetchScenarioList` 不含统计字段。
-     */
     async fetchScenarioOverview(): Promise<void> {
       this.loading = true;
       try {

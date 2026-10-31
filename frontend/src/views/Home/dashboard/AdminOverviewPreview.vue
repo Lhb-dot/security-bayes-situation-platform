@@ -1,3 +1,6 @@
+<template>
+  <AdminOverviewDashboard :data="previewOverview" preview />
+</template>
 <script setup lang="ts">
 import AdminOverviewDashboard from './AdminOverviewDashboard.vue';
 import type { AdminOverviewData } from './adminOverview';
@@ -15,7 +18,3 @@ const previewOverview: AdminOverviewData = {
   ],
 };
 </script>
-
-<template>
-  <AdminOverviewDashboard :data="previewOverview" preview />
-</template>

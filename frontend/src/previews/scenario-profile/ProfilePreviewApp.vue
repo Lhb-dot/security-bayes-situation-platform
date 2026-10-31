@@ -1,13 +1,9 @@
 <script setup lang="ts">
 /**
- * ProfilePreviewApp —— 四场景画像驾驶舱的**开发预览**入口（不接入路由，不请求后端）。
- *
+ * ProfilePreviewApp，四场景画像驾驶舱的开发预览入口（不接入路由，不请求后端）。
  * 只用于版式验收（1440×900 / 1920×1080 截图、检查重叠与溢出）：
  * 数据全部来自 previewSample.ts 的示例值，页面右下角固定标注「示例数据」。
  * 正式页面 AdminProfilePage 走真实接口，本文件不被其导入。
- *
- * 版式对齐：外层内边距与假顶栏高度刻意与正式页面一致（.app-shell 28px + .new-page-wrap
- * 20px 16px + 顶栏约 97px），这样这里量到的可用高度就等于真实页面里的可用高度。
  */
 import { computed, ref } from 'vue';
 import ProfileCockpitShell from './ProfileCockpitShell.vue';

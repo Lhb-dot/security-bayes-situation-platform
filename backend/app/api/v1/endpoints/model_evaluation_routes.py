@@ -1,4 +1,4 @@
-"""AI evaluation endpoints for model versions, independent of inference."""
+"""模型版本的 AI 评价接口，跟推理流程互不依赖。"""
 import json
 
 from fastapi import APIRouter, Depends

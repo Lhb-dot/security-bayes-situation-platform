@@ -1,6 +1,7 @@
 """风险阈值配置请求模型（/api/v1/risk-thresholds）。
 
-对应 Service：RiskThresholdService（backend/app/services/risk_threshold_service.py）。
+对应 Service：
+RiskThresholdService（backend/app/services/risk_threshold_service.py）。
 约束：0 <= medium < high <= 1（DB 层 chk_rt_threshold 兜底），最多两位小数。
 """
 from pydantic import BaseModel, Field, field_validator
@@ -15,8 +16,8 @@ def _max_2_decimals(v: float) -> float:
 class RiskThresholdUpdate(BaseModel):
     """更新当前账号在某场景的风险阈值（实时生效并写审计日志）。
 
-    阈值按账号存储（``risk_threshold`` 主键 = user_id + scenario_id），
-    因此任何登录账号都只能改到**自己**那一行；路由用 require_bound_scenario
+    阈值按账号存储（`risk_threshold` 主键 = user_id + scenario_id），
+    因此任何登录账号都只能改到自己那一行；路由用 require_bound_scenario
     限制场景绑定，普通场景用户也在其列。
     """
 

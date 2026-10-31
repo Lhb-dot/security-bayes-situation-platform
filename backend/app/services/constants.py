@@ -4,13 +4,15 @@
 - 6.5.1 角色定义（ADMIN / USER）
 - 6.5.2 权限矩阵
 - 6.7.2 模型版本生命周期状态机
-- 5.3  风险类型映射（数据集 → risk_type）
+- 5.3  风险类型映射（数据集 -> risk_type）
 - 5.4  风险等级生成规则（可配置阈值，此处仅提供兜底值）
 - 6.4.1 分类类别统一约定（风险样本 = 正类，显式映射，禁止自动推断）
 
-⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES / DATASET_LOGICAL_IDS /
+⚠️ 重要：本模块的编码清单（SCENARIO_CODES / ALGORITHM_CODES /
+DATASET_LOGICAL_IDS /
 DATASET_POSITIVE_LABELS / DATASET_RISK_TYPES）是需求文档的
-业务数据字典，作为 Service 层校验基准硬编码。新增场景/数据集/算法时必须同步更新本文档
+业务数据字典，作为 Service 层校验基准硬编码。
+新增场景/数据集/算法时必须同步更新本文档
 与数据库种子数据。
 """
 
@@ -47,7 +49,7 @@ EVALUATION_AUDIENCES = (EVALUATION_AUDIENCE_MANAGEMENT, EVALUATION_AUDIENCE_USER
 
 
 def evaluation_audience(role: str | None) -> str:
-    """三级角色 → AI 产物受众键（management / user）。"""
+    """三级角色 -> AI 产物受众键（management / user）。"""
     return (
         EVALUATION_AUDIENCE_MANAGEMENT
         if role in ADMIN_ROLES
@@ -180,8 +182,8 @@ MODEL_STATUSES = (
 )
 
 # 需求文档 §6.7.2 状态转换规则（Service 层强制校验）
-# TRAINING → FAILED / DRAFT；DRAFT → PUBLISHED / DISABLED；
-# PUBLISHED → DISABLED；DISABLED → PUBLISHED。
+# TRAINING -> FAILED / DRAFT；DRAFT -> PUBLISHED / DISABLED；
+# PUBLISHED -> DISABLED；DISABLED -> PUBLISHED。
 MODEL_STATUS_TRANSITIONS = {
     MODEL_STATUS_TRAINING: (MODEL_STATUS_FAILED, MODEL_STATUS_DRAFT),
     MODEL_STATUS_FAILED: (),
@@ -214,7 +216,7 @@ RISK_EVENT_STATUSES = (
 )
 
 # 处置状态转换规则（需求文档 §5.2：新事件默认"待处置"，后续可变为"处理中"或"已处置"，
-# 即 PENDING 可直接转 PROCESSING 或 RESOLVED；PROCESSING → RESOLVED）
+# 即 PENDING 可直接转 PROCESSING 或 RESOLVED；PROCESSING -> RESOLVED）
 RISK_EVENT_STATUS_TRANSITIONS = {
     RISK_EVENT_STATUS_PENDING: (RISK_EVENT_STATUS_PROCESSING, RISK_EVENT_STATUS_RESOLVED),
     RISK_EVENT_STATUS_PROCESSING: (RISK_EVENT_STATUS_RESOLVED,),
@@ -268,7 +270,7 @@ def is_risk_label(logical_id: str, prediction_label: object) -> bool:
             return False
     return False
 
-# 数据集 → 统一风险类型（需求文档 §5.3）
+# 数据集 -> 统一风险类型（需求文档 §5.3）
 DATASET_RISK_TYPES = {
     "kdd_train_20": RISK_TYPE_NETWORK,
     "nf_unsw_nb15": RISK_TYPE_NETWORK,
@@ -298,6 +300,6 @@ HANDLING_ACTION_MAX_LEN = 32
 # ---------------------------------------------------------------------------
 REPORT_TYPES = ("SCENE_SNAPSHOT", "USER_SNAPSHOT")
 REPORT_FORMATS = ("markdown", "html", "pdf")
-#: 报告数据范围：self=本人个人数据；all=管理员管理范围内的聚合数据（全平台 / 本场景）；已取消“指定单个用户”。
+# 报告数据范围：self=本人个人数据；all=管理员管理范围内的聚合数据（全平台 / 本场景）；已取消“指定单个用户”。
 REPORT_SCOPES = ("self", "all")
 REPORT_TYPE_MAX_LEN = 16

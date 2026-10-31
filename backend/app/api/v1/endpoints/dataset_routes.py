@@ -1,9 +1,11 @@
 """数据集管理路由（/api/v1/datasets）。
 
 对应 Service：DatasetService（backend/app/services/dataset_service.py）。
-权限（需求 2.3/6.5.2）：查看列表与字段预览 → 登录用户（普通用户仅见已发布模型相关数据集）；
-上传新数据集 → 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）；
-修改版本/停用/删除 → 仅 ADMIN。
+权限（需求 2.3/6.5.2）：查看列表与字段预览 ->
+登录用户（普通用户仅见已发布模型相关数据集）；
+上传新数据集 -> 登录用户（SCENARIO_USER 强制上传本人绑定场景的 personal 数据）
+；
+修改版本/停用/删除 -> 仅 ADMIN。
 """
 import json
 
@@ -188,7 +190,8 @@ def revise_dataset(
 ):
     """统一迭代入口：字段变更 / 追加样本 / 元数据变更都走这里。
 
-    产物（原地更新 or 新建版本）由 DatasetService 按 dataset_iteration 策略决定。
+    产物（原地更新 or 新建版本）由 DatasetService 按
+    dataset_iteration 策略决定。
     """
     return unwrap(
         DatasetService(db).revise(

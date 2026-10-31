@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * CockpitStack —— 分段构成条 + 图例（对应管理员首页「事件状态」的 .event-track + .event-status）。
+ * CockpitStack，分段构成条 + 图例（对应管理员首页「事件状态」的 .event-track + .event-status）。
  * 用途：处置状态构成（待处置 / 处理中 / 已处置）这类「几段加起来等于整体」的口径。
  * 分段宽度按合计归一；合计为 0 时整条为空轨道，图例仍如实给出各段 0。
  */

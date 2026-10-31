@@ -18,7 +18,7 @@ _ATTR_RE = re.compile(r"@ATTRIBUTE\s+(.+)$", re.IGNORECASE)
 
 
 def _split_enum_values(content: str):
-    """切分 ARFF 枚举定义 `{a, b, 'c d', ...}` → 值列表（正确处理转义引号与逗号）。"""
+    """切分 ARFF 枚举定义 `{a, b, 'c d', ...}` -> 值列表（正确处理转义引号与逗号）。"""
     values: list[str] = []
     buf = ""
     in_quote = False
@@ -194,10 +194,10 @@ def tally_arff_column(path: str, column_index: int, expected_columns: int):
     所有列的所有值都建成 Python 字符串（实测占页面耗时约 90%）。本函数只切分
     每一行、取出目标列，其余列直接丢弃。
 
-    返回 ``(行数, Counter[原始取值, 出现次数])``。
+    返回 `(行数, Counter[原始取值, 出现次数])`。
 
-    **安全兜底**：一旦发现某行的字段数与 ``expected_columns`` 不一致（引号内含
-    逗号等 read_arff 状态机能处理、csv 无法处理的复杂情形），立即返回 ``None``，
+    安全兜底：一旦发现某行的字段数与 `expected_columns` 不一致（引号内含
+    逗号等 read_arff 状态机能处理、csv 无法处理的复杂情形），立即返回 `None`，
     由调用方回退到 read_arff 全量解析，保证结果与旧实现完全一致。
     """
     counter: Counter[str] = Counter()
@@ -263,9 +263,10 @@ def sync_enum_values(existing: list[dict], new_fields: list[dict]) -> list[dict]
     """把 ARFF 解析出的枚举值域同步进已有 fields_schema（按字段名对齐）。
 
     ARFF 是模型训练时的取值来源，值域必须以它为准 —— 例如老师给的离散化数据集
-    把枚举写成 `{'\\'(-inf-0.021606]\\'',...}`，Weka 认的值是**带引号**的
+    把枚举写成 `{''(-inf-0.021606]'',...}`，Weka 认的值是带引号的
     `'(-inf-0.021606]'`，剥掉引号入库会让样本库取值和值域永远对不上。
-    只在「库内是 enum 且 ARFF 也是 enum」时覆盖，类型冲突原样保留（由调用方提示）。
+    只在「库内是 enum 且 ARFF 也是 enum」时覆盖，
+    类型冲突原样保留（由调用方提示）。
     """
     by_name = {f["name"]: f for f in new_fields}
     out = []

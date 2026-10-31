@@ -54,7 +54,7 @@ const rate = (value: unknown): number | null => {
   return value;
 };
 
-/** 仅映射接口数据，禁止使用演示值补齐缺失统计；未知可选字段显示「—」。 */
+// 仅映射接口数据，禁止使用演示值补齐缺失统计；未知可选字段显示「—」。
 export const mapAdminOverview = (payload: unknown): AdminOverviewData => {
   const response = record(payload);
   const totals = record(response.totals);
@@ -103,7 +103,7 @@ export const mapAdminOverview = (payload: unknown): AdminOverviewData => {
   };
 };
 
-/** 大计数使用中文量级，完整精确值由对应链接的 title / aria-label 保留。 */
+// 大计数使用中文量级，完整精确值由对应链接的 title / aria-label 保留。
 export const formatOverviewCount = (value: number | null): string => {
   if (value === null) return '—';
   const unit = value >= 1e12 ? { divisor: 1e12, suffix: '万亿' }

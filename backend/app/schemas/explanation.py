@@ -1,4 +1,4 @@
-"""Request model for model-result explanations."""
+"""模型结果解释的请求模型。"""
 from typing import Any
 
 from pydantic import BaseModel, Field

@@ -1,18 +1,6 @@
 <script setup lang="ts">
 /**
- * ProfileCockpitShell —— 场景数据画像驾驶舱外壳（四场景共用）。
- *
- * 视觉沿用管理员平台总览：页面头（eyebrow + 场景标题 + 口径 chips + 状态徽标）+
- * KPI 行 + 3×2 面板矩阵。与总览的差别是这里已经处于应用外壳（顶栏 + 导航）之内，
- * 所以不再渲染 masthead，改为把可用高度实测出来。
- *
- * 尺寸口径：
- *   --u = min(可用宽度 / 1352, 可用高度 / 697)，两个方向同时约束，
- *   即 1440×900 下 --u = 1px（设计基准），1920×1080 下按较小的一维放大。
- *   可用高度 = 视口高度 - 本组件顶部偏移 - 50px（.app-shell 下内边距 28 + .new-page-wrap
- *   下内边距 20 + 2px 余量），因此页面不会因为驾驶舱本身而出现纵向滚动。
- *   窄屏（<1024px）不参与缩放：media query 里 --u 固定 1px 并改为自然纵向布局，
- *   字号不缩小、内容不裁切。
+ * 场景数据画像驾驶舱外壳，四场景共用：页面头 + KPI 行 + 3×2 面板矩阵。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { PROFILE_ICONS, type ProfileIconKey } from './profileTokens';
@@ -27,13 +15,11 @@ const props = withDefaults(
   defineProps<{
     title: string;
     eyebrow: string;
-    /** 顶部口径 chips（数据集数 / 样本量 / 风险占比…） */
+    // 顶部口径 chips（数据集数 / 样本量 / 风险占比…）
     meta?: CockpitMetaChip[];
-    /** 状态徽标的悬停说明 */
     statusText?: string;
     loading?: boolean;
     error?: string;
-    /** 数据为空（未配置画像）时展示占位，而不是空网格 */
     empty?: boolean;
     emptyText?: string;
   }>(),
@@ -47,7 +33,7 @@ const wide = ref(true);
 const unit = ref(1);
 const height = ref(697);
 
-/** 设计基准：1440×900 视口下本组件的可用内容盒（见文件头说明） */
+// 设计基准：1440×900 视口下本组件的可用内容盒（见文件头说明）
 const DESIGN_WIDTH = 1352;
 const DESIGN_HEIGHT = 697;
 

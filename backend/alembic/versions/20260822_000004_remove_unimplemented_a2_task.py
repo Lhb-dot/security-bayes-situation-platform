@@ -1,4 +1,4 @@
-"""remove A2WNB task options whose source branches are not implemented"""
+"""移除源码分支未实现的 A2WNB 任务选项"""
 
 import json
 

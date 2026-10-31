@@ -1,7 +1,8 @@
 """报告相关请求模型（/api/v1/reports）。
 
 对应 Service：ReportService（backend/app/services/report_service.py）。
-报告类型：SCENE_SNAPSHOT（态势快照）/ USER_SNAPSHOT（用户快照），与 REPORT_TYPES 一致。
+报告类型：SCENE_SNAPSHOT（态势快照）/ USER_SNAPSHOT（用户快照），
+与 REPORT_TYPES 一致。
 """
 from typing import Literal
 

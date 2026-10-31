@@ -1,4 +1,4 @@
-"""register only parameters wired to the real Java training services"""
+"""只注册真正接到 Java 训练服务的参数"""
 
 import json
 

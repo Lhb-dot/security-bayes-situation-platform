@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * DashRadar —— 雷达图（对应 demo 的「双机方向角对比雷达」），支持多序列。
+ * DashRadar，雷达图（对应 demo 的「双机方向角对比雷达」），支持多序列。
  */
 import { computed } from 'vue';
 
@@ -8,7 +8,7 @@ const props = withDefaults(
   defineProps<{
     axes: string[];
     series: Array<{ name: string; color: string; values: Array<number | null> }>;
-    /** 半径方向最大值；不传则按数据最大值取整 */
+    // 半径方向最大值；不传则按数据最大值取整
     max?: number;
     size?: number;
     unit?: string;
@@ -17,7 +17,7 @@ const props = withDefaults(
 );
 
 const RINGS = 4;
-/** 半径留出标签空间：size/2 - 30，标签再外移 16px，避免文字被 viewBox 裁切 */
+// 半径留出标签空间：size/2 - 30，标签再外移 16px，避免文字被 viewBox 裁切
 const RADIUS = computed(() => props.size / 2 - 30);
 const CENTER = computed(() => props.size / 2);
 

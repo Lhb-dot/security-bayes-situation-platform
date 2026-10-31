@@ -32,12 +32,9 @@ export interface MetricItem {
   trend: number;
 }
 
-// ===================== 多场景架构类型 =====================
 
-/** 四场景标识（V3.0：新增地质风险场景） */
 export type ScenarioId = 'network_security' | 'power_system' | 'geological_risk' | 'flightdeck_operation';
 
-/** 场景定义 */
 export interface Scenario {
   scenario_id: ScenarioId;
   name: string;
@@ -48,14 +45,11 @@ export interface Scenario {
   high_risk_count: number;
   dataset_count: number;
   model_count: number;
-  /** 去重口径有效样本量（GET /scenarios/overview 提供） */
   sample_count?: number;
-  /** 已发布（status=PUBLISHED）模型版本数（GET /scenarios/overview 提供） */
   published_model_count?: number;
   status: 'active' | 'inactive';
 }
 
-/** 全局态势总览 */
 export interface GlobalOverview {
   global_risk_score: number;
   global_risk_level: 'critical' | 'high' | 'medium' | 'low';
@@ -66,7 +60,6 @@ export interface GlobalOverview {
   global_trend: TrendPoint[];
 }
 
-/** 数据集字段定义 */
 export interface DatasetField {
   field_name: string;
   field_type: string;
@@ -74,18 +67,12 @@ export interface DatasetField {
   description: string;
   sample_value: string;
   nullable: boolean;
-  /** 枚举字段值域（需求 3.1.5：枚举字段必须按当前数据集定义的值域进行校验） */
   enum_values?: string[];
 }
 
-/** 数据集 */
 export interface Dataset {
   dataset_id: string;
   name: string;
-  /**
-   * 原始文件名（登记时的源文件名，如 DIS_raw_data.arff）。
-   * 仅作源文件溯源用，**不参与展示** —— 全平台数据集名一律显示 name（= 内部编码 logical_id）。
-   */
   file_name?: string;
   description: string;
   scenario_id: ScenarioId;
@@ -94,25 +81,18 @@ export interface Dataset {
   fields: DatasetField[];
   created_at: string;
   data_format: 'csv' | 'arff' | 'json';
-  // ========== v2.0：数据集版本与状态（需求 2.3） ==========
   dataset_version: string;   // 最新版本号，如 v1
   uploaded_by: string;       // 上传人账号
   uploader_name: string;     // 上传人展示名（用户名，非编号）
   uploaded_at: string;       // 上传时间
   enabled: boolean;          // 启用状态
   referenced: boolean;       // 是否已被模型版本引用（引用后只能停用，不能物理删除）
-  // ========== v3.x：数据集迭代元数据（见后端 dataset_iteration） ==========
-  /** 本版本的产生方式：create / schema_change / append_rows / metadata … */
   change_type?: string | null;
-  /** 迭代类型中文名，由后端下发，前端直接展示 */
   change_type_label?: string | null;
-  /** 是否破坏结构兼容（旧模型能否复用本版本） */
   is_breaking?: boolean;
-  /** 血缘：本版本从哪一版迭代而来（初次登记为 null） */
   base_version_id?: number | null;
 }
 
-/** 数据集版本（需求 2.3.4） */
 export interface DatasetVersion {
   dataset_version_id: string;   // 版本唯一编号
   dataset_id: string;           // 所属数据集编码
@@ -129,20 +109,16 @@ export interface DatasetVersion {
   uploaded_at: string;
   enabled: boolean;             // 启用状态（停用后不得用于新训练）
   referenced: boolean;          // 是否被模型版本引用
-  /** 本版本的产生方式（迭代类型） */
   change_type?: string | null;
-  /** 迭代类型中文名 */
   change_type_label?: string | null;
-  /** 是否破坏结构兼容 */
   is_breaking?: boolean;
-  /** 血缘：从哪一版迭代而来 */
   base_version_id?: number | null;
 }
 
-/** 模型生命周期状态（需求 6.7.2） */
+// 模型生命周期状态
 export type ModelStatus = 'TRAINING' | 'FAILED' | 'DRAFT' | 'PUBLISHED' | 'DISABLED';
 
-/** 模型评估指标（需求 6.4 统一计算规范） */
+// 模型评估指标
 export interface EvaluationMetrics {
   accuracy?: number | null;
   recall?: number | null;
@@ -157,14 +133,13 @@ export interface EvaluationMetrics {
   quality_availability?: Record<string, { available: boolean; reason: string | null }>;
 }
 
-/** 风险等级（大写枚举：风险事件/推理记录使用；历史大小写双轨，统一走 toRiskLevel 转换） */
 export type RiskLevelUpper = 'HIGH' | 'MEDIUM' | 'LOW';
 
 /**
  * 风险等级大小写双轨转换工具（历史包袱：RiskEvent/InferenceRecord 为大写，
  * Scenario/GlobalOverview 为小写）。改造期间统一入口，禁止用 as any 绕过。
  * - 'critical' 归并为 'HIGH'
- * - 无法识别的值兜底为 'LOW'
+ * - 无法识别的值兜底为 'LOW'。
  */
 export function toRiskLevel(level: string): RiskLevelUpper {
   const normalized = level.toUpperCase();
@@ -173,7 +148,7 @@ export function toRiskLevel(level: string): RiskLevelUpper {
   return 'LOW';
 }
 
-/** 风险事件（统一封装，适配四场景 — 符合需求 5.2 最小字段结构，v2.0 补齐必填字段） */
+// 风险事件（统一封装，适配四场景 —最小字段结构，v2.0 补齐必填字段）
 export interface RiskEvent {
   event_id: string;
   inference_record_id: string;      // 来源推理记录编号（需求 5.2）
@@ -187,28 +162,20 @@ export interface RiskEvent {
   risk_type: string;
   risk_level: RiskLevelUpper;
   risk_score: number;
-  /** 故障位置 x 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
+  // 故障位置 x 坐标
   fault_position_x?: number | null;
-  /** 故障位置 y 坐标（需求 5.2 / 7.4.1：仅舰面调度场景使用，坐标基准 1000px） */
+  // 故障位置 y 坐标
   fault_position_y?: number | null;
   occurred_at: string;
   status: '待处置' | '处理中' | '已处置';
   raw_features: Record<string, unknown>;
   description: string;
-  /** 来源数据集展示名（= logical_id）；仅详情接口下发，列表没有 */
   dataset_name?: string;
-  /** 来源算法显示名；仅详情接口下发 */
   algorithm_name?: string;
-  /** 创建者用户名；仅详情接口下发 */
   creator_name?: string;
-  /**
-   * 流转到「已处置」时填写的处置方法（来源 handling_record，status_after=RESOLVED 的最新一条）。
-   * 仅详情接口下发；功能上线前已处置的历史事件没有该记录，为 null —— 详情页保留位置、内容留空。
-   */
   handling_comment?: string | null;
 }
 
-/** 态势分析数据 */
 export interface SituationData {
   scenario_id: ScenarioId;
   time_range: string;
@@ -218,21 +185,17 @@ export interface SituationData {
   metrics: MetricItem[];
 }
 
-// ===================== 态势报告：算法解释 + 结构化报告数据 =====================
 
-/** 单个类别的概率 */
 export interface ClassProb {
   class: string;
   probability: number;
 }
 
-/** 多视图中的一个视图 */
 export interface ViewDistribution {
   name: string;
   distribution: ClassProb[];
 }
 
-/** 特征值对单个风险类的加权条件概率贡献 */
 export interface ClassContribution {
   class: string;
   weight: number;
@@ -240,14 +203,12 @@ export interface ClassContribution {
   contribution?: number;
 }
 
-/** 单个特征值的可解释性证据 */
 export interface FeatureEvidence {
   attribute: string;
   value: string;
   class_contributions: ClassContribution[];
 }
 
-/** 算法可解释性信息（Java /predict 返回，落库 explain_data） */
 export interface InferenceExplain {
   contract_version?: string;
   prediction?: string;
@@ -279,7 +240,6 @@ export interface InferenceExplain {
     cv_std?: number | null;
     availability?: Record<string, { available: boolean; reason: string | null }>;
   };
-  /** Legacy fields retained for report compatibility. */
   prediction_label?: string;
   probability?: number | null;
   class_distribution?: ClassProb[];
@@ -288,7 +248,6 @@ export interface InferenceExplain {
   feature_evidence?: FeatureEvidence[];
 }
 
-/** 报告单个特征的加权条件概率信息 */
 export interface ReportFeature {
   attribute: string;
   value: string;
@@ -301,7 +260,7 @@ export interface ReportFeature {
   rank: number;
 }
 
-/** 报告结构化数据（report_data，6.10 定义的完整结构） */
+// 报告结构化数据（report_data，6.10 定义的完整结构）
 export interface ReportData {
   report_info: {
     title: string;
@@ -372,44 +331,33 @@ export interface ReportData {
     status: string;
     key_features: string[];
   }>;
-  /** key_events 是概率最高的前 N 条，这里是总起数 */
   key_events_total: number;
   data_notes: string;
   analysis_nl: string;
   guidance_nl: string;
 }
 
-/** 报告定义 */
 export interface Report {
   report_id: string;
   title: string;
-  /** 场景编码；后端 scenario_id 为 NULL（超管全平台聚合报告）、或不在映射表内时是空串，
-   *  报告中心渲染侧显示「全部场景」 */
   scenario_id: ScenarioId | '';
   scenario_name: string;
   content?: string;
-  /** 结构化报告数据（自动生成报告时由后端返回，供详情页渲染图表与 NL 文本） */
   report_data?: ReportData;
   created_at: string;
   format: 'markdown' | 'html' | 'pdf';
-  /** 后端 report 表没有 status 列，`_serialize` 恒下发 "completed"；前端不渲染该字段 */
+  // 后端 report 表没有 status 列，`_serialize` 恒下发 "completed"；前端不渲染该字段
   status: 'completed';
-  /** 是否定时生成 */
   scheduled?: boolean;
-  /** 定时生成周期（天） */
   interval_days?: number;
-  /** 定时报告的下次生成时间（后端按北京时间下发，仅 scheduled=true 时有值） */
   next_run_at?: string;
-  /** 报告生成者（用户 ID），用于"场景用户只看自己生成的报告" */
   generated_by?: string;
 }
 
-// ===================== v2.0 用户与权限（需求 6.5） =====================
+// v2.0 用户与权限
 
-/** 角色（三级）：最外层管理员 / 场景管理员 / 场景用户 */
 export type UserRole = 'SUPER_ADMIN' | 'SCENARIO_ADMIN' | 'SCENARIO_USER';
 
-/** 用户账号 */
 export interface UserAccount {
   id: number;
   user_id: string;
@@ -426,9 +374,8 @@ export interface UserAccount {
   scenario_ids?: ScenarioId[];
 }
 
-// ===================== v2.0 算法注册（需求 6.6） =====================
+// v2.0 算法注册
 
-/** 算法公开训练参数定义 */
 export interface AlgorithmParamDef {
   param_name: string;                                     // 参数名
   label: string;                                          // 显示名称
@@ -439,11 +386,10 @@ export interface AlgorithmParamDef {
   step?: number;
   options?: { value: string; label: string }[];           // select 类型可选项
   description: string;
-  /** 仅对含数值特征的数据集生效；纯离散数据集上该参数不起作用，训练表单不展示。 */
   requires_numeric_features?: boolean;
 }
 
-/** 算法注册定义（需求 6.6.2 算法接入规则） */
+// 算法注册定义
 export interface AlgorithmDefinition {
   algorithm_id: string;                                   // A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB / DIWNB / KFDB / FLNB / FTAWNB
   display_name: string;
@@ -453,9 +399,8 @@ export interface AlgorithmDefinition {
   params: AlgorithmParamDef[];                            // 公开训练参数定义
 }
 
-// ===================== v2.0 推理记录（需求 6.2 / 6.8） =====================
+// v2.0 推理记录
 
-/** 推理记录 */
 export interface InferenceRecord {
   inference_record_id: string;
   user_id: string;                                        // 发起推理的账号（访问控制用）
@@ -479,9 +424,8 @@ export interface InferenceRecord {
   };
 }
 
-// ===================== v2.0 风险阈值配置（需求 5.4.1） =====================
+// v2.0 风险阈值配置
 
-/** 按场景风险阈值配置 */
 export interface ThresholdConfig {
   user_id?: number;
   scenario_id: ScenarioId;
@@ -499,7 +443,7 @@ export interface ApiThresholdConfig extends Omit<ThresholdConfig, 'scenario_id'>
   scenario_id: number;
 }
 
-/** 阈值变更记录（需求 5.4.1.5） */
+// 阈值变更记录
 export interface ThresholdChangeLog {
   id?: number;
   user_id?: number;
@@ -512,17 +456,17 @@ export interface ThresholdChangeLog {
   new_high?: number;
 }
 
-/** 后端原始形状：`scenario_id` 是场景数字主键。 */
+// 后端原始形状：`scenario_id` 是场景数字主键。
 export interface ApiThresholdChangeLog extends Omit<ThresholdChangeLog, 'scenario_id'> {
   scenario_id: number;
 }
 
-// ===================== v3.0 数据预览与场景看板（需求 2.4 / 第 7 节） =====================
+// v3.0 数据预览与场景看板
 
-/** 数据预览行（需求 2.4：单元格为字符串或数值） */
+// 数据预览行
 export type DataRow = Record<string, string | number>;
 
-/** 数据集数据预览（需求 2.4：只读分页浏览；后端单次最大返回 100 条，前端每页最多 50） */
+// 数据集数据预览
 export interface DataPreview {
   total: number;
   page: number;
@@ -531,39 +475,39 @@ export interface DataPreview {
   label_field: string;
 }
 
-/** 航母甲板方向角对比点（需求 7.4：按时间步对比双机方向角，单位：度） */
+// 航母甲板方向角对比点
 export interface RadarComparePoint {
   step: number;
   plane1_dir_angle_deg: number;
   plane2_dir_angle_deg: number;
 }
 
-/** 场景看板特有图表数据（Task 009 各场景看板消费；字段缺失时图表空态降级） */
+// 场景看板特有图表数据
 export interface ScenarioDashboardCharts {
-  /** 网络安全（需求 7.1）：TOP 端口 / 流量分布 */
+  // 网络安全TOP 端口 / 流量分布
   network?: {
     top_ports: RankingItem[];
     flow_distribution: TypeDistribution[];
   };
-  /** 电力系统（需求 7.2）：设备健康度 / IssueType 分布 */
+  // 电力系统设备健康度 / IssueType 分布
   power?: {
     device_health: RankingItem[];
     issue_type_distribution: TypeDistribution[];
   };
-  /** 地质风险（需求 7.3）：区域风险 / 数据集风险占比 / 关键因子贡献 */
+  // 地质风险区域风险 / 数据集风险占比 / 关键因子贡献
   geological?: {
     region_risk: TypeDistribution[];
     dataset_risk_share: TypeDistribution[];
     factor_contribution: RankingItem[];
   };
-  /** 航母甲板（需求 7.4）：间距变化折线 / 方向角对比雷达 */
+  // 航母甲板间距变化折线 / 方向角对比雷达
   flightdeck?: {
     distance_trend: TrendPoint[];
     radar_compare: RadarComparePoint[];
   };
 }
 
-/** 场景看板聚合数据（需求第 7 节：三区布局数据源） */
+// 场景看板聚合数据
 export interface ScenarioDashboardData {
   scenario_id: ScenarioId;
   metrics: MetricItem[];                  // 顶部指标行

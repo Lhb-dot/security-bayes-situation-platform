@@ -7,14 +7,12 @@ import type {
   InternalAxiosRequestConfig,
 } from 'axios';
 
-/** 后端统一响应结构。响应拦截器已剥掉 axios 外层，所以拿到的是响应体本身。 */
 export interface ApiEnvelope<T = unknown> {
   code: number;
   message?: string;
   data?: T;
 }
 
-/** Axios 默认类型无法表达响应拦截器解包后的返回值。 */
 interface RequestInstance extends Omit<AxiosInstance, 'get' | 'post' | 'put' | 'patch' | 'delete' | 'request'> {
   get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>;
   post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
@@ -28,7 +26,6 @@ const CSRF_STORAGE_KEY = 'bayes_csrf_token';
 
 export type RequestErrorKind = 'unauthorized' | 'timeout' | 'canceled' | 'network' | 'http';
 
-/** 保留原有 Error/message 用法，同时让会话恢复能够区分未登录、超时和断网。 */
 export class RequestError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
@@ -46,27 +43,20 @@ export class RequestError extends Error {
   }
 }
 
-// HTTP 客户端共用浏览器凭据；会话切换前的请求不能清除新会话的凭据或触发跳转。
 let sessionRevision = 0;
 const requestSessions = new WeakMap<object, number>();
 export const invalidateSessionRequests = (): void => { sessionRevision += 1; };
 
 const service = axios.create({
-  // Dev: empty baseURL + Vite /api proxy keeps cookies first-party.
-  // Prod: set VITE_API_BASE_URL to the backend origin when not same-origin.
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 0,
   withCredentials: true,
-  // 注意：不在此处写死 Content-Type。axios 会自动处理——
   // JSON 对象请求自动带 application/json，FormData 上传自动带 multipart/form-data(boundary)。
 }) as unknown as RequestInstance;
 
 /**
- * 隐私模式 / 浏览器禁用存储时，访问 storage 会直接抛 SecurityError。
- * 这里存的都是可再生的缓存（CSRF 令牌有 cookie 兜底），所以统一降级成
- * 「读不到 / 写不进」，绝不让它打断认证与请求主流程 ——
- * 尤其 401 分支里的 `setCsrfToken(null)` 一旦抛出，后面的 unauthorizedHandler
- * 就不会执行，用户会被卡在「已登出但界面还以为在登录」的状态。
+ * 隐私模式 / 浏览器禁用存储时访问 storage 会抛 SecurityError。这里存的都是可再生缓存
+ * （CSRF 令牌有 cookie 兜底），统一降级成「读不到 / 写不进」，不打断请求主流程。
  */
 const safeStorage = <T>(run: () => T, fallback?: T): T | undefined => {
   try {
@@ -102,13 +92,7 @@ const currentCsrfToken = (): string | null => {
 
 export const getCsrfToken = (): string | null => currentCsrfToken();
 
-/**
- * 401 的跳转由路由层接管（main.ts 在装好 router 后注册）。
- *
- * 这里不直接改 window.location：history 模式下 vue-router 只监听 popstate，
- * 改 hash 既不触发导航，还会把地址污染成 /reports#/login。
- * 会话恢复期间（handler 尚未注册）只清凭据，随后的路由守卫会把用户送去 /login。
- */
+// 1 的跳转由路由层接管（main.ts 在装好 router 后注册）。
 let unauthorizedHandler: (() => void) | null = null;
 
 export const setUnauthorizedHandler = (handler: (() => void) | null): void => {
@@ -144,7 +128,6 @@ const extractErrorMessage = async (error: unknown): Promise<string> => {
   const detail = body.detail;
   if (detail && typeof detail === 'object' && 'message' in detail) {
     const message = (detail as { message?: unknown }).message;
-    // Error 构造器原本也会转为字符串；保留 truthy 判断，避免把未知值伪装成 string。
     if (message) return String(message);
   }
   return err?.message || '请求失败';
@@ -169,8 +152,6 @@ service.interceptors.response.use(
       && !error.config.signal?.aborted;
     if (error.response?.status === 401 && currentSession) {
       setCsrfToken(null);
-      // 老版本把当前用户 id 写在 localStorage 里，现在已无写入方；这里只是清残留，
-      // 清不掉（隐私模式）也不影响流程。
       safeStorage(() => window.localStorage.removeItem('bayes_session_user_id'));
       if (unauthorizedHandler) unauthorizedHandler();
     }

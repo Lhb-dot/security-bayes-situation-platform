@@ -1,28 +1,3 @@
-<script setup lang="ts">
-/**
- * WorkspacePower —— 电力系统 · 我的工作台（场景用户首页）。
- * 字段口径见 docs/首页字段口径说明.md。
- * 说明：原「设备健康度排行」实测 77%~82% 无区分度，已替换为「设备 × 问题类型告警构成」。
- */
-import type { PowerWorkspace } from '@/api/dashboardApi';
-import DashKpis from '@/components/dashboard/DashKpis.vue';
-import DashCard from '@/components/dashboard/DashCard.vue';
-import DashBars from '@/components/dashboard/DashBars.vue';
-import DashDonut from '@/components/dashboard/DashDonut.vue';
-import DashGauge from '@/components/dashboard/DashGauge.vue';
-import DashEvents from '@/components/dashboard/DashEvents.vue';
-
-defineProps<{ data: PowerWorkspace }>();
-
-/** 电参量正常区间（按数据集实际量级给出参考带，仅用于刻度条分色） */
-const NORMAL_BAND: Record<string, { low: number | null; high: number | null }> = {
-  VoltageLevel_kV: { low: 300, high: 700 },
-  CurrentAmp: { low: 400, high: 1600 },
-  Temperature_C: { low: 30, high: 90 },
-  PowerFrequencyHz: { low: 49.8, high: 50.2 },
-};
-</script>
-
 <template>
   <DashKpis
     :items="[
@@ -78,3 +53,26 @@ const NORMAL_BAND: Record<string, { low: number | null; high: number | null }> =
     <DashEvents :items="data.recent_events" />
   </DashCard>
 </template>
+<script setup lang="ts">
+/**
+ * WorkspacePower，电力系统 · 我的工作台（场景用户首页）。
+ * 字段口径见 docs/首页字段口径说明.md。
+ * 说明：原「设备健康度排行」实测 77%~82% 无区分度，已替换为「设备 × 问题类型告警构成」。
+ */
+import type { PowerWorkspace } from '@/api/dashboardApi';
+import DashKpis from '@/components/dashboard/DashKpis.vue';
+import DashCard from '@/components/dashboard/DashCard.vue';
+import DashBars from '@/components/dashboard/DashBars.vue';
+import DashDonut from '@/components/dashboard/DashDonut.vue';
+import DashGauge from '@/components/dashboard/DashGauge.vue';
+import DashEvents from '@/components/dashboard/DashEvents.vue';
+
+defineProps<{ data: PowerWorkspace }>();
+
+const NORMAL_BAND: Record<string, { low: number | null; high: number | null }> = {
+  VoltageLevel_kV: { low: 300, high: 700 },
+  CurrentAmp: { low: 400, high: 1600 },
+  Temperature_C: { low: 30, high: 90 },
+  PowerFrequencyHz: { low: 49.8, high: 50.2 },
+};
+</script>

@@ -1,10 +1,9 @@
-"""Deterministic feature dictionaries for the non-network scenarios.
+"""非网络类场景的确定性特征字典。
 
-The carrier dataset contains 278 repeated time-step features. Keeping the
-field families here makes the catalog auditable while avoiding a hand-written
-copy that can silently drift or omit one of the steps. The returned mapping is
-expanded before it is exposed by the explanation service, so callers still
-receive an ordinary ``required_feature_names`` list and feature dictionary.
+载体数据集里那 278 个重复的时间步特征，字段族写在这里既便于审计，
+也免得手抄一份出来悄悄漂移、漏掉其中几步。
+返回的映射在解释服务对外暴露之前会先展开，所以调用方拿到的仍是普通的
+required_feature_names 列表和特征字典。
 """
 from __future__ import annotations
 
@@ -113,7 +112,7 @@ def _carrier_catalog() -> dict[str, dict[str, str]]:
 
 
 def expand_scenario_feature_catalog(configs: Any) -> dict[str, dict[str, Any]]:
-    """Fill all scenario feature dictionaries using the repository catalog."""
+    """用仓库里的目录把各场景的特征字典补齐。"""
     if not isinstance(configs, dict):
         return {}
     result = deepcopy(configs)

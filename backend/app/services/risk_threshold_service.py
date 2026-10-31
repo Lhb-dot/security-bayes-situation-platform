@@ -13,10 +13,11 @@ from app.utils.common import row_to_dict
 
 
 class RiskThresholdService(ServiceBase):
-    """风险阈值：以 (账号, 场景) 为键，账号只能读写**本人**的阈值行。
+    """风险阈值：以 (账号, 场景) 为键，账号只能读写本人的阈值行。
 
-    不存在场景级 / 平台级阈值（见 ``risk_view`` 模块说明），因此普通账号修改阈值
-    只影响自己的风险视图，不会波及他人；反之任何账号（含 SUPER_ADMIN）也无法通过
+    不存在场景级 / 平台级阈值（见 `risk_view` 模块说明），因此普通账号修改阈值
+    只影响自己的风险视图，不会波及他人；反之任何账号（含
+    SUPER_ADMIN）也无法通过
     本 Service 改写他人的阈值行 —— upsert 的 user_id 恒为当前登录账号。
     """
 
@@ -84,7 +85,7 @@ class RiskThresholdService(ServiceBase):
 
         threshold = self._get_for_user(current_user.id, scenario_id)
         # 值没变就不落库、也不写审计：否则重复点「保存并生效」会把
-        # threshold_audit_log 刷成一堆「0.09 → 0.09」的噪声行。
+        # threshold_audit_log 刷成一堆「0.09 -> 0.09」的噪声行。
         if (
             threshold is not None
             and float(threshold.medium_threshold) == medium

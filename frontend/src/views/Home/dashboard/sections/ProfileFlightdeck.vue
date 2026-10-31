@@ -1,23 +1,7 @@
 <script setup lang="ts">
 /**
- * ProfileFlightdeck —— 舰面调度 · 场景管理员首页（管理端）。
- * 字段口径见 docs/场景管理员首页审查/实施契约.md §7 / §8.3。
- *
- * 视角：**管理端看数据资产与治理，不是执行端看飞行态势**。与场景用户的「我的工作台」
- * （WorkspaceFlightdeck）的区别：
- *   用户侧 = 我手上的活：双机方向角雷达、最小间距分布、最近告警；
- *   管理侧 = 这批数据能不能用：是否存在内容重复的文件、正类口径一致吗、哪份数据白躺没人建模。
- * 因此本页**不再渲染任何研判图**（间距曲线、方向角雷达、接近率、碰撞对比、总航程等），
- * 后端字段按契约 §5.3 仍然保留（向后兼容），只是本页不使用。
- *
- * 数据来源两段，作用域不同：
- *   /profile   数据资产全量统计（由父组件 AdminProfilePage 以 prop 传入，页面主骨架）。
- *              `modeling` / `redundancy` / `caliber_registered` 是契约 §4.1 / §5.3 的**必填**
- *              字段，后端 `get_profile` 无条件下发（只读探针实测：4 个数据集 → modeling 4 行、
- *              redundancy 五字段齐全、caliber_registered 与 is_risk_label 逐行同值），
- *              故本页不再保留「旧后端未上线」的兜底分支，也不再并行请求 modelVersionApi。
- *   /workspace 运行态水位 + /users 场景成员：两个额外接口用 Promise.allSettled 并行，
- *              任一失败只影响它自己那一块，不阻塞主画像渲染。
+ * 舰面调度 · 场景管理员首页。看数据资产与治理：文件是否重复、正类口径是否一致、
+ * 哪份数据没有建模。执行端的雷达与间距分布不在此页。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import {
@@ -39,32 +23,16 @@ import { fmtDate, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: FlightdeckProfile }>();
 
-/* ------------------------------------------------------------------ */
-/* 口径常量：枚举字面量 / 分页上限一律在此具名，computed 与模板共用       */
-/* ------------------------------------------------------------------ */
 
-/** 成员列表单页上限（后端分页硬上限 200） */
 const MEMBER_PAGE_SIZE = 200;
-/** 账号角色（frontend/src/types/security.ts）：只有这两种角色计入 S5 */
 const ROLE_SCENARIO_ADMIN = 'SCENARIO_ADMIN';
 const ROLE_SCENARIO_USER = 'SCENARIO_USER';
-/** 账号状态：非 active 一律计入「已禁用」 */
 const ACCOUNT_STATUS_ACTIVE = 'active';
 
-/* ------------------------------------------------------------------ */
-/* 运行态 / 成员（额外接口，各自静默降级）                               */
-/* ------------------------------------------------------------------ */
 
 const runtime = ref<FlightdeckWorkspace | null>(null);
-/** 场景成员；null = 未取到（与「确实 0 人」区分开，避免误报 0） */
 const members = ref<UserAccount[] | null>(null);
 
-/**
- * 两个接口并行、各自静默降级：任一失败只影响它自己那块，不阻塞主画像渲染。
- * 模型版本数**不**再单独请求 modelVersionApi —— 后端画像已直接下发 `modeling`
- * （按 dataset 聚合 published/draft/total，无模型的数据集也在列并计 0），
- * 前端再自行归集只会产生第二套口径。
- */
 const loadAll = async () => {
   const scenarioId = props.data.scenario_id;
   const [runtimeResult, memberResult] = await Promise.allSettled([
@@ -76,7 +44,6 @@ const loadAll = async () => {
     runtimeResult.status === 'fulfilled' && runtimeResult.value.scenario_key === 'flight_deck'
       ? (runtimeResult.value as FlightdeckWorkspace)
       : null;
-  // 服务端只对 SCENARIO_ADMIN 自动收窄场景（SUPER_ADMIN 拿到全平台账号），故这里必须再按场景过滤
   members.value =
     memberResult.status === 'fulfilled'
       ? memberResult.value.items.filter((item) => item.scenario_id === scenarioId)
@@ -86,11 +53,7 @@ const loadAll = async () => {
 watch(() => props.data.scenario_id, loadAll);
 onMounted(loadAll);
 
-/* ------------------------------------------------------------------ */
-/* 通用：中文映射                                                   */
-/* ------------------------------------------------------------------ */
 
-/** 编码形态中文映射（契约 §8.3：numeric/interval/paired/unknown） */
 const ENCODING_TEXT: Record<string, string> = {
   numeric: '数值连续',
   interval: '离散区间',
@@ -98,24 +61,13 @@ const ENCODING_TEXT: Record<string, string> = {
   unknown: '未知',
 };
 
-/** 数据集可见性中文映射（契约 §7） */
 const VISIBILITY_TEXT: Record<string, string> = {
   platform: '平台',
   company: '公司',
   personal: '个人',
 };
 
-/* ------------------------------------------------------------------ */
-/* S1 场景资产总览 KPI ×4                                              */
-/* ------------------------------------------------------------------ */
 
-/**
- * S1：前 3 个四场景一致，第 4 个是舰面调度特色（重复内容冗余率）。
- *
- * 冗余度直接取画像顶层 `redundancy`（契约 §5.3 必填字段，后端按
- * 1 - 有效分组数 / 文件数 算好下发）。前端不再按 dataset_file_count / dataset_count
- * 现算一遍：那是同一个公式的第二份实现，只会在两边口径漂移时给出两个数。
- */
 const assetKpis = computed(() => {
   const stat = props.data.redundancy;
   return [
@@ -150,19 +102,7 @@ const assetKpis = computed(() => {
   ];
 });
 
-/* ------------------------------------------------------------------ */
-/* D1 ★ 编码形态与分组治理表                                           */
-/* ------------------------------------------------------------------ */
 
-/**
- * 内容分组 → 可读组名。
- *
- * 后端 `source_group` 是内容指纹（"{size}-{sha1前16位}"），
- * 直接上屏读者看不懂。这里按 `groups[]` 顺序编号并带上成员数：
- * 「内容分组」一列取到相同值的行，就是内容完全相同的重复注册文件 —— 这正是本表要传达的信息。
- * `groups[].group_id` 与 `groups[].fingerprint` 是同一个值（后端 `get_profile` 两处都写
- * `group_key`，只读探针实测逐组相等），故只需登记一个键。
- */
 const groupLabels = computed(() => {
   const map = new Map<string, string>();
   props.data.groups.forEach((group, index) => {
@@ -171,11 +111,6 @@ const groupLabels = computed(() => {
   return map;
 });
 
-/**
- * 本表**只讲编码形态与分组治理**（内容分组 / 编码形态 / 正类数 / 正类一致性），
- * 不复述字段数、样本量（资产属性，归 S2）、也不复述已发布模型数（归 S3 建模覆盖）。
- * 同一粒度的信息全页只展示一次。
- */
 const familyColumns: DashColumn[] = [
   { key: 'name', label: '数据集' },
   { key: 'source_group', label: '内容分组' },
@@ -184,22 +119,13 @@ const familyColumns: DashColumn[] = [
   { key: 'collision_consistent', label: '正类一致性' },
 ];
 
-/**
- * 各数据集的编码形态逐行对比。
- *
- * 管理端要回答的问题：同一批样本被注册成了几种编码？各自的正类数一致吗
- * （不一致说明同一内容分组内至少有一份数据的标签口径有问题）？
- * 至于「谁已经拿去建过模了」，由 S3 建模覆盖统一回答，本表不再重复。
- */
 const familyRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.encoding_family.map((row) => ({
     logical_id: row.logical_id,
     name: row.logical_id,
-    // 组名查不到时退回原始 key（同组同值，不丢信息）；空串由 DashTable 渲染成「—」
     source_group: groupLabels.value.get(row.source_group) ?? row.source_group,
     encoding: ENCODING_TEXT[row.encoding] ?? '未知',
     risk_count: row.risk_count,
-    // 正类一致性：与分组代表的 risk_count 相同才算一致，不一致标红（管理告警）
     collision_consistent:
       row.collision_consistent === true
         ? { text: '一致', tone: 'ok' }
@@ -207,23 +133,12 @@ const familyRows = computed<Array<Record<string, unknown>>>(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* D2 ★ 重复内容冗余度与去重收益                                        */
-/* ------------------------------------------------------------------ */
 
-/** 被去重吸收掉的数据集数 = 文件数 - 有效数据集数（多出来的都是重复入模风险） */
 const absorbedCount = computed(() => {
   const stat = props.data.redundancy;
   return Math.max(stat.file_count - stat.effective_group_count, 0);
 });
 
-/**
- * 去重收益四问中的后三问。
- *
- * **「重复内容冗余率」不在这里** —— 它已经是 S1 第 4 个 KPI（场景特色位），
- * 同一个数在同一页出现两次会让读者以为是两个指标。此处只讲「去重前后样本差了多少、
- * 吸收掉几份」，冗余率本身由 S1 承载。
- */
 const redundancyKpis = computed(() => {
   const stat = props.data.redundancy;
   return [
@@ -251,7 +166,6 @@ const redundancyKpis = computed(() => {
   ];
 });
 
-/** 每个内容分组一根柱 = 组内物理文件数；标签用组内 logical_id 连接，便于核对是哪几份文件重复 */
 const groupBars = computed(() =>
   props.data.groups.map((group) => ({
     value: group.datasets.join(' / '),
@@ -259,9 +173,6 @@ const groupBars = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S2 数据集资产明细 / S3 建模覆盖                                      */
-/* ------------------------------------------------------------------ */
 
 /**
  * 每数据集的模型版本数（published / total），直接取画像顶层 `modeling`
@@ -276,8 +187,8 @@ const modelStats = computed(() => {
 });
 
 /**
- * 数据集基底行：S2（资产明细）与 S3（建模覆盖）共用的**唯一一次** datasets 遍历。
- * 模型覆盖在这里算一次，下游只做投影 —— 避免同一份 datasets 被多个 computed 各扫一遍。
+ * 数据集基底行：S2（资产明细）与 S3（建模覆盖）共用的唯一一次 datasets 遍历。
+ * 模型覆盖在这里算一次，下游只做投影，避免同一份 datasets 被多个 computed 各扫一遍。
  */
 const datasetRows = computed(() =>
   props.data.datasets.map((item) => ({
@@ -287,11 +198,6 @@ const datasetRows = computed(() =>
   })),
 );
 
-/**
- * 本表**只讲资产属性**。`已发布模型数` 归 S3 建模覆盖（柱状图已按数据集逐根呈现），此处不再重复。
- * `标签字段` 保留在本表 —— 舰面场景的 D1 讲的是编码形态，不承载标签口径，
- * 故标签字段在本场景只在 S2 出现一次。
- */
 const assetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名' },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
@@ -302,13 +208,6 @@ const assetColumns: DashColumn[] = [
   { key: 'version', label: '版本', align: 'right' },
 ];
 
-/**
- * 数据集资产明细（四场景列结构完全一致）。
- *
- * 未登记风险口径的数据集**不隐藏**（契约 §0.1：不得用 is_risk_label 过滤掉未登记数据集），
- * 而是在「标签字段」列挂黄色告警标签 —— 未登记意味着它不会产生风险事件，
- * 这是管理端必须看见的信息，不是可以省略的行。
- */
 const assetRows = computed<Array<Record<string, unknown>>>(() =>
   datasetRows.value.map(({ item, name }) => ({
     logical_id: item.logical_id,
@@ -323,23 +222,17 @@ const assetRows = computed<Array<Record<string, unknown>>>(() =>
   })),
 );
 
-/** S3 每数据集一根柱 = 模型版本总数（含草稿），行序与 S2/D1 一致（按 datasets 顺序） */
 const modelingBars = computed(() =>
   datasetRows.value.map(({ name, model }) => ({ value: name, count: model?.total ?? 0 })),
 );
 
-/** 「数据白躺」= 该数据集一个模型版本都没有 */
 const idleNames = computed(() =>
   datasetRows.value.filter(({ model }) => (model?.total ?? 0) === 0).map(({ name }) => name),
 );
 
-/* ------------------------------------------------------------------ */
-/* S4 场景运行态水位                                                    */
-/* ------------------------------------------------------------------ */
 
 const summary = computed(() => runtime.value?.summary ?? null);
 
-/** 近 10 天推理活动合计（activity_trend 求和，口径与曲线一致） */
 const trendTotal = computed(() =>
   (runtime.value?.activity_trend ?? []).reduce((sum, point) => sum + Number(point.total ?? 0), 0),
 );
@@ -372,12 +265,11 @@ const runtimeKpis = computed(() => {
   ];
 });
 
-/** 处置漏斗：待处置 → 处理中 → 已处置 */
 const funnelItems = computed(() =>
   (summary.value?.status_funnel ?? []).map((item) => ({ label: item.label, count: item.count })),
 );
 
-/** 近 10 天活动趋势：推理量 / 其中判定为风险的量（日期统一走 dashFormat 的 MM-DD 口径） */
+// 近 10 天活动趋势：推理量 / 其中判定为风险的量（日期统一走 dashFormat 的 MM-DD 口径）
 const trendPoints = computed(() =>
   (runtime.value?.activity_trend ?? []).map((item) => ({
     label: fmtDate(item.date),
@@ -386,11 +278,7 @@ const trendPoints = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S5 场景成员与权限                                                    */
-/* ------------------------------------------------------------------ */
 
-/** 场景成员：按角色分组计数（范围限本场景，不是全平台账号） */
 const memberRows = computed(() => {
   const list = members.value;
   if (list === null) return [];
@@ -413,7 +301,7 @@ const memberRows = computed(() => {
   <!-- S1 场景资产总览（前 3 项四场景一致，第 4 项为舰面调度特色：重复内容冗余率） -->
   <DashKpis :items="assetKpis" />
 
-  <!-- D1 ★ 舰面调度特色块 1：编码形态与分组治理表 -->
+  <!-- D1 舰面调度特色块 1：编码形态与分组治理表 -->
   <DashCard
     title="编码形态与分组治理表"
     source="按文件内容指纹分组 · 内容完全相同的重复注册会被合并"
@@ -421,7 +309,7 @@ const memberRows = computed(() => {
     <DashTable :columns="familyColumns" :rows="familyRows" row-key="logical_id" dense />
   </DashCard>
 
-  <!-- D2 ★ 舰面调度特色块 2：重复内容冗余度与去重收益 -->
+  <!-- D2 舰面调度特色块 2：重复内容冗余度与去重收益 -->
   <DashCard
     title="重复内容冗余度与去重收益"
     source="冗余率 = 1 - 有效分组数 / 文件数；去重前按文件逐个求和，去重后按分组代表求和"

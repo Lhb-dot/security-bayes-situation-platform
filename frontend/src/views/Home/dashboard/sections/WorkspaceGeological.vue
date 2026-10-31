@@ -1,20 +1,3 @@
-<script setup lang="ts">
-/**
- * WorkspaceGeological —— 地质风险 · 我的工作台（场景用户首页）。
- * 字段口径见 docs/首页字段口径说明.md。
- * 口径：数据集无「区域」字段 → 坡度相关一律按真实字段 Slope 的坡度档位分组。
- */
-import type { GeologicalWorkspace } from '@/api/dashboardApi';
-import DashKpis from '@/components/dashboard/DashKpis.vue';
-import DashCard from '@/components/dashboard/DashCard.vue';
-import DashBars from '@/components/dashboard/DashBars.vue';
-import DashDonut from '@/components/dashboard/DashDonut.vue';
-import DashColumns from '@/components/dashboard/DashColumns.vue';
-import DashEvents from '@/components/dashboard/DashEvents.vue';
-
-defineProps<{ data: GeologicalWorkspace }>();
-</script>
-
 <template>
   <DashKpis
     :items="[
@@ -68,3 +51,19 @@ defineProps<{ data: GeologicalWorkspace }>();
     <DashEvents :items="data.recent_events" />
   </DashCard>
 </template>
+<script setup lang="ts">
+/**
+ * WorkspaceGeological，地质风险 · 我的工作台（场景用户首页）。
+ * 字段口径见 docs/首页字段口径说明.md。
+ * 口径：数据集无「区域」字段 → 坡度相关一律按真实字段 Slope 的坡度档位分组。
+ */
+import type { GeologicalWorkspace } from '@/api/dashboardApi';
+import DashKpis from '@/components/dashboard/DashKpis.vue';
+import DashCard from '@/components/dashboard/DashCard.vue';
+import DashBars from '@/components/dashboard/DashBars.vue';
+import DashDonut from '@/components/dashboard/DashDonut.vue';
+import DashColumns from '@/components/dashboard/DashColumns.vue';
+import DashEvents from '@/components/dashboard/DashEvents.vue';
+
+defineProps<{ data: GeologicalWorkspace }>();
+</script>

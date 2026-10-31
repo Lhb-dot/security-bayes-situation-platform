@@ -1,25 +1,24 @@
-"""数据集 Service（Dataset，含"数据集版本"管理）。
+"""数据集 Service（Dataset，含数据集版本管理）。
 
 对应需求文档章节：2.2（数据集绑定规则）、2.3（数据集管理、版本与删除规则）、
-3.1（固定字段统一要求）、6.5.2（权限矩阵）。
+3.1（固定字段统一要求）、6.5.2（权限矩阵）。模型见 app.models.dataset.Dataset。
 
-模型：app.models.dataset.Dataset。说明：ORM 中没有独立的 DatasetVersion 表，
-"数据集版本"由 dataset.logical_id + dataset.version 联合唯一表示（uk_dataset_logical_version），
-版本管理逻辑（自动递增版本号、引用保护、停用/删除规则）在本 Service 内实现。
+ORM 里没有独立的 DatasetVersion 表，所谓「数据集版本」由 dataset.logical_id +
+dataset.version 联合唯一表示（uk_dataset_logical_version），自动递增版本号、
+引用保护、停用 / 删除规则都在本 Service 内实现。
 
-关键业务规则（需求 2.3）：
-1. 管理级角色可修改/停用/删除；新建数据集还允许 SCENARIO_USER 上传本人场景的个人数据。
-2. 上传必须指定场景，并完成格式、固定字段、字段类型、标签字段校验。
-3. 已产生模型版本的数据集不得直接覆盖——"修改"必须创建新版本并保留旧版本。
-4. 已被模型版本引用的数据集版本不得物理删除，只能停用；未引用的可物理删除。
-5. 停用数据集不得用于新的模型训练（model_version service 侧校验）。
-6. 普通用户只能查看与已发布模型有关的数据集（需求 2.3.1）。
+关键业务规则（需求 2.3）：管理级角色可修改 / 停用 / 删除，
+新建数据集还允许场景用户上传本人场景的个人数据；上传必须指定场景，并完成格式、
+固定字段、字段类型、标签字段校验；已产生模型版本的数据集不得直接覆盖，
+修改必须创建新版本并保留旧版本；已被模型版本引用的数据集版本不得物理删除，
+只能停用，未引用的可物理删除；停用的数据集不得用于新的模型训练（model_version
+service 侧校验）；普通用户只能查看与已发布模型有关的数据集（2.3.1）。
 
-迭代模型（app/services/dataset_iteration.py）：
-所有数据/结构/元数据变更统一走 ``_revise`` —— **迭代**与**版本**分离：
-每次迭代都落一条 dataset_revision 记录，是否新开版本快照由
-``resolve_iteration_policy(change_type, referenced)`` 决定。于是"修改字段"与
-"追加数据条数"不需要两套逻辑：追加是兼容迭代（未引用时原地更新，不涨版本），
+所有数据 / 结构 / 元数据变更统一走 _revise（见
+app/services/dataset_iteration.py），迭代与版本分离：每次迭代都落一条
+dataset_revision 记录，是否新开版本快照由 resolve_iteration_policy(change_type,
+referenced) 决定。于是「修改字段」与「追加数据条数」不需要两套逻辑 ——
+追加是兼容迭代（未引用时原地更新、不涨版本），
 改字段是破坏性迭代（必然新开版本留痕）。
 """
 import os
@@ -73,7 +72,8 @@ def _invalidate_dashboard_cache() -> None:
     """数据集登记 / 修改 / 删除后清掉首页聚合的进程级缓存。
 
     首页与场景中心的数据集统计（有效样本量、风险占比等）在 dashboard_service 里
-    按 dataset_id 做了进程级缓存，数据集元数据变更后必须清掉，否则页面会显示旧值。
+    按 dataset_id 做了进程级缓存，数据集元数据变更后必须清掉，
+    否则页面会显示旧值。
     """
     from app.services.dashboard_service import clear_dataset_caches
 
@@ -83,7 +83,7 @@ def _invalidate_dashboard_cache() -> None:
 class DatasetService(ServiceBase):
     @staticmethod
     def _validate_file_path(file_path: str) -> Optional[str]:
-        """Keep registered dataset paths inside the repository data directory."""
+        """把登记的数据集路径限制在仓库数据目录内。"""
         if not file_path or Path(file_path).is_absolute():
             return "file_path 必须是 data/ 目录下的相对路径"
         candidate = Path(file_path)
@@ -129,7 +129,8 @@ class DatasetService(ServiceBase):
     ) -> None:
         """写一条迭代记录（原地更新也留痕，保证「迭代 = 全部记录」）。
 
-        dataset_id 指向被迭代的目标版本行；result_dataset_id 仅在新建版本时给出。
+        dataset_id 指向被迭代的目标版本行；result_dataset_id
+        仅在新建版本时给出。
         """
         self.db.add(
             DatasetRevision(
@@ -213,7 +214,7 @@ class DatasetService(ServiceBase):
         return data
 
     # ------------------------------------------------------------------
-    # 查询（需求 2.3.1 / 6.5.2：查看列表与字段预览 → 允许/允许）
+    # 查询（需求 2.3.1 / 6.5.2：查看列表与字段预览 -> 允许/允许）
     # ------------------------------------------------------------------
     @service_call
     def get_list(
@@ -244,7 +245,8 @@ class DatasetService(ServiceBase):
     def get(self, current_user, dataset_id: int):
         """数据集详情（含字段结构 fields_schema）。
 
-        与列表一致，可见性统一由 :meth:`Authz.can_view_dataset` 判定（需求 0.2 / 2.4）。
+        与列表一致，可见性统一由 :meth:`Authz.can_view_dataset`
+        判定（需求 0.2 / 2.4）。
         """
         self.require_login(current_user)
         dataset = self._get(dataset_id)
@@ -262,7 +264,7 @@ class DatasetService(ServiceBase):
         - SCENARIO_USER：仅自己绑定的场景（上传即 personal 数据）；
         - SUPER_ADMIN：平台方，任意场景（仍要求账号可用）。
 
-        抽成独立方法是为了让 upload_from_file 能在**落盘之前**完成鉴权
+        抽成独立方法是为了让 upload_from_file 能在落盘之前完成鉴权
         （原先先写文件再进 create 校验，未授权请求也会在 data/<场景编码>/ 下留下文件）。
         """
         role = getattr(current_user, "role", None)
@@ -285,10 +287,11 @@ class DatasetService(ServiceBase):
     ):
         """上传数据集，版本号自动取最大值 + 1。
 
-        数据级别由**上传者角色**决定，调用方不可自选、创建后不可变（2026-10 定稿）：
-        - SUPER_ADMIN → platform（平台数据），任意场景；
-        - SCENARIO_ADMIN → company（公司数据），仅自己场景；
-        - SCENARIO_USER → personal（个人数据），仅自己场景。
+        数据级别由上传者角色决定，调用方不可自选、
+        创建后不可变（2026-10 定稿）：
+        - SUPER_ADMIN -> platform（平台数据），任意场景；
+        - SCENARIO_ADMIN -> company（公司数据），仅自己场景；
+        - SCENARIO_USER -> personal（个人数据），仅自己场景。
         """
         role = self._authorize_upload(current_user, scenario_id)
         visibility = default_dataset_visibility(role)
@@ -319,7 +322,7 @@ class DatasetService(ServiceBase):
         if err:
             raise ServiceError(400, err)
 
-        # 初次登记也走同一套策略：change_type=create → 直接生成首个版本
+        # 初次登记也走同一套策略：change_type=create -> 直接生成首个版本
         decision = resolve_iteration_policy(CHANGE_TYPE_CREATE, referenced=False)
 
         now = datetime.now(timezone.utc)
@@ -516,9 +519,9 @@ class DatasetService(ServiceBase):
         """执行一次迭代，返回 (目标版本行, 决策)。
 
         策略见 dataset_iteration.resolve_iteration_policy：
-        - 破坏结构兼容 → 必新建版本（即使未被引用也留痕）；
-        - 兼容 + 已被引用 → 新建版本，冻结旧文件；
-        - 兼容 + 未被引用 → 原地更新当前版本行（不涨版本号，仍记迭代记录）。
+        - 破坏结构兼容 -> 必新建版本（即使未被引用也留痕）；
+        - 兼容 + 已被引用 -> 新建版本，冻结旧文件；
+        - 兼容 + 未被引用 -> 原地更新当前版本行（不涨版本号，仍记迭代记录）。
         """
         if change_type not in CHANGE_TYPES:
             raise ServiceError(400, f"未知的数据集迭代类型: {change_type}")
@@ -630,7 +633,8 @@ class DatasetService(ServiceBase):
     def _cleanup_replaced_file(self, old_file_path: str) -> None:
         """迭代换文件后清理不再被任何版本引用的旧物理文件（best-effort）。
 
-        只在没有任何 dataset 行仍指向它时删除：只改字段的旧路径可能被多个版本共用，
+        只在没有任何 dataset 行仍指向它时删除：
+        只改字段的旧路径可能被多个版本共用，
         贸然删除会让历史版本读不到文件。删除失败只记日志，不影响迭代结果。
         """
         if not old_file_path:
@@ -809,7 +813,8 @@ class DatasetService(ServiceBase):
     def delete(self, current_user, dataset_id: int):
         """物理删除数据集（管理级角色，场景管理员仅自己场景）。
 
-        需求 2.3.5/2.3.6：被任何模型版本引用的数据集版本只能停用，不能物理删除；
+        需求 2.3.5/2.3.6：被任何模型版本引用的数据集版本只能停用，
+        不能物理删除；
         未被引用的可以物理删除。
         """
         dataset = self._get(dataset_id)

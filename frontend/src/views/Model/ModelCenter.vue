@@ -1,10 +1,7 @@
 <script setup lang="ts">
 /**
- * ModelCenter - 模型中心
- *
- * 需求 6.7：模型生命周期状态机（TRAINING/FAILED/DRAFT/PUBLISHED/DISABLED）
- *  - 管理员：发布、禁用、删除、设置/取消推荐模型（推荐不唯一）
- *  - 场景用户：仅能看到已发布模型（需求 6.7.5）
+ * 模型中心页：模型生命周期状态机 TRAINING / FAILED / DRAFT / PUBLISHED / DISABLED。
+ * 管理员可发布、禁用、删除、设置或取消推荐模型（推荐不唯一）；场景用户只能看到已发布模型。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -38,7 +35,6 @@ const currentUser = computed(() => userStore.currentUser);
 const loading = ref(true);
 const error = ref('');
 
-/** 服务端分页：每页 10 条，计数与翻页都以服务端 total 为准（前端不再本地过滤） */
 const page = ref(1);
 const pageSize = 10;
 const total = ref(0);
@@ -83,7 +79,7 @@ const scenarioLabel: Record<string, string> = {
   flightdeck_operation: '舰面调度态势',
 };
 
-/** 数据集选项只按场景归属联动，不根据当前是否存在模型来生成选项。 */
+// 数据集选项只按场景归属联动，不根据当前是否存在模型来生成选项。
 const datasetOptions = computed(() => {
   return allDatasets.value
     .filter((dataset) => selectedScenario.value === 'all' || dataset.scenario_code === selectedScenario.value)
@@ -93,12 +89,12 @@ const datasetOptions = computed(() => {
     }));
 });
 
-/** 切换场景时重置数据集筛选 */
+// 切换场景时重置数据集筛选
 watch(selectedScenario, () => {
   selectedDataset.value = 'all';
 });
 
-/** 筛选条件 → 后端查询参数：场景 code 转 id，「未发布」展开成三个状态 */
+// 筛选条件 → 后端查询参数：场景 code 转 id，「未发布」展开成三个状态
 const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
   const scenarioId = allScenarios.value.find((s) => s.code === selectedScenario.value)?.id;
   const status =
@@ -115,7 +111,7 @@ const queryParams = (): Parameters<typeof getModelVersionPage>[0] => {
   };
 };
 
-/** 请求序号：连续切筛选时丢弃过期响应，避免旧结果盖掉新结果 */
+// 请求序号：连续切筛选时丢弃过期响应，避免旧结果盖掉新结果
 let loadSeq = 0;
 
 const loadModels = async (targetPage: number = page.value) => {
@@ -147,19 +143,19 @@ const loadModels = async (targetPage: number = page.value) => {
 
 const listRef = ref<HTMLElement | null>(null);
 
-/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+// 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts）
 const changePage = (target: number) => keepScroll(() => loadModels(target), listRef.value);
 
-/** 初始化期间不触发重载：场景是按当前用户预设的，onMounted 末尾自己会加载一次 */
+// 初始化期间不触发重载：场景是按当前用户预设的，onMounted 末尾自己会加载一次
 const ready = ref(false);
 
-/** 筛选变化回到第 1 页重载 */
+// 筛选变化回到第 1 页重载
 watch([selectedScenario, selectedDataset, selectedStatus], () => {
   if (!ready.value) return;
   void loadModels(1);
 });
 
-// ===================== 管理员操作 =====================
+// 管理员操作
 const handlePublish = async (m: BackendModelVersion) => {
   try {
     await publishModel(m.id);
@@ -221,18 +217,18 @@ const handleUnrecommend = async (m: BackendModelVersion) => {
   }
 };
 
-// ===================== 模型版本对比（需求 6.2 P1；场景用户仅可对比已发布模型） =====================
-/** 对比上限（需求 6.2 P1：2-5 个模型） */
+// 模型版本对比
+// 对比上限
 const MAX_COMPARE_MODELS = 5;
 
 const compareIds = ref<number[]>([]);
 
-/** 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞 */
+// 选中模型的对象缓存：分页后当前页可能不含已选项，不能再从 models 里捞
 const compareCache = new Map<number, BackendModelVersion>();
 
-/** 选择模式：开启后卡片可点选；已选项跨分页 / 跨筛选保留，只有「取消」才清空 */
+// 选择模式：开启后卡片可点选；已选项跨分页 / 跨筛选保留，只有「取消」才清空
 const compareMode = ref(false);
-/** 对比结果弹窗 */
+// 对比结果弹窗
 const compareVisible = ref(false);
 
 const isPicked = (id: number) => compareIds.value.includes(id);
@@ -252,7 +248,7 @@ const toggleCompare = (m: BackendModelVersion) => {
   }
 };
 
-/** 全选 / 反选只作用于当前页（已选项可能散在别的页，不跨页拉全量） */
+// 全选 / 反选只作用于当前页（已选项可能散在别的页，不跨页拉全量）
 const selectAllOnPage = () => {
   let blocked = false;
   for (const model of models.value) {
@@ -286,7 +282,7 @@ const invertSelection = () => {
   if (blocked) ElMessage.warning(`最多选择 ${MAX_COMPARE_MODELS} 个模型进行对比`);
 };
 
-/** 工具栏「对比」：首次点击进入选择模式，再次点击打开对比弹窗 */
+// 工具栏「对比」：首次点击进入选择模式，再次点击打开对比弹窗
 const handleCompareClick = () => {
   if (!compareMode.value) {
     compareMode.value = true;
@@ -296,7 +292,7 @@ const handleCompareClick = () => {
   compareVisible.value = true;
 };
 
-/** 「取消」：退出选择模式并清空已选 */
+// 「取消」：退出选择模式并清空已选
 const cancelCompare = () => {
   compareMode.value = false;
   compareVisible.value = false;
@@ -317,9 +313,9 @@ const compareList = computed(() =>
 interface MetricRow {
   label: string;
   key: keyof EvaluationMetrics;
-  /** 仅管理员可见的内部指标（场景用户只看前 6 项） */
+  // 仅管理员可见的内部指标（场景用户只看前 6 项）
   adminOnly?: boolean;
-  /** 最优方向：CV Std 越小越好，其余越大越好 */
+  // 最优方向：CV Std 越小越好，其余越大越好
   better: 'max' | 'min';
 }
 
@@ -344,7 +340,7 @@ const visibleMetricRows = computed(() =>
   allMetricRows.filter((row) => isManagement.value || !row.adminOnly)
 );
 
-/** 某指标在已选模型里的最优值（比的是原始值）；不足 2 个模型或全无数据时返回 null */
+// 某指标在已选模型里的最优值（比的是原始值）；不足 2 个模型或全无数据时返回 null
 const bestValueOf = (row: MetricRow): number | null => {
   if (compareList.value.length < 2) return null;
   const values = compareList.value
@@ -354,7 +350,7 @@ const bestValueOf = (row: MetricRow): number | null => {
   return row.better === 'min' ? Math.min(...values) : Math.max(...values);
 };
 
-/** 判断某模型在某指标上是否为最优（高亮）。原始值相等才算并列，显示成同一个数但底层不同不算 */
+// 判断某模型在某指标上是否为最优（高亮）。原始值相等才算并列，显示成同一个数但底层不同不算
 const isBest = (m: BackendModelVersion, row: MetricRow) => {
   const best = bestValueOf(row);
   if (best === null) return false;
@@ -362,7 +358,7 @@ const isBest = (m: BackendModelVersion, row: MetricRow) => {
   return Number.isFinite(value) && value === best;
 };
 
-/** 与最优值的差距（百分点，带正负号）；最优项、无数据、四舍五入后为 0 的都返回 null */
+// 与最优值的差距（百分点，带正负号）；最优项、无数据、四舍五入后为 0 的都返回 null
 const metricDelta = (m: BackendModelVersion, row: MetricRow) => {
   const best = bestValueOf(row);
   if (best === null) return null;
@@ -382,7 +378,7 @@ const metricValue = (model: BackendModelVersion, key: keyof EvaluationMetrics) =
 // 管理员视角与用户视角在后端是两份独立产物，前端按视角分桶缓存，切标签时互不覆盖。
 type EvaluationTab = Extract<ModelEvaluationAudience, 'current' | 'user'>;
 
-/** 评价弹窗里最多列出的场景重点字段数（超出只截断展示，不影响后端数据） */
+// 评价弹窗里最多列出的场景重点字段数（超出只截断展示，不影响后端数据）
 const FEATURE_PROFILE_LIMIT = 8;
 
 interface EvaluationBucket {
@@ -390,7 +386,7 @@ interface EvaluationBucket {
   pending: boolean;
   response: ModelEvaluationResponse | null;
   markdown: string;
-  /** 推理型模型的思维链：只用于等待期展示「确实在生成」，正文到达即覆盖，且不落库 */
+  // 推理型模型的思维链：只用于等待期展示「确实在生成」，正文到达即覆盖，且不落库
   reasoning: string;
   status: string;
   error: string;
@@ -432,7 +428,7 @@ const canGenerateEvaluation = computed(() => isManagement.value || !evaluationMa
 const evaluationBodyRef = ref<HTMLElement | null>(null);
 const evaluationReasoningRef = ref<HTMLElement | null>(null);
 
-/** 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。 */
+// 流式生成期间把可滚动容器钉在底部，让最新的思维链/正文始终可见。
 const stickEvaluationToBottom = () => {
   if (!evaluationLoading.value) return;
   void nextTick(() => {
@@ -461,7 +457,6 @@ const loadEvaluation = async (audience: EvaluationTab) => {
     bucket.response = response;
     bucket.markdown = response.evaluation.markdown || '';
     bucket.reasoning = '';
-    // 评价读取完成后的结果由正文/空状态呈现，不再用状态条重复一遍。
     bucket.status = '';
     bucket.error = '';
     bucket.loaded = true;
@@ -473,7 +468,7 @@ const loadEvaluation = async (audience: EvaluationTab) => {
   }
 };
 
-/** 已加载过或正在加载中的视角不重复取数。 */
+// 已加载过或正在加载中的视角不重复取数。
 const ensureEvaluationLoaded = (audience: EvaluationTab) => {
   const bucket = evaluationBuckets[audience];
   if (bucket.loaded || bucket.pending) return;
@@ -554,7 +549,7 @@ const generateModelEvaluation = async (
   }
 };
 
-/** 导出当前视角的模型评价为 Markdown 文件（内容与弹窗中展示的一致） */
+// 导出当前视角的模型评价为 Markdown 文件（内容与弹窗中展示的一致）
 const exportModelEvaluation = () => {
   const target = evaluationTarget.value;
   const markdown = evaluationMarkdown.value;
@@ -571,12 +566,12 @@ const exportModelEvaluation = () => {
   ElMessage.success('模型评价已导出');
 };
 
-/** 弹窗打开时锁定页面滚动，按 Esc 可关闭 */
+// 弹窗打开时锁定页面滚动，按 Esc 可关闭
 watch([evaluationTarget, compareVisible], ([target, comparing]) => {
   document.body.style.overflow = target || comparing ? 'hidden' : '';
 });
 
-/** 切换视角时按需拉取该视角的评价：后端两份产物分别存储，不会互相覆盖。 */
+// 切换视角时按需拉取该视角的评价：后端两份产物分别存储，不会互相覆盖。
 watch(evaluationAudience, (audience) => {
   if (!evaluationTarget.value) return;
   ensureEvaluationLoaded(audience);
@@ -671,7 +666,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 模型级评价：点击「AI 评价」以弹窗展示，不依赖样本、不创建推理记录，按当前角色返回不同内容。 -->
+    <!-- 模型级评价 -->
     <Teleport to="body">
       <div
         v-if="evaluationTarget"
@@ -1132,8 +1127,8 @@ onMounted(async () => {
   gap: 18px;
 }
 
-/* ---------------- 分页器（暗色） ----------------
-   与推理记录 / 数据集预览保持同一套分页外观；变量挂在包裹层上，
+/* 分页器（暗色）
+   与推理记录 / 数据集预览保持同一套分页外观；变量挂在包裹层上。
    由 CSS 自定义属性继承进 el-pagination 内部。 */
 .model-center__pager {
   display: flex;

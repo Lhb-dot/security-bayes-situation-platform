@@ -1,9 +1,8 @@
-"""Model-level AI evaluation.
+"""模型级 AI 评价。
 
-This service evaluates a trained model version from persisted model facts. It
-does not require an input sample, execute prediction, or create an inference
-record. The stored wording is separated by role because an administrator and
-an ordinary scenario user have different information needs.
+这个服务基于已落库的模型事实评估一个训练好的模型版本，不需要输入样本，
+不跑预测，也不建推理记录。措辞按角色分开存，
+因为管理员和普通场景用户关心的东西不一样。
 """
 from __future__ import annotations
 
@@ -33,14 +32,14 @@ from app.utils.common import get_logger
 
 logger = get_logger("model_evaluation")
 MODEL_EVALUATION_VERSION = "1.0"
-#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+# 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
 MODEL_EVALUATION_PROMPT_VERSION = "1.0"
 ADMIN_ROLE = EVALUATION_AUDIENCE_MANAGEMENT
 USER_ROLE = EVALUATION_AUDIENCE_USER
 
 
 def _role_key(user: Any) -> str:
-    """三级角色 → 两级评价受众（与样本级研判共用同一套受众键）。"""
+    """三级角色 -> 两级评价受众（与样本级研判共用同一套受众键）。"""
     return evaluation_audience(getattr(user, "role", None))
 
 
@@ -55,11 +54,10 @@ def _quality_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _algorithm_reference(algorithm: Any) -> dict[str, Any]:
-    """Algorithm-owned metadata, which stays mutable after a model is trained.
+    """算法侧元数据，模型训完之后仍然可变。
 
-    The display name, description and parameter schema belong to the algorithm
-    row, not to the model version. They can legitimately be corrected later, so
-    a stored snapshot must follow the live row instead of freezing them.
+    展示名、描述、参数 schema 都属于算法行而不属于模型版本，后期修正完全合理，
+    所以存的快照要跟着活行读，不能把它们冻住。
     """
     return {
         "code": getattr(algorithm, "code", None),
@@ -70,7 +68,7 @@ def _algorithm_reference(algorithm: Any) -> dict[str, Any]:
 
 
 def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
-    """Build immutable, non-secret facts attached to a model version."""
+    """构建挂在模型版本上的不可变、不含密钥的事实。"""
     dataset = getattr(model, "dataset", None)
     algorithm = getattr(model, "algorithm", None)
     scenario = getattr(model, "scenario", None)
@@ -126,13 +124,12 @@ def build_model_attributes(model: ModelVersion) -> dict[str, Any]:
 
 
 def refresh_model_attributes(model: ModelVersion) -> dict[str, Any]:
-    """Return the model snapshot with lifecycle and algorithm blocks re-read live.
+    """重新读活状态和算法块，返回模型快照。
 
-    Model-owned facts (training parameters, quality metrics, feature profile,
-    dataset binding) stay frozen at training time. Two blocks do not belong to
-    the model and must not be served stale: ``status``, and the algorithm-owned
-    reference block. Returns the identical object when nothing changed, so the
-    caller can detect a real update with an identity check.
+    模型自己的事实（训练参数、质量指标、特征画像、数据集绑定）
+    在训练时就定型了。有两块不属于模型、不能拿旧的发：status，
+    以及算法侧的引用块。什么都没变时返回同一个对象，
+    调用方可以用身份比较判断是否真的更新过。
     """
     current = getattr(model, "model_attributes", None)
     if not isinstance(current, dict) or current.get("contract_version") != MODEL_EVALUATION_VERSION:
@@ -147,7 +144,7 @@ def refresh_model_attributes(model: ModelVersion) -> dict[str, Any]:
 
 
 def public_model_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
-    """Remove internal quality and algorithm tuning details for users."""
+    """给普通用户去掉内部质量与算法调参细节。"""
     data = dict(attributes or {})
     data["algorithm"] = {
         key: (data.get("algorithm") or {}).get(key)
@@ -160,7 +157,7 @@ def public_model_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
     }
     data.pop("training_parameters", None)
     data.pop("feature_importance", None)
-    # Keep field semantics useful to the scenario user but omit internal data.
+    # 保留对场景用户有意义的口径，内部数据一律不下发。
     data["feature_profile"] = [
         {
             key: item.get(key)
@@ -184,11 +181,10 @@ def build_model_evaluation_facts(attributes: dict[str, Any], role: str) -> dict[
 
 
 def evaluation_is_current(artifact: dict[str, Any], attributes: dict[str, Any], role: str) -> bool:
-    """A saved evaluation is only valid for the exact facts it was written from.
+    """存档的评价只对它当时依据的那份事实有效。
 
-    Algorithm metadata can be corrected after an evaluation was generated, in
-    which case the stored markdown may state conclusions that no longer match
-    the model. Such an artifact is treated as absent so it gets regenerated.
+    评价生成之后算法元数据还可能被修正，那样存下来的 markdown
+    里写的结论就跟模型对不上了。这种产物一律按不存在处理，重新生成。
     """
     if not artifact.get("markdown"):
         return False
@@ -252,7 +248,7 @@ def build_model_evaluation_prompt(facts: dict[str, Any], role: str) -> list[dict
 
 class ModelEvaluationService(ServiceBase):
     def requested_role(self, current_user, audience: str = "current") -> str:
-        """Resolve the audience while preventing role escalation."""
+        """解析受众，同时挡住角色越权。"""
         current_role = _role_key(current_user)
         if audience in (None, "current"):
             return current_role
@@ -316,7 +312,7 @@ class ModelEvaluationService(ServiceBase):
     ) -> None:
         """写入该受众那一格。
 
-        ``ai_evaluation`` 是整块读-改-写的 JSONB，没有行锁时两个请求同时生成
+        `ai_evaluation` 是整块读-改-写的 JSONB，没有行锁时两个请求同时生成
         会互相吞掉对方的结果，所以先锁住模型版本行再回写。
         """
         self.db.refresh(model, with_for_update=True)

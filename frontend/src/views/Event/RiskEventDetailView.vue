@@ -1,12 +1,7 @@
 <script setup lang="ts">
 /**
- * RiskEventDetailView.vue — 风险事件详情页（Task 012 / 需求 5.7）
- *
- * 四组信息：判定说明 / 处置信息 / 基本信息 / 输入特征 —— 按「结论 → 处置 → 属性与出处 → 原始数据」排列。
- * 处置状态流转：待处置 → 处理中 → 已处置（已处置为终态禁用），入口在页头。
- * 「流转至已处置」必须先填写处置方法（弹窗），随处置记录落库，并在「处置信息」区块回显；
- * 功能上线前已处置的历史事件没有该记录，区块保留位置、内容留空。
- * 解释文本为事件生成时固化存储，前端不拼接、不重算（需求 5.7.3.1/5.7.3.4）。
+ * 风险事件详情页。四组信息按「结论 → 处置 → 属性与出处 → 原始数据」排列。
+ * 流转至已处置必须先填处置方法，随处置记录落库；解释文本在事件生成时固化，前端不重算。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -31,7 +26,6 @@ const featuresExpanded = ref(false);
 
 const event = computed<RiskEvent | null>(() => riskEventStore.detail);
 
-/** 场景名映射（展示用，与现有页面一致） */
 const SCENARIO_LABEL: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
@@ -39,7 +33,7 @@ const SCENARIO_LABEL: Record<string, string> = {
   flightdeck_operation: '舰面调度态势',
 };
 
-/** 原始标签中文化（模型输出的原始类标；未收录的原样显示） */
+// 原始标签中文化（模型输出的原始类标；未收录的原样显示）
 const ORIGINAL_LABEL: Record<string, string> = {
   anomaly: '异常',
   normal: '正常',
@@ -47,7 +41,7 @@ const ORIGINAL_LABEL: Record<string, string> = {
   '0': '正常',
 };
 
-/** RiskLevelTag 需要小写等级，做显式映射（大写 → 小写） */
+// RiskLevelTag 需要小写等级，做显式映射（大写 → 小写）
 const TAG_LEVEL: Record<RiskLevelUpper, 'critical' | 'high' | 'medium' | 'low'> = {
   HIGH: 'high',
   MEDIUM: 'medium',
@@ -57,7 +51,7 @@ const tagLevel = computed<'critical' | 'high' | 'medium' | 'low'>(() =>
   event.value ? TAG_LEVEL[event.value.risk_level] : 'low'
 );
 
-/** 处置状态 → 徽章色调类名（避免把中文写进 class） */
+// 处置状态 → 徽章色调类名（避免把中文写进 class）
 const STATUS_TONE: Record<string, string> = {
   '待处置': 'pending',
   '处理中': 'processing',
@@ -72,7 +66,7 @@ const originalLabelText = computed(() =>
   event.value ? (ORIGINAL_LABEL[event.value.original_label] ?? event.value.original_label) : '--'
 );
 
-/** 创建者：详情接口直接下发用户名；列表接口没有该字段时退回 userStore.users（仅管理员拉得到全量用户），再退回 user_id */
+// 创建者：详情接口直接下发用户名；列表接口没有该字段时退回 userStore.users（仅管理员拉得到全量用户），再退回 user_id
 const creatorName = computed(() =>
   event.value
     ? (event.value.creator_name
@@ -84,7 +78,7 @@ const creatorName = computed(() =>
 /**
  * 后端文案常量（utils/request.ts 把响应体 detail 原样塞进 Error.message）：
  * 404 = risk_event_service._get「风险事件不存在」；403 = _require_event_access「无权限操作」。
- * 旧代码比对的是「无权查看该事件 / 无权访问该场景」——后端从不产生这两条，
+ * 旧代码比对的是「无权查看该事件 / 无权访问该场景」，后端从不产生这两条，
  * 于是 denied 分支永远进不去，403 落到通用错误卡 + 一个必然失败的重试按钮。
  */
 const NOT_FOUND_MESSAGE = '风险事件不存在';
@@ -107,7 +101,7 @@ const loadData = async () => {
   }
 };
 
-/** 下一处置状态（已处置为终态 → null） */
+// 下一处置状态（已处置为终态 → null）
 const nextStatus = computed<RiskEvent['status'] | null>(() => {
   if (!event.value) return null;
   if (event.value.status === '待处置') return '处理中';
@@ -115,11 +109,11 @@ const nextStatus = computed<RiskEvent['status'] | null>(() => {
   return null;
 });
 
-/** 流转弹窗：仅「流转至已处置」需要先填写处置方法 */
+// 流转弹窗：仅「流转至已处置」需要先填写处置方法
 const resolveVisible = ref(false);
 const resolveComment = ref('');
 const submitting = ref(false);
-/** 处置方法是否填了内容（空白不算）—— 未填时确认按钮禁用 */
+// 处置方法是否填了内容（空白不算），未填时确认按钮禁用
 const canSubmitResolve = computed(() => resolveComment.value.trim().length > 0);
 
 const applyStatus = async (target: RiskEvent['status'], comment?: string) => {
@@ -140,7 +134,7 @@ const handleStatusChange = async () => {
   // nextStatus 随之重算为 null，事后再拼进提示语就成了「已更新处置状态为「null」」。
   const target = nextStatus.value;
   if (!target) return;
-  // 「已处置」是终态，必须先记录处置方法 —— 弹窗确认后走 submitResolve。
+  // 「已处置」是终态，必须先记录处置方法，弹窗确认后走 submitResolve。
   if (target === '已处置') {
     resolveComment.value = '';
     resolveVisible.value = true;
@@ -155,15 +149,7 @@ const submitResolve = async () => {
   resolveVisible.value = false;
 };
 
-/**
- * 处置方法文本域：高度随内容增长，封顶后转为内部滚动条。
- *
- * - 默认高度 = 4 行（与 rows 属性一致），输入变多时自动长高；
- * - 上限取 min(420, 视口高 − 300)：300 是弹窗上下留白 + 头/脚/标签/内边距的余量，
- *   保证长到极限时整个弹窗仍在视口内，不会被挤出屏幕；
- * - 超过上限就只加内部滚轮（overflow-y: auto），而不是继续把弹窗撑高。
- * - 用户不能手动拖拽改尺寸（CSS `resize: none`）。
- */
+// 处置方法文本域：高度随内容增长，封顶后转为内部滚动条。
 const resolveTextarea = ref<HTMLTextAreaElement | null>(null);
 const TEXTAREA_MIN_HEIGHT = 120;
 const textareaMaxHeight = () =>
@@ -185,15 +171,15 @@ watch(resolveVisible, (visible) => {
   if (visible) void nextTick(autoGrowTextarea);
 });
 
-/** 视口变化时重新夹一次上限（窗口被压矮时弹窗不能被顶出屏幕） */
+// 视口变化时重新夹一次上限（窗口被压矮时弹窗不能被顶出屏幕）
 const onViewportResize = () => {
   if (resolveVisible.value) autoGrowTextarea();
 };
 
-/** 折叠状态下最多先展示多少条输入特征（超出部分点「展开全部」） */
+// 折叠状态下最多先展示多少条输入特征（超出部分点「展开全部」）
 const FEATURE_PREVIEW_LIMIT = 50;
 
-/** 输入特征键值对（只读；超宽特征折叠滚动） */
+// 输入特征键值对（只读；超宽特征折叠滚动）
 const featureEntries = computed<Array<{ key: string; value: string }>>(() =>
   Object.entries(event.value?.raw_features ?? {}).map(([key, value]) => ({
     key,
@@ -260,19 +246,18 @@ onUnmounted(() => window.removeEventListener('resize', onViewportResize));
         </div>
       </section>
 
-      <!-- 1 判定说明 -->
+      <!-- 判定说明 -->
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">判定说明</h3>
         <p class="event-detail__explain">{{ formatExplanation(event.description) }}</p>
       </section>
 
-      <!-- 2 处置信息：仅已处置事件展示；流转时未填（历史数据）则保留位置、内容留空 -->
       <section v-if="event.status === '已处置'" class="card event-detail__card">
         <h3 class="event-detail__card-title">处置信息</h3>
         <p class="event-detail__handling">{{ event.handling_comment ?? '' }}</p>
       </section>
 
-      <!-- 3 基本信息：判定属性在前，数据出处在后 -->
+      <!-- 基本信息：判定属性在前，数据出处在后 -->
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">基本信息</h3>
         <div class="event-detail__grid">
@@ -291,7 +276,7 @@ onUnmounted(() => window.removeEventListener('resize', onViewportResize));
         </div>
       </section>
 
-      <!-- 4 输入特征 -->
+      <!-- 输入特征 -->
       <section class="card event-detail__card">
         <h3 class="event-detail__card-title">
           输入特征
@@ -401,7 +386,7 @@ onUnmounted(() => window.removeEventListener('resize', onViewportResize));
   white-space: nowrap;
 }
 
-/* 页头按钮与两个徽章统一为胶囊，尺寸同上 —— 这一行是「状态 + 动作」，
+/* 页头按钮与两个徽章统一为胶囊，尺寸同上，这一行是「状态 + 动作」，
    尺寸和形状不齐会显得散。 */
 .event-detail__head-actions :deep(.el-button) {
   height: 32px;
@@ -521,8 +506,6 @@ onUnmounted(() => window.removeEventListener('resize', onViewportResize));
   line-height: 1.7;
 }
 
-/* 处置信息：与判定说明同款盒子，取「已处置」的青色。min-height 保证历史数据
-   （没有处置方法）时盒子不塌陷 —— 位置要留住，内容留空。 */
 .event-detail__handling {
   margin: 0;
   min-height: 48px;

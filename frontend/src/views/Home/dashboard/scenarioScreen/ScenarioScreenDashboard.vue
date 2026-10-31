@@ -1,3 +1,52 @@
+<template>
+  <main class="scenario-profile" :class="data ? `scene-${data.scenario_key}` : ''" :style="{ '--scene-accent': scene.color }">
+    <header class="sp-masthead">
+      <span class="sp-brand"><svg viewBox="0 0 24 24"><path d="M12 2 21 6v6c0 5-5 8-9 10-4-2-9-5-9-10V6z M8 12l3 3 5-6" /></svg>AI SECURITY OPERATIONS CENTER</span>
+      <div class="sp-platform-title"><i></i><h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1><i></i></div>
+      <div class="sp-account"><button class="sp-status" :class="{ 'is-error': error }" :title="statusTitle" :disabled="loading" @click="emit('refresh')">{{ loading ? '更新中…' : error ? '更新失败 · 重试' : '刷新数据 ↻' }}</button><span class="sp-user-name" :title="userName">{{ userName }}</span><button class="sp-logout" :disabled="loggingOut" @click="emit('logout')">退出</button><button class="sp-fullscreen" title="切换全屏" aria-label="切换全屏" @click="fullscreen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5" /></svg></button></div>
+    </header>
+    <div v-if="data && charts && models" class="sp-content">
+      <section class="sp-command">
+        <div class="sp-scene-title"><h2>{{ data.scenario_name }}<small>态势总览</small></h2></div>
+        <nav aria-label="场景功能入口"><button v-for="item in nav" :key="item.href" @click="emit('navigate', item.href)"><svg v-if="navIcons[item.href]" viewBox="0 0 24 24" aria-hidden="true"><path :d="navIcons[item.href]" /></svg>{{ item.label }}</button></nav>
+      </section>
+      <section class="sp-metrics" aria-label="场景核心指标">
+        <article v-for="(metric, i) in metrics" :key="metric.label" :style="{ '--metric-color': ['#69b7ff', '#4cdac6', '#efc17a', scene.color][i] }" :title="metric.detail">
+          <div class="sp-metric-label">{{ metric.label }}</div>
+          <div class="sp-metric-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></div>
+          <p>{{ metric.detail }}</p>
+        </article>
+      </section>
+      <div :key="data.scenario_key" class="sp-grid">
+        <div class="sp-column"><ProfileChart :spec="charts.left[0]" /><ProfileChart :spec="charts.left[1]" /><ProfileChart :spec="models" /></div>
+        <div class="sp-center">
+          <section class="sp-panel sp-hero">
+            <div class="sp-hero-heading"><div><h3>{{ charts.main.title }}</h3></div><span class="sp-source-badge"><i></i>数据画像</span></div>
+            <CoverageMatrix v-if="['network', 'geological'].includes(data.scenario_key)" :data="data" />
+            <ProfileChart v-else :spec="charts.main" />
+            <div class="sp-governance" :style="{ '--gov-rows': minimumRows }">
+              <header><h3><i></i>{{ governanceTitle }}</h3></header>
+              <div v-for="row in governance" :key="row.name" class="sp-governance-row"><span class="sp-governance-name" :title="row.name">{{ row.name }}</span><span class="sp-governance-detail" :title="row.detail">{{ row.detail }}</span><strong :class="{ 'is-warning': row.warn }" :title="row.status">{{ row.status }}</strong></div>
+              <p class="sp-governance-note" :title="governanceNote">{{ governanceNote }}</p>
+            </div>
+          </section>
+          <section class="sp-panel sp-assets">
+            <header class="sp-panel-heading"><h3>数据资产台账</h3><span class="sp-assets-caption">按物理文件展示</span></header>
+            <div class="sp-table-wrap"><table><thead><tr><th>数据集 / 版本</th><th>样本量</th><th>字段</th><th>范围</th></tr></thead><tbody><tr v-for="item in data.datasets.slice(0, 6)" :key="item.dataset_id"><td><button :title="item.logical_id" @click="emit('navigate', `/datasets/${item.dataset_id}`)">{{ item.logical_id }}<small>V{{ item.version }}</small></button></td><td>{{ number(item.record_count, 0) }}</td><td>{{ number(item.attribute_count, 0) }}</td><td>{{ visibilityName(item.visibility) }}</td></tr></tbody></table></div>
+            <p class="sp-asset-note">共 {{ data.datasets.length }} 份文件，显示前 6 份 · 同内容副本的有效规模仅计一次</p>
+          </section>
+        </div>
+        <div class="sp-column"><ProfileChart :spec="charts.right" /><ProfileChart :spec="operations[0]" :error="runtimeError" /><ProfileChart :spec="operations[1]" :error="runtimeError" /></div>
+      </div>
+    </div>
+    <div v-else class="sp-page-state" role="status" :aria-busy="loading"><span>{{ loading ? '正在读取场景数据…' : '场景数据暂不可用' }}</span><p>{{ error || '正在连接数据服务，请稍候' }}</p><button v-if="!loading" @click="emit('refresh')">重新加载</button><button v-if="role === 'SUPER_ADMIN'" @click="emit('navigate', '/overview')">返回平台首页</button></div>
+    <footer class="sp-footer">
+      <div class="sp-switcher" aria-label="可访问场景"><button v-for="item in visibleScenes" :key="item.code" :aria-current="data?.scenario_id === item.id ? 'page' : undefined" :class="{ 'is-active': data?.scenario_id === item.id }" :style="{ '--tab-color': item.style.color }" @click="emit('navigate', `/scenarios/${encodeURIComponent(item.code)}/dashboard`)"><i></i>{{ item.style.name }}</button></div>
+      <div v-if="role === 'SCENARIO_ADMIN'" class="sp-members" :title="memberError"><span>场景用户</span><span>注册 <strong>{{ number(members?.total, 0) }}</strong></span><span>启用 <strong>{{ number(members?.enabled, 0) }}</strong></span><span>停用 <strong>{{ number(members?.disabled, 0) }}</strong></span><button v-if="memberError" class="sp-status" @click="emit('refresh')">重试</button></div>
+      <span class="sp-footer-label"><i></i>{{ runtime?.scope.self_only ? '运行统计：本人范围' : '场景数据全量统计' }}</span>
+    </footer>
+  </main>
+</template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue';
 import type { FlightdeckProfile, GeologicalProfile, NetworkProfile, PowerProfile, ScenarioProfile, ScenarioWorkspace } from '@/api/dashboardApi';
@@ -82,53 +131,3 @@ async function fullscreen() {
 onMounted(() => document.documentElement.classList.add('scenario-screen-mode'));
 onUnmounted(() => document.documentElement.classList.remove('scenario-screen-mode'));
 </script>
-
-<template>
-  <main class="scenario-profile" :class="data ? `scene-${data.scenario_key}` : ''" :style="{ '--scene-accent': scene.color }">
-    <header class="sp-masthead">
-      <span class="sp-brand"><svg viewBox="0 0 24 24"><path d="M12 2 21 6v6c0 5-5 8-9 10-4-2-9-5-9-10V6z M8 12l3 3 5-6" /></svg>AI SECURITY OPERATIONS CENTER</span>
-      <div class="sp-platform-title"><i></i><h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1><i></i></div>
-      <div class="sp-account"><button class="sp-status" :class="{ 'is-error': error }" :title="statusTitle" :disabled="loading" @click="emit('refresh')">{{ loading ? '更新中…' : error ? '更新失败 · 重试' : '刷新数据 ↻' }}</button><span class="sp-user-name" :title="userName">{{ userName }}</span><button class="sp-logout" :disabled="loggingOut" @click="emit('logout')">退出</button><button class="sp-fullscreen" title="切换全屏" aria-label="切换全屏" @click="fullscreen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5" /></svg></button></div>
-    </header>
-    <div v-if="data && charts && models" class="sp-content">
-      <section class="sp-command">
-        <div class="sp-scene-title"><h2>{{ data.scenario_name }}<small>态势总览</small></h2></div>
-        <nav aria-label="场景功能入口"><button v-for="item in nav" :key="item.href" @click="emit('navigate', item.href)"><svg v-if="navIcons[item.href]" viewBox="0 0 24 24" aria-hidden="true"><path :d="navIcons[item.href]" /></svg>{{ item.label }}</button></nav>
-      </section>
-      <section class="sp-metrics" aria-label="场景核心指标">
-        <article v-for="(metric, i) in metrics" :key="metric.label" :style="{ '--metric-color': ['#69b7ff', '#4cdac6', '#efc17a', scene.color][i] }" :title="metric.detail">
-          <div class="sp-metric-label">{{ metric.label }}</div>
-          <div class="sp-metric-value"><strong>{{ metric.value }}</strong><span>{{ metric.unit }}</span></div>
-          <p>{{ metric.detail }}</p>
-        </article>
-      </section>
-      <div :key="data.scenario_key" class="sp-grid">
-        <div class="sp-column"><ProfileChart :spec="charts.left[0]" /><ProfileChart :spec="charts.left[1]" /><ProfileChart :spec="models" /></div>
-        <div class="sp-center">
-          <section class="sp-panel sp-hero">
-            <div class="sp-hero-heading"><div><h3>{{ charts.main.title }}</h3></div><span class="sp-source-badge"><i></i>数据画像</span></div>
-            <CoverageMatrix v-if="['network', 'geological'].includes(data.scenario_key)" :data="data" />
-            <ProfileChart v-else :spec="charts.main" />
-            <div class="sp-governance" :style="{ '--gov-rows': minimumRows }">
-              <header><h3><i></i>{{ governanceTitle }}</h3></header>
-              <div v-for="row in governance" :key="row.name" class="sp-governance-row"><span class="sp-governance-name" :title="row.name">{{ row.name }}</span><span class="sp-governance-detail" :title="row.detail">{{ row.detail }}</span><strong :class="{ 'is-warning': row.warn }" :title="row.status">{{ row.status }}</strong></div>
-              <p class="sp-governance-note" :title="governanceNote">{{ governanceNote }}</p>
-            </div>
-          </section>
-          <section class="sp-panel sp-assets">
-            <header class="sp-panel-heading"><h3>数据资产台账</h3><span class="sp-assets-caption">按物理文件展示</span></header>
-            <div class="sp-table-wrap"><table><thead><tr><th>数据集 / 版本</th><th>样本量</th><th>字段</th><th>范围</th></tr></thead><tbody><tr v-for="item in data.datasets.slice(0, 6)" :key="item.dataset_id"><td><button :title="item.logical_id" @click="emit('navigate', `/datasets/${item.dataset_id}`)">{{ item.logical_id }}<small>V{{ item.version }}</small></button></td><td>{{ number(item.record_count, 0) }}</td><td>{{ number(item.attribute_count, 0) }}</td><td>{{ visibilityName(item.visibility) }}</td></tr></tbody></table></div>
-            <p class="sp-asset-note">共 {{ data.datasets.length }} 份文件，显示前 6 份 · 同内容副本的有效规模仅计一次</p>
-          </section>
-        </div>
-        <div class="sp-column"><ProfileChart :spec="charts.right" /><ProfileChart :spec="operations[0]" :error="runtimeError" /><ProfileChart :spec="operations[1]" :error="runtimeError" /></div>
-      </div>
-    </div>
-    <div v-else class="sp-page-state" role="status" :aria-busy="loading"><span>{{ loading ? '正在读取场景数据…' : '场景数据暂不可用' }}</span><p>{{ error || '正在连接数据服务，请稍候' }}</p><button v-if="!loading" @click="emit('refresh')">重新加载</button><button v-if="role === 'SUPER_ADMIN'" @click="emit('navigate', '/overview')">返回平台首页</button></div>
-    <footer class="sp-footer">
-      <div class="sp-switcher" aria-label="可访问场景"><button v-for="item in visibleScenes" :key="item.code" :aria-current="data?.scenario_id === item.id ? 'page' : undefined" :class="{ 'is-active': data?.scenario_id === item.id }" :style="{ '--tab-color': item.style.color }" @click="emit('navigate', `/scenarios/${encodeURIComponent(item.code)}/dashboard`)"><i></i>{{ item.style.name }}</button></div>
-      <div v-if="role === 'SCENARIO_ADMIN'" class="sp-members" :title="memberError"><span>场景用户</span><span>注册 <strong>{{ number(members?.total, 0) }}</strong></span><span>启用 <strong>{{ number(members?.enabled, 0) }}</strong></span><span>停用 <strong>{{ number(members?.disabled, 0) }}</strong></span><button v-if="memberError" class="sp-status" @click="emit('refresh')">重试</button></div>
-      <span class="sp-footer-label"><i></i>{{ runtime?.scope.self_only ? '运行统计：本人范围' : '场景数据全量统计' }}</span>
-    </footer>
-  </main>
-</template>

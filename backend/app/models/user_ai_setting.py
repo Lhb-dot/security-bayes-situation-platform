@@ -1,6 +1,6 @@
-"""Per-user OpenAI-compatible provider settings.
+"""按用户的 OpenAI 兼容供应商配置。
 
-The API key is encrypted at rest and is never serialized to a client response.
+API key 落库加密，任何时候都不序列化进客户端响应。
 """
 from datetime import datetime
 

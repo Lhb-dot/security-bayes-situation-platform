@@ -1,4 +1,4 @@
-"""FastAPI dependencies for authenticated users and role checks."""
+"""登录态与角色校验的 FastAPI 依赖。"""
 import hmac
 from datetime import datetime, timezone
 
@@ -19,9 +19,9 @@ from app.utils.auth import csrf_cookie_name, digest_token, session_cookie_name
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-#: last_seen_at 的写库节流窗口（秒）。
-#: 该字段只用于会话续期展示，没必要每个请求都写 —— 原先每个请求（含 GET）都会
-#: 触发一次 UPDATE + COMMIT，而首页一次加载就有 2~3 个请求，等于白白多出几次写事务。
+# last_seen_at 的写库节流窗口（秒）。
+# 该字段只用于会话续期展示，没必要每个请求都写 —— 原先每个请求（含 GET）都会
+# 触发一次 UPDATE + COMMIT，而首页一次加载就有 2~3 个请求，等于白白多出几次写事务。
 _LAST_SEEN_REFRESH_SECONDS = 60
 
 
@@ -32,9 +32,10 @@ def _unauthorized() -> HTTPException:
 def _as_utc(value: datetime) -> datetime:
     """按 UTC 解释库里读出的时间戳。
 
-    生产库是 PostgreSQL（``DateTime(timezone=True)`` 回来即 aware），但 SQLite /
-    MySQL 一类驱动会返回 naive datetime，直接与 aware 的 ``now`` 比较会抛
-    TypeError（500）。统一在这里补 tzinfo，避免同一个文件里一处归一化、一处不归一化。
+    生产库是 PostgreSQL（`DateTime(timezone=True)` 回来即 aware），但 SQLite /
+    MySQL 一类驱动会返回 naive datetime，直接与 aware 的 `now` 比较会抛
+    TypeError（500）。统一在这里补 tzinfo，
+    避免同一个文件里一处归一化、一处不归一化。
     """
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
@@ -44,7 +45,7 @@ def get_current_session(
     db: Session = Depends(get_db),
     csrf_header: str | None = Header(None, alias="X-CSRF-Token"),
 ) -> AuthSession:
-    """Resolve a live server-side session from the HttpOnly cookie."""
+    """从 HttpOnly cookie 解析出仍然有效的服务端会话。"""
     session_token = request.cookies.get(session_cookie_name())
     if not session_token:
         raise _unauthorized()
@@ -96,7 +97,7 @@ def get_current_user(
     session: AuthSession = Depends(get_current_session),
     db: Session = Depends(get_db),
 ) -> AppUser:
-    """Resolve the enabled account belonging to the current session."""
+    """取当前会话对应的、状态为启用的账号。"""
     user = db.scalar(
         select(AppUser)
         .options(joinedload(AppUser.scenario))
@@ -108,14 +109,14 @@ def get_current_user(
 
 
 def require_admin(current_user: AppUser = Depends(get_current_user)) -> AppUser:
-    """Only the platform SUPER_ADMIN may use the endpoint."""
+    """仅平台 SUPER_ADMIN 可访问。"""
     if current_user.role != ROLE_SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="无权限操作")
     return current_user
 
 
 def require_scenario_admin(current_user: AppUser = Depends(get_current_user)) -> AppUser:
-    """SUPER_ADMIN and the bound SCENARIO_ADMIN may use the endpoint."""
+    """SUPER_ADMIN 与绑定场景的 SCENARIO_ADMIN 可访问。"""
     if current_user.role not in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN):
         raise HTTPException(status_code=403, detail="无权限操作")
     return current_user
@@ -125,7 +126,7 @@ def require_bound_scenario(
     scenario_id: int,
     current_user: AppUser = Depends(get_current_user),
 ) -> AppUser:
-    """Allow SUPER_ADMIN everywhere and other roles only in their bound scenario."""
+    """SUPER_ADMIN 全通；其他角色只在自己绑定的场景内放行。"""
     if current_user.role != ROLE_SUPER_ADMIN and current_user.scenario_id != scenario_id:
         raise HTTPException(status_code=403, detail="无权限操作")
     return current_user

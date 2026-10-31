@@ -1,8 +1,9 @@
 """推理记录路由（/api/v1/inference-records）。
 
-对应 Service：InferenceRecordService（backend/app/services/inference_record_service.py）。
-权限（需求 6.8/6.7.3）：执行推理 → 登录用户（仅 PUBLISHED 模型）；
-查看记录 → 登录用户（USER 仅本人）；删除 → 能看见该记录的人都能删。
+对应 Service：
+InferenceRecordService（backend/app/services/inference_record_service.py）。
+权限（需求 6.8/6.7.3）：执行推理 -> 登录用户（仅 PUBLISHED 模型）；
+查看记录 -> 登录用户（USER 仅本人）；删除 -> 能看见该记录的人都能删。
 """
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
@@ -35,7 +36,8 @@ def predict(
     model_version_id）不符，故采用无 id 的 POST /predict 形式。
 
     预测结果由服务端统一预测入口（独立 Java 预测服务）根据
-    model_version_id + input_features 计算，客户端不再提交 prediction_label/risk_score。
+    model_version_id + input_features 计算，客户端不再提交
+    prediction_label/risk_score。
     """
     return unwrap(
         InferenceRecordService(db).create_inference(
@@ -58,7 +60,7 @@ def predict_batch(
 ):
     """批量研判：与单条推理行为一致，风险类样本照常生成 RiskEvent。
 
-    必须注册在 ``/{record_id}`` 之前 —— 否则 "predict-batch" 会被当成
+    必须注册在 `/{record_id}` 之前 —— 否则 "predict-batch" 会被当成
     路径参数解析而返回 422。
     """
     service = InferenceRecordService(db)
@@ -118,7 +120,7 @@ def predict_batch_submit(
     200 条最坏可跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒）；
     同步返回会让前端拿到 504 而实际已经落了一半记录，所以页面走这条。
 
-    必须注册在 ``/{record_id}`` 之前 —— 否则 "predict-batch" 会被当成
+    必须注册在 `/{record_id}` 之前 —— 否则 "predict-batch" 会被当成
     路径参数解析而返回 422。
     """
     service = InferenceRecordService(db)

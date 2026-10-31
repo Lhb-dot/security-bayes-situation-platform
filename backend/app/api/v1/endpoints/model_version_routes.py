@@ -1,7 +1,8 @@
 """模型版本路由（/api/v1/model-versions）。
 
-对应 Service：ModelVersionService（backend/app/services/model_version_service.py）。
-权限（需求 6.7/6.5.2）：训练/发布/下线/推荐 → 仅 ADMIN；查看 → 登录用户
+对应 Service：
+ModelVersionService（backend/app/services/model_version_service.py）。
+权限（需求 6.7/6.5.2）：训练/发布/下线/推荐 -> 仅 ADMIN；查看 -> 登录用户
 （普通用户仅见 PUBLISHED 模型）。
 """
 from fastapi import APIRouter, Depends, Query

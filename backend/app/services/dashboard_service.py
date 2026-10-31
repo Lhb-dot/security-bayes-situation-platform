@@ -1,27 +1,24 @@
 """首页聚合服务。
 
-首页需要的是**页面级统计**（数据画像 / 运行态 / 我的工作台），而不是数据集预览或
-风险事件分页列表。本服务按 `docs/首页字段口径说明.md` 的口径集中实现三类数据：
+首页需要的是页面级统计（数据画像 / 运行态 / 我的工作台），
+而不是数据集预览或风险事件分页列表。本服务按 docs/首页字段口径说明.md
+的口径集中实现三类数据：平台总览（最外层管理员首页）、
+场景数据画像（管理端场景首页）、我的工作台（场景用户首页，
+范围严格限定为「当前登录用户本人」）。
 
-- 平台总览（最外层管理员首页）
-- 场景数据画像（管理端场景首页）
-- 我的工作台（场景用户首页，范围严格限定为「当前登录用户本人」）
-
-## 口径硬约束（`docs/首页字段口径说明.md` 第三轮核查结论）
-
-1. **有效样本量 / 有效数据集**：内容完全相同的重复注册文件只计一次，避免重复计数；
-2. **风险样本占比**：按各数据集真实标签字段**全量**统计，不做分页截断（原「异常率」
-   只读前 500 行导致恒 0）；
-3. **风险分区间固定分箱** 0.5-0.7 / 0.7-0.9 / 0.9-1.0 —— 事件仅在判为风险时创建，
-   分数恒 ≥0.5，故「<0.5」档恒空；
-4. **高置信告警** = 按**当前账号**在该场景的高风险阈值判定为高风险的事件数
-   （见 `app/services/risk_view.py`）。原先写死 `risk_score ≥ 0.8`，与账号阈值并存会导致
-   同一页面上「高风险事件数」和「高置信告警数」用两套口径；生效阈值随 summary 的
-   `high_threshold` 一并下发；
-5. **离散区间字段**（ARFF 分箱值，如 `'(174.365-310.525]'`）取区间中点参与数值统计；
-6. 地质场景**不存在「区域」字段**，改按真实字段 `Slope` 的坡度档位分组；
-7. 用户端**不聚合他人数据**，后端按 `created_by_user_id` 强制过滤；
-8. **风险等级一律按查看者阈值重算**，不读 `RiskEvent.risk_level` 这个落库的创建者视角值。
+口径硬约束（docs/首页字段口径说明.md 第三轮核查结论）：有效样本量 /
+有效数据集按内容去重，内容完全相同的重复注册文件只计一次；
+风险样本占比按各数据集真实标签字段全量统计，不做分页截断（原「异常率」只读前
+500 行导致恒 0）；风险分区间固定分箱 0.5-0.7 / 0.7-0.9 / 0.9-1.0，
+事件仅在判为风险时创建、分数恒 ≥0.5，故「<0.5」档恒空；
+高置信告警按当前账号在该场景的高风险阈值判定，原先写死 risk_score ≥ 0.8
+会与账号阈值并存、同一页面上「高风险事件数」和「高置信告警数」用两套口径，
+生效阈值随 summary 的 high_threshold 一并下发（见 app/services/risk_view.py）；
+离散区间字段（ARFF 分箱值，如 '(174.365-310.525]'）取区间中点参与数值统计；
+地质场景不存在「区域」字段，改按真实字段 Slope 的坡度档位分组；
+用户端不聚合他人数据，后端按 created_by_user_id 强制过滤；
+风险等级一律按查看者阈值重算，不读 RiskEvent.risk_level
+这个落库的创建者视角值。
 """
 from __future__ import annotations
 
@@ -83,7 +80,7 @@ from app.utils.common import row_to_dict
 # 常量
 # ---------------------------------------------------------------------------
 
-#: 场景 code → 前端使用的稳定场景键（与页面分支一致）
+# 场景 code -> 前端使用的稳定场景键（与页面分支一致）
 SCENARIO_CODE_KEYS = {
     "network_security": "network",
     "power_system": "power",
@@ -91,7 +88,7 @@ SCENARIO_CODE_KEYS = {
     "geological_risk": "geological",
 }
 
-#: 风险类型 → 场景键
+# 风险类型 -> 场景键
 RISK_TYPE_KEYS = {
     RISK_TYPE_NETWORK: "network",
     RISK_TYPE_POWER: "power",
@@ -99,14 +96,14 @@ RISK_TYPE_KEYS = {
     RISK_TYPE_GEOLOGICAL: "geological",
 }
 
-#: 舰面调度画像取用的航母数据集：数值未离散化，可直接做数值统计。
-#: 仅用于选择画像数据源，不再承担「同源去重代表」职责（三份航母数据集各自独立计数）。
+# 舰面调度画像取用的航母数据集：数值未离散化，可直接做数值统计。
+# 仅用于选择画像数据源，不再承担「同源去重代表」职责（三份航母数据集各自独立计数）。
 CARRIER_CANONICAL = "carrier_feature2_biaoqian"
 
-#: NF-UNSW 数据集的 PROTOCOL 为协议号，映射为可读名称
+# NF-UNSW 数据集的 PROTOCOL 为协议号，映射为可读名称
 PROTOCOL_NAMES = {"1": "ICMP", "6": "TCP", "17": "UDP", "47": "GRE", "50": "ESP", "89": "OSPF"}
 
-#: 网络流量包长五段（NF-UNSW 的 NUM_PKTS_*_BYTES 五列）
+# 网络流量包长五段（NF-UNSW 的 NUM_PKTS_*_BYTES 五列）
 FLOW_BUCKETS = (
     ("≤128B", "NUM_PKTS_UP_TO_128_BYTES"),
     ("128-256B", "NUM_PKTS_128_TO_256_BYTES"),
@@ -115,9 +112,9 @@ FLOW_BUCKETS = (
     (">1K", "NUM_PKTS_1024_TO_1514_BYTES"),
 )
 
-#: 网络流量「统计维度」覆盖矩阵（D2）：(维度名, 稳定 key, 该维度的候选字段名)。
-#: 数据集只要含该维度任一字段即算覆盖（实测 NF 有端口+包长、无 service；
-#: KDD 有 service+flag、无端口包长 → 矩阵呈对角空白）。
+# 网络流量「统计维度」覆盖矩阵（D2）：(维度名, 稳定 key, 该维度的候选字段名)。
+# 数据集只要含该维度任一字段即算覆盖（实测 NF 有端口+包长、无 service；
+# KDD 有 service+flag、无端口包长 -> 矩阵呈对角空白）。
 NET_DIMENSIONS = (
     ("协议", "PROTOCOL", ("PROTOCOL",)),
     ("目的端口", "L4_DST_PORT", ("L4_DST_PORT", "L4_SRC_PORT")),
@@ -126,24 +123,24 @@ NET_DIMENSIONS = (
     ("应用服务", "service", ("service",)),
 )
 
-#: 事件状态
+# 事件状态
 EVENT_STATUS_LABELS = {"PENDING": "待处置", "PROCESSING": "处理中", "RESOLVED": "已处置"}
 
-#: 风险分固定分箱（下限由「只在判风险时建事件」决定，恒 ≥0.5）
+# 风险分固定分箱（下限由「只在判风险时建事件」决定，恒 ≥0.5）
 SCORE_BINS = (("0.5-0.7", 0.5, 0.7), ("0.7-0.9", 0.7, 0.9), ("0.9-1.0", 0.9, 1.01))
 
-#: 工作台「推理活动趋势」的统计窗口天数（前端标题需同步）
+# 工作台「推理活动趋势」的统计窗口天数（前端标题需同步）
 ACTIVITY_TREND_DAYS = 10
 
 # 注：原 HIGH_CONFIDENCE = 0.8 已删除。它是写死的「高置信告警」线，与账号阈值并存
 # 会导致同一页面上「高风险事件数」和「高置信告警数」用两套口径。
 # 现在统一走 risk_view：按当前账号在该场景的高风险阈值判定，生效阈值随 summary 下发。
 
-#: 地质地形因子（DIS_raw_data 真实字段）
+# 地质地形因子（DIS_raw_data 真实字段）
 GEO_FACTORS = ("Slope", "TWI", "Elevation", "Relief", "SPI", "Dis2roads", "Dis2fault", "Dis2river")
 
-#: 地质数据集角色分工（D1）：logical_id → 角色名；未登记的角色为「未分类」。
-#: 角色由数据集在场景家族中承担的结构性职责决定，与是否登记风险口径无关。
+# 地质数据集角色分工（D1）：logical_id -> 角色名；未登记的角色为「未分类」。
+# 角色由数据集在场景家族中承担的结构性职责决定，与是否登记风险口径无关。
 GEO_DATASET_ROLES = {
     "dis_raw_data": "因子表",
     "dis_landslides": "风险标签表",
@@ -152,10 +149,10 @@ GEO_DATASET_ROLES = {
     "dis_guaruja_random": "随机基线集",
     # 生产 seed 用新 logical_id 注册的同一份 DIS_Landslides（字节完全相同，正常会被
 }
-#: 未在 GEO_DATASET_ROLES 中登记的数据集统一角色
+# 未在 GEO_DATASET_ROLES 中登记的数据集统一角色
 GEO_ROLE_UNCLASSIFIED = "未分类"
 
-#: 电力电参量（PowerFrequencyHz 单列，其余做刻度条）
+# 电力电参量（PowerFrequencyHz 单列，其余做刻度条）
 POWER_PARAMS = {
     "VoltageLevel_kV": "电压",
     "CurrentAmp": "电流",
@@ -163,13 +160,13 @@ POWER_PARAMS = {
     "PowerFrequencyHz": "频率",
     "Sensor_Packet_Loss_%": "遥测丢包率",
 }
-#: ARFF 中 `%` 可能被转义为 `\%`
+# ARFF 中 `%` 可能被转义为 `\%`
 POWER_PARAM_ALIASES = {"Sensor_Packet_Loss_%": ("Sensor_Packet_Loss_%", "Sensor_Packet_Loss_\\%")}
 
-#: 事件侧电参量（与数据集侧同名字段）
+# 事件侧电参量（与数据集侧同名字段）
 POWER_EVENT_PARAMS = ("VoltageLevel_kV", "CurrentAmp", "Temperature_C", "PowerFrequencyHz")
 
-#: 电参量单位（用于前端展示）
+# 电参量单位（用于前端展示）
 _POWER_UNITS = {
     "VoltageLevel_kV": "kV",
     "CurrentAmp": "A",
@@ -178,8 +175,8 @@ _POWER_UNITS = {
     "Sensor_Packet_Loss_%": "%",
 }
 
-#: 电力数据集准入基线（与 frontend WorkspacePower.vue 的 NORMAL_BAND 一致）：
-#: (字段名, 中文名, 下限, 上限)。下限为 None 表示只校验上限（丢包率 ≤1%）。
+# 电力数据集准入基线（与 frontend WorkspacePower.vue 的 NORMAL_BAND 一致）：
+# (字段名, 中文名, 下限, 上限)。下限为 None 表示只校验上限（丢包率 ≤1%）。
 POWER_BASELINE = (
     ("VoltageLevel_kV", "电压", 300.0, 700.0),
     ("CurrentAmp", "电流", 400.0, 1600.0),
@@ -187,7 +184,7 @@ POWER_BASELINE = (
     ("PowerFrequencyHz", "频率", 49.8, 50.2),
     ("Sensor_Packet_Loss_%", "遥测丢包率", None, 1.0),
 )
-#: 工频合格区间（PowerFrequencyHz），与 POWER_BASELINE 中的同名字段保持一致
+# 工频合格区间（PowerFrequencyHz），与 POWER_BASELINE 中的同名字段保持一致
 POWER_FREQUENCY_BAND = (49.8, 50.2)
 
 _QUOTES = "'\" \t\r\n"
@@ -200,7 +197,7 @@ _NUM_MISSING = {"", "?", "nan", "NaN", "none", "None", "null", "NULL"}
 
 
 def _clean(value: Any) -> str:
-    """去掉 ARFF 值两侧的引号与空白（`'Circuit Breaker'` → `Circuit Breaker`）。
+    """去掉 ARFF 值两侧的引号与空白（`'Circuit Breaker'` -> `Circuit Breaker`）。
 
     注：曾尝试「首尾无引号则跳过 strip」的快速分支，实测反而慢（CPython 的
     `str.strip()` 在无需裁剪时会原样返回，比额外的下标判断更便宜），已回退。
@@ -211,7 +208,7 @@ def _clean(value: Any) -> str:
 
 
 def _to_float(text: str) -> float | None:
-    """解析有限浮点数；``inf`` / ``nan`` 一律视为缺失（ARFF 单边区间会用到）。"""
+    """解析有限浮点数；`inf` / `nan` 一律视为缺失（ARFF 单边区间会用到）。"""
     try:
         value = float(text)
     except (TypeError, ValueError):
@@ -236,8 +233,9 @@ def _mid_of_interval(text: str) -> float | None:
 def _num(value: Any) -> float | None:
     """把 ARFF 原始值转成数值。
 
-    支持：普通数值（含负号/科学计数）、带引号数值、离散区间（取中点或有限端点）。
-    缺失值（``?``、空、``inf`` 纯值）返回 None。
+    支持：普通数值（含负号/科学计数）、带引号数值、
+    离散区间（取中点或有限端点）。
+    缺失值（`?`、空、`inf` 纯值）返回 None。
 
     热路径优化：数值列里绝大多数单元格是「首尾无引号无空白的数字字符串」，
     此时直接 `float()` 即可，跳过 `_clean()` 的三次 strip 与 `lower()`。
@@ -353,13 +351,15 @@ def _grouped_pairs(rows: list[list[str]], left_index: int | None, right_index: i
 
 
 def _label_is_risk(logical_id: str | None, value: Any) -> bool:
-    """标签是否为正类（风险）—— 唯一口径来源是 ``constants.DATASET_POSITIVE_LABELS``。
+    """标签是否为正类（风险）—— 唯一口径来源是 `constants.DATASET_POSITIVE_LABELS`。
 
-    需求文档 §6.4.1 明令禁止按标签字符串 / 取值大小 / 文件排列顺序自动推断正类，
-    因此这里**不再**使用「非 ``0/normal/no/false/none`` 即风险」的历史兜底规则
+    需求文档 §6.4.1 明令禁止按标签字符串 / 取值大小 /
+    文件排列顺序自动推断正类，
+    因此这里不再使用「非 `0/normal/no/false/none` 即风险」的历史兜底规则
     （该规则对未登记数据集是"猜"，属违规实现），改为把判定完全委托给
-    :func:`constants.is_risk_label`。未登记的数据集一律返回 ``False``（宁少报、不猜）；
-    ``logical_id`` 缺失时同样返回 ``False``。
+    :func:`constants.is_risk_label`。未登记的数据集一律返回
+    `False`（宁少报、不猜）；
+    `logical_id` 缺失时同样返回 `False`。
     """
     if not logical_id:
         return False
@@ -374,37 +374,37 @@ def _risk_score(scores: list[float]) -> int:
 def _percent(part: int, total: int) -> float:
     """占比（0~1 小数）；分母为 0 记 0.0。
 
-    0/0 在语义上是「无数据」而不是「零占比」，但本函数被**要求数值**的口径复用：
-    ``_risk_level_of_rate`` 判档（前端 risk_level 契约只有 high/medium/low 三档）、
-    平台总览 / 场景卡片的各风险占比（前端类型声明为 ``number``）。这些调用点
-    不能接受 None，故 ``_percent`` 保持返回 0.0；需要区分「无数据 / 零占比」
-    的字段改用 ``_percent_or_none``。
+    0/0 在语义上是「无数据」而不是「零占比」，但本函数被要求数值的口径复用：
+    `_risk_level_of_rate` 判档（前端 risk_level 契约只有 high/medium/low 三档）、
+    平台总览 / 场景卡片的各风险占比（前端类型声明为 `number`）。这些调用点
+    不能接受 None，故 `_percent` 保持返回 0.0；需要区分「无数据 / 零占比」
+    的字段改用 `_percent_or_none`。
     """
     return round(part / total, 4) if total else 0.0
 
 
 def _percent_or_none(part: int, total: int) -> float | None:
-    """占比（0~1 小数）；分母为 0 返回 ``None``（下发 null）。
+    """占比（0~1 小数）；分母为 0 返回 `None`（下发 null）。
 
     用于「0/0 是未定义而非 0」的字段：数据集 risk_rate（文件缺失 / 空表）、
     工频合格率（无 PowerFrequencyHz 数据）、重复内容冗余率（无文件）。
 
-    注意：前端 ``components/dashboard/dashFormat.ts`` 的 ``fmtPercent`` 用
-    ``Number(value)`` 判有限性，而 ``Number(null) === 0``，**null 仍会渲染成
-    「0.0%」**。要让「—」真正生效，需 F7 侧把 ``fmtPercent`` / ``fmtInt`` 改为
-    ``value === null || value === undefined → '—'``（跨区提案 B1-P1）。
+    注意：前端 `components/dashboard/dashFormat.ts` 的 `fmtPercent` 用
+    `Number(value)` 判有限性，而 `Number(null) === 0`，null 仍会渲染成
+    「0.0%」。要让「—」真正生效，需 F7 侧把 `fmtPercent` / `fmtInt` 改为
+    `value === null || value === undefined -> '—'`（跨区提案 B1-P1）。
     本函数先把「未定义」这一事实如实下发，不伪造 0.0。
     """
     return round(part / total, 4) if total else None
 
 
 def _label_kind(counts: Counter) -> str:
-    """标签列形态（纯描述性，**不参与正类判定**）。
+    """标签列形态（纯描述性，不参与正类判定）。
 
-    - 去重取值集合为空 → ``"unknown"``；
-    - 恰好 2 个取值 → ``"binary"``；
-    - 多于 2 个且全部可转数值 → ``"numeric"``（如 landslides 的 {0..9, 11}）；
-    - 多于 2 个且不可全转数值 → ``"multiclass"``（如 landslide_size 的 6 个规模档）。
+    - 去重取值集合为空 -> `"unknown"`；
+    - 恰好 2 个取值 -> `"binary"`；
+    - 多于 2 个且全部可转数值 -> `"numeric"`（如 landslides 的 {0..9, 11}）；
+    - 多于 2 个且不可全转数值 -> `"multiclass"`（如 landslide_size 的 6 个规模档）。
     """
     values = [value for value in counts if value and value != "?"]
     if not values:
@@ -417,9 +417,9 @@ def _label_kind(counts: Counter) -> str:
 
 
 def _head_column_values(path: str, name: str, limit: int = 20) -> list[str]:
-    """只读 ARFF 前 ``limit`` 行、取某列的非空原始值（不做全量解析）。
+    """只读 ARFF 前 `limit` 行、取某列的非空原始值（不做全量解析）。
 
-    供「编码形态」探测使用：只需看前 20 个值是否形如 ``'(a-b]'`` 区间串。
+    供「编码形态」探测使用：只需看前 20 个值是否形如 `'(a-b]'` 区间串。
     """
     if not name or not os.path.exists(path):
         return []
@@ -441,16 +441,17 @@ def _head_column_values(path: str, name: str, limit: int = 20) -> list[str]:
 
 
 def _flight_encoding(fields: list[dict], path: str, label_field: str) -> str:
-    """舰面数据集的编码形态：``paired`` / ``interval`` / ``numeric`` / ``unknown``。
+    """舰面数据集的编码形态：`paired` / `interval` / `numeric` / `unknown`。
 
     判定顺序（同契约 §5.3）：
-    1. 字段名含 ``PlaneID1`` / ``PlaneID2`` → ``paired``（配对轨迹版）；
-    2. ``inter_dist_min`` 的原始取值形如 ``'(a-b]'`` 区间串 → ``interval``（Weka 离散区间版）；
-    3. 除标签列外全部字段类型为 ``numeric`` → ``numeric``（数值连续版）；
-    4. 其余 → ``unknown``。
+    1. 字段名含 `PlaneID1` / `PlaneID2` -> `paired`（配对轨迹版）；
+    2. `inter_dist_min` 的原始取值形如 `'(a-b]'` 区间串 -> `interval`（Weka 离散区间版）；
+    3. 除标签列外全部字段类型为 `numeric` -> `numeric`（数值连续版）；
+    4. 其余 -> `unknown`。
 
-    注：第 3 条排除标签列。数值连续版（Feature2_Cleaning_biaoqian）除 ``Collision``
-    这个 enum 标签列外全是 numeric，若把标签列也算进去会退化判定为 ``unknown``，
+    注：第 3 条排除标签列。数值连续版（Feature2_Cleaning_biaoqian）除
+    `Collision`
+    这个 enum 标签列外全是 numeric，若把标签列也算进去会退化判定为 `unknown`，
     与「数值连续 / 离散区间 / 配对轨迹」三形态的治理语义不符。
     """
     names = {field.get("name") for field in fields}
@@ -485,7 +486,7 @@ def _power_baseline_violated(value: float | None, low: float | None, high: float
 def _component_matrix_rows(
     buckets: dict[str, dict[str, list[str]]], kind: str
 ) -> list[dict[str, Any]]:
-    """设备/系统 × 数据集 覆盖矩阵行（``buckets`` = 值 → {logical_id: 标签取值列表}）。
+    """设备/系统 × 数据集 覆盖矩阵行（`buckets` = 值 -> {logical_id: 标签取值列表}）。
 
     只输出实际出现过的数据集（count > 0），按总样本量降序、同量按取值名升序。
     """
@@ -514,26 +515,26 @@ def _component_matrix_rows(
 # 场景风险等级：按「风险样本占比」判档
 # ---------------------------------------------------------------------------
 #
-# 旧口径 `"high" if high_count else ...` 只看**有没有**高危事件：场景里存在 1 条就整体
+# 旧口径 `"high" if high_count else ...` 只看有没有高危事件：场景里存在 1 条就整体
 # 标高危，与样本量、与风险占比都无关。实测四个场景全部落在高危，标签没有区分度。
 #
 # 现改为按 risk_sample_rate（风险样本量 / 有效样本量）判档。该值由 _effective_counts
 # 全量统计数据集标签列得出，与卡片上「有效样本量」同源，口径自洽。
 #
-# 边界：无样本（分母为 0）时 _percent 返回 0.0 → 落到低危。这与旧口径的兜底一致，
+# 边界：无样本（分母为 0）时 _percent 返回 0.0 -> 落到低危。这与旧口径的兜底一致，
 # 不额外引入「无数据」等级（前端 risk_level 契约只有 high/medium/low 三档）。
 
-#: 风险样本占比 >= 该值判为高危
+# 风险样本占比 >= 该值判为高危
 SCENARIO_HIGH_RATE = 0.50
-#: 风险样本占比 >= 该值判为中危；低于该值判为低危
+# 风险样本占比 >= 该值判为中危；低于该值判为低危
 SCENARIO_MEDIUM_RATE = 0.25
 
 
 def _risk_level_of_rate(rate: float) -> str:
     """按风险样本占比判级（rate 为 0~1 的小数）。
 
-    返回**小写**等级：本接口的对外契约一直是小写（改动前就是字面量 ``"high"``），
-    与 ``risk_view`` 那套大写枚举不同，前端 ``Scenario.risk_level`` 按小写取值。
+    返回小写等级：本接口的对外契约一直是小写（改动前就是字面量 `"high"`），
+    与 `risk_view` 那套大写枚举不同，前端 `Scenario.risk_level` 按小写取值。
     """
     if rate >= SCENARIO_HIGH_RATE:
         return "high"
@@ -552,39 +553,39 @@ def _scenario_key(scenario_code: str | None, risk_type: str | None) -> str:
 #
 # 原实现的缓存挂在 _DatasetReader 实例上，生命周期只有「一次请求」：首页 / 场景
 # 中心每次刷新都要把所有 ARFF 重新解析一遍（实测 1.21s 里 1.11s 花在这里，占 90%），
-# 且连续调用第二次依然一样慢。现改为**进程级**缓存，以文件 (mtime, size) 作为失效
+# 且连续调用第二次依然一样慢。现改为进程级缓存，以文件 (mtime, size) 作为失效
 # 依据 —— 数据集文件被替换 / 重新生成后签名变化，缓存自动重算。
 #
 # 内存约束：
 # - 表头缓存、标签统计缓存、行数缓存都只有几十字节~几 KB，可放心常驻；
 # - 全量行缓存（rows）单份可达数十 MB，因此用 LRU 限制条目数。
 
-#: 全量行缓存的内存预算（字节），可用环境变量 DASHBOARD_ROW_CACHE_MB 调整。
-#:
-#: 实测 11 份数据集全量常驻真实占用约 81 MB，而 _estimate_rows_bytes 按 64 字节/
-#: 单元格估算会得出约 122 MB（偏保守约 1.5 倍）。默认预算 192 MB 对应真实占用
-#: 约 130 MB，既能让当前 11 份全部常驻（来回切场景不抖动），又有明确上界。
+# 全量行缓存的内存预算（字节），可用环境变量 DASHBOARD_ROW_CACHE_MB 调整。
+#
+# 实测 11 份数据集全量常驻真实占用约 81 MB，而 _estimate_rows_bytes 按 64 字节/
+# 单元格估算会得出约 122 MB（偏保守约 1.5 倍）。默认预算 192 MB 对应真实占用
+# 约 130 MB，既能让当前 11 份全部常驻（来回切场景不抖动），又有明确上界。
 _ROW_CACHE_BUDGET = int(os.getenv("DASHBOARD_ROW_CACHE_MB", "192")) * 1024 * 1024
 
-#: 进程级缓存锁：FastAPI 的同步端点跑在线程池中，缓存需要并发保护。
+# 进程级缓存锁：FastAPI 的同步端点跑在线程池中，缓存需要并发保护。
 _CACHE_LOCK = threading.Lock()
 
-#: dataset_id -> (mtime, size, fields)：只解析 @ATTRIBUTE 段，体积可忽略
+# dataset_id -> (mtime, size, fields)：只解析 @ATTRIBUTE 段，体积可忽略
 _HEADER_CACHE: dict[int, tuple[float, int, list[dict]]] = {}
 
-#: dataset_id -> (mtime, size, label_field, 总行数, 风险行数)
+# dataset_id -> (mtime, size, label_field, 总行数, 风险行数)
 _LABEL_STATS_CACHE: dict[int, tuple[float, int, str, int, int]] = {}
 
-#: dataset_id -> (mtime, size, 内容指纹)：内容去重的唯一依据，只依赖文件内容
+# dataset_id -> (mtime, size, 内容指纹)：内容去重的唯一依据，只依赖文件内容
 _FINGERPRINT_CACHE: dict[int, tuple[float, int, str]] = {}
 
-#: dataset_id -> (mtime, size, label_field, 标签列取值计数)：label_values / label_kind 用
+# dataset_id -> (mtime, size, label_field, 标签列取值计数)：label_values / label_kind 用
 _LABEL_VALUES_CACHE: dict[int, tuple[float, int, str, Counter]] = {}
 
-#: dataset_id -> (mtime, size, 行数)
+# dataset_id -> (mtime, size, 行数)
 _ROW_COUNT_CACHE: dict[int, tuple[float, int, int]] = {}
 
-#: dataset_id -> (mtime, size, fields, rows, 估算字节数)：按 _ROW_CACHE_BUDGET 淘汰
+# dataset_id -> (mtime, size, fields, rows, 估算字节数)：按 _ROW_CACHE_BUDGET 淘汰
 _ROW_CACHE: "OrderedDict[int, tuple[float, int, list[dict], list[list[str]], int]]" = OrderedDict()
 _ROW_CACHE_BYTES = 0
 
@@ -598,17 +599,19 @@ def _file_signature(path: str) -> tuple[float, int]:
     return (stat.st_mtime, stat.st_size)
 
 
-#: 内容指纹的分块大小：1 MB，避免大文件一次性读入内存
+# 内容指纹的分块大小：1 MB，避免大文件一次性读入内存
 _FINGERPRINT_CHUNK = 1024 * 1024
 
 
 def content_fingerprint(dataset: Dataset) -> str:
-    """文件内容指纹：``"{size}-{sha1(全文)[:16]}"``；文件缺失返回 ``"missing:{logical_id}"``。
+    """文件内容指纹：`"{size}-{sha1(全文)[:16]}"`；文件缺失返回 `"missing:
+{logical_id}"`。
 
-    内容去重的唯一依据。**不能**按 logical_id / 文件名判断是否重复——同一份物理文件可能以
+    内容去重的唯一依据。不能按 logical_id /
+    文件名判断是否重复——同一份物理文件可能以
     不同 logical_id 重复注册，只有内容哈希能识别真正的同源。
 
-    缓存与 ``_HEADER_CACHE`` / ``_LABEL_STATS_CACHE`` 同风格：以 ``_file_signature``
+    缓存与 `_HEADER_CACHE` / `_LABEL_STATS_CACHE` 同风格：以 `_file_signature`
     的 (mtime, size) 作失效依据，进程级常驻（一份数据集只存一个 16 位摘要）。
     """
     path = resolve_dataset_path(dataset.file_path)
@@ -651,9 +654,9 @@ def _estimate_rows_bytes(rows: list[list[str]]) -> int:
 def warm_dataset_caches(db, max_seconds: float = 10.0) -> dict[str, Any]:
     """预热数据集缓存，让首个请求不必承担 ARFF 解析开销。
 
-    由应用启动时的后台线程调用（见 ``app/main.py``）。按文件体积升序处理：
+    由应用启动时的后台线程调用（见 `app/main.py`）。按文件体积升序处理：
     小文件先缓存好，即使大文件中途超时，首页 / 场景中心依赖的统计也已就绪。
-    累计耗时超过 ``max_seconds`` 立即停手，避免超大文件拖住启动流程。
+    累计耗时超过 `max_seconds` 立即停手，避免超大文件拖住启动流程。
 
     返回预热统计，供启动日志输出。
     """
@@ -696,7 +699,7 @@ def warm_dataset_caches(db, max_seconds: float = 10.0) -> dict[str, Any]:
 def clear_dataset_caches() -> None:
     """清空全部数据集缓存。
 
-    数据集登记 / 修改 / 删除后由 ``DatasetService`` 调用。缓存的常规失效依据是
+    数据集登记 / 修改 / 删除后由 `DatasetService` 调用。缓存的常规失效依据是
     文件 (mtime, size) 与 label_field，本函数用于「元数据变了但文件签名没变」
     这类兜底场景（例如同名文件被同秒覆盖）。
     """
@@ -714,10 +717,10 @@ def clear_dataset_caches() -> None:
 class _DatasetReader:
     """数据集读取器（进程级缓存）。
 
-    - ``fields``      只读表头，用于定位标签列；
-    - ``label_stats`` 走「只读标签列」快速路径，不物化其它列（实测 23x 提速），
-      字段数校验失败时自动回退到 ``read_arff`` 全量解析；
-    - ``rows``        全量解析（字段 + 数据行），供数据画像 / 工作台读取真实列值。
+    - `fields`      只读表头，用于定位标签列；
+    - `label_stats` 走「只读标签列」快速路径，不物化其它列（实测 23x 提速），
+      字段数校验失败时自动回退到 `read_arff` 全量解析；
+    - `rows`        全量解析（字段 + 数据行），供数据画像 / 工作台读取真实列值。
     """
 
     def _path(self, dataset: Dataset) -> str:
@@ -852,9 +855,10 @@ class _DatasetReader:
     def label_value_counts(self, dataset: Dataset) -> Counter:
         """标签列取值计数（已去引号、已剔除缺失值）。
 
-        与 ``label_stats`` 同款：命中进程级缓存直接返回；未命中优先走「只读标签列」
-        快速路径（``tally_arff_column``），不可用才回退 ``read_arff`` 全量解析。
-        **不做**正类判定——只描述取值构成（供 ``label_values`` / ``label_kind``）。
+        与 `label_stats` 同款：命中进程级缓存直接返回；
+        未命中优先走「只读标签列」
+        快速路径（`tally_arff_column`），不可用才回退 `read_arff` 全量解析。
+        不做正类判定——只描述取值构成（供 `label_values` / `label_kind`）。
         """
         path = self._path(dataset)
         mtime, size = _file_signature(path)
@@ -896,7 +900,7 @@ class _DatasetReader:
     def describe(self, dataset: Dataset, source_group: str | None = None) -> dict[str, Any]:
         """数据集资产明细行。
 
-        ``source_group`` 由调用方按同源分组结果传入（``get_profile`` 一次算好，
+        `source_group` 由调用方按同源分组结果传入（`get_profile` 一次算好，
         避免逐行重复分组）；缺省时按本数据集自身的同源键推导。
         """
         total, risk = self.label_stats(dataset)
@@ -927,15 +931,16 @@ class _DatasetReader:
             "positive_labels": sorted(DATASET_POSITIVE_LABELS.get(dataset.logical_id, set())),
             "label_values": [value for value, _ in label_values.most_common(12)],
             "label_kind": _label_kind(label_values),
-            # 口径登记状态：与 is_risk_label 同值，语义更明确（未登记 → 不产风险事件）
+            # 口径登记状态：与 is_risk_label 同值，语义更明确（未登记 -> 不产风险事件）
             "caliber_registered": registered,
         }
 
 
 def _effective_groups(datasets: list[Dataset]) -> dict[str, list[Dataset]]:
-    """按内容指纹分组：**只有内容完全相同**的重复注册文件才归为一组。
+    """按内容指纹分组：只有内容完全相同的重复注册文件才归为一组。
 
-    不再按 logical_id 做任何硬编码归并——内容不同的数据集（哪怕是同一批样本的不同
+    不再按 logical_id
+    做任何硬编码归并——内容不同的数据集（哪怕是同一批样本的不同
     编码，如航母的三份文件）各自独立成组、独立计数。
     """
     groups: dict[str, list[Dataset]] = defaultdict(list)
@@ -966,7 +971,7 @@ def _effective_counts(reader: _DatasetReader, datasets: list[Dataset]) -> tuple[
 
 
 def _event_scope(authz, stmt, current_user, scenario_id: int | None = None):
-    """**统计口径**的风险事件范围（只用于聚合计数，见 Authz.scope_event_stats）。"""
+    """统计口径的风险事件范围（只用于聚合计数，见 Authz.scope_event_stats）。"""
     stmt = authz.scope_event_stats(stmt, current_user)
     if scenario_id is not None:
         stmt = stmt.where(RiskEvent.scenario_id == scenario_id)
@@ -1011,8 +1016,9 @@ def _event_summary(
 ) -> dict[str, Any]:
     """风险事件汇总。
 
-    ``high_confidence`` 按**当前账号**在 ``scenario_id`` 的阈值判定（原先写死 0.8），
-    并把生效阈值一并下发，前端据此渲染「风险分 ≥ x」的说明文字，避免文案与口径脱节。
+    `high_confidence` 按当前账号在 `scenario_id` 的阈值判定（原先写死 0.8），
+    并把生效阈值一并下发，前端据此渲染「风险分 ≥ x」的说明文字，
+    避免文案与口径脱节。
     """
     status = {"PENDING": 0, "PROCESSING": 0, "RESOLVED": 0}
     today = datetime.now(timezone.utc).date()
@@ -1057,7 +1063,7 @@ def _recent_event(event: RiskEvent, thresholds: dict | None = None) -> dict[str,
 
 
 # ---------------------------------------------------------------------------
-# Service
+# 服务层实现
 # ---------------------------------------------------------------------------
 
 
@@ -1215,24 +1221,27 @@ class DashboardService(ServiceBase):
     def get_scenario_overview(self, current_user):
         """场景卡片聚合（场景中心列表页 + 平台运行总览共用，唯一数据源）。
 
-        口径与平台总览完全一致（`docs/首页字段口径说明.md`），避免两处数字打架：
-        - 数据集：内容完全相同的重复注册文件只计 1 个有效数据集；
-        - 样本量：各有效数据集代表文件的全量样本数（不做前 N 行截断）；
-        - 模型：仅统计 status=PUBLISHED 的已发布模型版本；
-        - 风险分：所辖真实风险事件 risk_score 的均值 ×100（无事件记 0）；
-        - 风险等级：有高危事件 high / 仅有中危 medium / 其余 low。
+        口径与平台总览完全一致（见 docs/首页字段口径说明.md），
+        避免两处数字打架：数据集按内容去重后计数，
+        内容完全相同的重复注册文件只计 1 个有效数据集；
+        样本量取各有效数据集代表文件的全量样本数，不做前 N 行截断；
+        模型只统计 status=PUBLISHED 的已发布版本；风险分是所辖真实风险事件
+        risk_score 的均值 ×100，无事件记 0；风险等级按有高危事件 /
+        仅有中危事件 / 其余来定。
 
-        前端「场景中心」与「平台运行总览」都消费本接口，不要再在前端自行
-        按 `datasets.filter(...)` 计数（那条路径没有内容去重）。
+        前端「场景中心」和「平台运行总览」都消费本接口，不要再在前端自行按
+        datasets.filter(...) 计数 —— 那条路径没有内容去重。
 
-        可见性（需求 6.5.2，与数据集中心 `DatasetService.get_list` 对齐）：
-        - SUPER_ADMIN    ：全部场景，仅 platform 数据（服务提供方的基础数据）；
-        - SCENARIO_ADMIN ：本人绑定场景的**全部**数据集（platform + company + 场景内 personal）；
-        - SCENARIO_USER  ：本人绑定场景，platform + company + 本人 personal 数据。
+        可见性按需求 6.5.2，与数据集中心的 DatasetService.get_list
+        对齐：超管看全部场景但只有 platform 数据；
+        场景管理员看本人绑定场景的全部数据集（platform + company +
+        场景内 personal）；场景用户看本人绑定场景的 platform +
+        company + 本人 personal。
 
-        事件/风险统计走 `Authz.scope_event_stats`：SUPER 看平台全量统计（不下发明细），
-        SCENARIO_ADMIN 看本场景，SCENARIO_USER 仅本人事件。故同一场景卡片对不同角色的
-        event_count / high_risk_count / risk_score 可能不同，这是按权限过滤后的结果。
+        事件 / 风险统计走 Authz.scope_event_stats：
+        超管看平台全量统计（不下发明细），场景管理员看本场景，
+        场景用户仅本人事件。所以同一张场景卡片对不同角色的 event_count /
+        high_risk_count / risk_score 可能不同，这是按权限过滤后的结果。
         """
         self.require_login(current_user)
         role = getattr(current_user, "role", None)
@@ -1416,8 +1425,9 @@ class DashboardService(ServiceBase):
     def _modeling_stats(self, datasets: list[Dataset]) -> list[dict[str, Any]]:
         """建模覆盖：一次 group_by 查询拿到每个数据集的（已发布 / 草稿）模型数。
 
-        用单条聚合查询而非逐数据集查询（禁止 N+1）。**只统计传入的可见数据集**；
-        没有任何模型版本的数据集也会出现在结果里并计 0（「数据白躺」正是要看这个）。
+        用单条聚合查询而非逐数据集查询（禁止 N+1）。只统计传入的可见数据集；
+        没有任何模型版本的数据集也会出现在结果里并计
+        0（「数据白躺」正是要看这个）。
         """
         if not datasets:
             return []
@@ -1505,7 +1515,7 @@ class DashboardService(ServiceBase):
     ) -> list[dict[str, Any]]:
         """D1：各数据集「风险口径」横向对比行。
 
-        ``deviation`` = 本数据集风险占比 ÷ 场景合并风险占比（场景占比为 0 时记 None），
+        `deviation` = 本数据集风险占比 ÷ 场景合并风险占比（场景占比为 0 时记 None），
         即该数据集的「风险语言」相对场景合并口径高/低多少倍。
         """
         samples, risk, _ = _effective_counts(reader, list(by_logical.values()))
@@ -1536,7 +1546,7 @@ class DashboardService(ServiceBase):
     def _network_dimension_coverage(
         cls, reader: _DatasetReader, by_logical: dict[str, Dataset]
     ) -> list[dict[str, Any]]:
-        """D2：统计维度 → 覆盖数据集列表（矩阵里成对角空白的正是覆盖缺口）。"""
+        """D2：统计维度 -> 覆盖数据集列表（矩阵里成对角空白的正是覆盖缺口）。"""
         indexes = {
             item.logical_id: _field_index(reader.fields(item))
             for item in by_logical.values()
@@ -1560,10 +1570,10 @@ class DashboardService(ServiceBase):
     def _power_profile(cls, reader: _DatasetReader, by_logical: dict[str, Dataset]) -> dict[str, Any]:
         """电力系统数据画像：电参量、设备/系统/问题分布、设备故障率、遥测基线与覆盖矩阵。
 
-        - **旧字段**（``params``/``fault_count``/``device_fault_rates`` …）改为在
-          ``by_logical`` 上按「内容去重后的代表数据集」合并统计：不再硬编码单个
-          ``logical_id``，同时避免把同源副本重复求和（power 场景两份文件内容相同）。
-        - **新字段** ``telemetry_by_dataset`` / ``component_matrix`` 按数据集逐个展开，
+        - 旧字段（`params`/`fault_count`/`device_fault_rates` …）改为在
+          `by_logical` 上按「内容去重后的代表数据集」合并统计：不再硬编码单个
+          `logical_id`，同时避免把同源副本重复求和（power 场景两份文件内容相同）。
+        - 新字段 `telemetry_by_dataset` / `component_matrix` 按数据集逐个展开，
           用于横向对比各注册数据是否同质。
         """
         groups = _effective_groups(list(by_logical.values()))
@@ -1589,7 +1599,7 @@ class DashboardService(ServiceBase):
             )
 
         device_buckets: dict[str, list[str]] = defaultdict(list)
-        # 每个设备/系统的正类计数：按**该数据集自己的**显式登记表判定（§6.4.1）
+        # 每个设备/系统的正类计数：按该数据集自己的显式登记表判定（§6.4.1）
         device_risk: dict[str, int] = defaultdict(int)
         issue_values: list[str] = []
         component_values: list[str] = []
@@ -1648,9 +1658,9 @@ class DashboardService(ServiceBase):
     ) -> list[dict[str, Any]]:
         """D1：每个可见数据集一行遥测画像。
 
-        ``params`` 只给均值（刻度条用），``frequency_pass_rate`` 是工频落在
-        ``POWER_FREQUENCY_BAND`` 内的样本比例，``baseline_ok`` / ``violations``
-        按 ``POWER_BASELINE`` 逐项校验均值是否越界（无数据的项不算越界）。
+        `params` 只给均值（刻度条用），`frequency_pass_rate` 是工频落在
+        `POWER_FREQUENCY_BAND` 内的样本比例，`baseline_ok` / `violations`
+        按 `POWER_BASELINE` 逐项校验均值是否越界（无数据的项不算越界）。
         """
         rows_out: list[dict[str, Any]] = []
         for item in by_logical.values():
@@ -1691,7 +1701,7 @@ class DashboardService(ServiceBase):
                     "name": dataset_display_name_of(item),
                     "record_count": total,
                     "params": row_params,
-                    # 无 PowerFrequencyHz 数据时合格率未定义 → null
+                    # 无 PowerFrequencyHz 数据时合格率未定义 -> null
                     "frequency_pass_rate": _percent_or_none(passed, len(frequency_values)),
                     "packet_loss_mean": means.get("Sensor_Packet_Loss_%"),
                     "baseline_ok": not violations,
@@ -1706,7 +1716,7 @@ class DashboardService(ServiceBase):
     ) -> list[dict[str, Any]]:
         """D2：设备 / 系统 × 数据集 的样本量与风险占比矩阵。
 
-        先输出 ``kind="component"`` 的设备行，再输出 ``kind="system"`` 的系统行；
+        先输出 `kind="component"` 的设备行，再输出 `kind="system"` 的系统行；
         每行只列实际覆盖到该设备/系统的数据集（count > 0）。
         """
         by_component: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
@@ -1730,7 +1740,7 @@ class DashboardService(ServiceBase):
         by_logical: dict[str, Dataset],
         modeling_by_logical: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """舰面调度数据画像：以数值未离散化的航母数据集（``CARRIER_CANONICAL``）为源。"""
+        """舰面调度数据画像：以数值未离散化的航母数据集（`CARRIER_CANONICAL`）为源。"""
         item = by_logical.get(CARRIER_CANONICAL) or next(iter(by_logical.values()), None)
         fields, rows = cls._dataset_columns(reader, item)
         cmap = _field_index(fields)
@@ -1822,8 +1832,8 @@ class DashboardService(ServiceBase):
     ) -> list[dict[str, Any]]:
         """D1：同源编码族的逐文件画像。
 
-        ``encoding`` 由字段结构判定（paired / interval / numeric / unknown），
-        ``collision_consistent`` = 本文件风险样本数与分组代表文件是否一致
+        `encoding` 由字段结构判定（paired / interval / numeric / unknown），
+        `collision_consistent` = 本文件风险样本数与分组代表文件是否一致
         （不一致说明「同一批样本的另一种编码」标签对不上，需要治理）。
         """
         modeling_by_logical = modeling_by_logical or {}
@@ -1875,7 +1885,7 @@ class DashboardService(ServiceBase):
         return {
             "file_count": file_count,
             "effective_group_count": effective_group_count,
-            # 无文件时冗余率未定义 → null，避免与真实的「零冗余」混淆
+            # 无文件时冗余率未定义 -> null，避免与真实的「零冗余」混淆
             "redundancy_rate": (
                 round(1 - effective_group_count / file_count, 4) if file_count else None
             ),
@@ -1892,7 +1902,8 @@ class DashboardService(ServiceBase):
     ) -> dict[str, Any]:
         """地质风险数据画像：主集地形因子 + 各数据集标签 + 全球灾害目录分类。
 
-        另输出「数据集角色分工」（roles）与「因子覆盖/分箱一致性」（factor_coverage），
+        另输出「数据集角色分工」（roles）与「因子覆盖/分箱一致性」
+        （factor_coverage），
         用于回答「这一族异构数据集各自承担什么职责、哪些因子能横向对齐」。
         """
         main = by_logical.get("dis_raw_data")
@@ -1941,7 +1952,7 @@ class DashboardService(ServiceBase):
                     "label_kind": info["label_kind"],
                     # 是否有任何模型版本引用（含草稿）——「数据白躺」判定
                     "participates_in_training": modeling.get("total", 0) > 0,
-                    # 是否登记为风险口径（未登记 → 不产风险事件，如 dis_global_catalog）
+                    # 是否登记为风险口径（未登记 -> 不产风险事件，如 dis_global_catalog）
                     "produces_risk_events": info["caliber_registered"],
                     "record_count": info["record_count"],
                     "risk_rate": info["risk_rate"],

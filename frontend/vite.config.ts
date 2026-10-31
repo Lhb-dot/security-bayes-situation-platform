@@ -9,12 +9,8 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
 export default defineConfig({
   plugins: [
     vue(),
-    // Element Plus 按需引入：只打包实际用到的组件与其样式，
-    // 替代原先 main.ts 里的全量 `app.use(ElementPlus)` + `element-plus/dist/index.css`
-    // （全量引入时入口 JS 968KB、入口 CSS 381KB，dev 预构建的 element-plus 达 1.9MB）。
-    //
-    // ElMessage / ElMessageBox 在 11 个文件里是显式 import，不会被 AutoImport 接管，
-    // 其样式由 main.ts 显式引入（见 main.ts 注释）。
+    // Element Plus 按需引入，只打包用到的组件与样式。
+    // ElMessage / ElMessageBox 需显式 import，样式在 main.ts 引入。
     AutoImport({
       resolvers: [ElementPlusResolver()],
       dts: false,
@@ -39,12 +35,8 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    // 固定预构建范围：避免开发过程中 Vite 中途发现新依赖触发重新预构建
-    // 并整页 reload（体感上就是「突然卡住然后白一下」）。
-    //
-    // 这里仍把 element-plus 整体预构建：按需引入后每个组件样式都是独立子路径，
-    // 若交给 Vite 边跑边发现，开发中会触发一次重新预构建 + 整页 reload。
-    // 预构建只影响 dev 体验，生产构建依然按需 tree-shake。
+    // 固定预构建范围，避免开发中途重新预构建导致整页刷新。
+    // element-plus 整体预构建；生产构建仍按需 tree-shake。
     include: [
       'vue',
       'vue-router',

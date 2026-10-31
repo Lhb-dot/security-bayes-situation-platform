@@ -1,13 +1,8 @@
-/**
- * inferenceRecordApi.ts — 推理记录接口（与后端 /api/v1/inference-records 对齐）
- *
- * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.8）：执行推理需登录；场景用户仅本人记录。
- */
+// 推理记录接口（后端 /api/v1/inference-records）。这一层只有 request 调用和解包。
+// 权限边界由后端强制执行推理要登录，场景用户只看得到自己的记录。
 import request, { getCsrfToken, unwrapData } from '@/utils/request';
 import type { InferenceExplain, InferenceRecord } from '@/types/security';
 
-/** 服务端统一预测入口返回结果（POST /inference-records/predict）。 */
 export interface PredictResult {
   id: number;
   user_id: number;
@@ -18,7 +13,6 @@ export interface PredictResult {
   risk_level: string | null;
   is_risk_event: boolean;
   executed_at: string;
-  /** 预测为风险类时后端自动生成的风险事件；正常类为 null */
   risk_event: RiskEventResult | null;
   explain_data?: InferenceExplain;
   model_evaluation?: {
@@ -29,7 +23,6 @@ export interface PredictResult {
   };
 }
 
-/** 风险事件最小字段（predict 响应中内嵌） */
 export interface RiskEventResult {
   id: number;
   risk_type: string;
@@ -39,19 +32,12 @@ export interface RiskEventResult {
   status: string;
 }
 
-/**
- * 执行单条推理（POST /inference-records/predict，风险类结果自动生成风险事件）
- *
- * 预测结果（prediction_label / risk_score）由服务端统一预测入口根据
- * model_version_id + input_features 计算，客户端不再提交这两个字段。
- */
 export const predictInference = async (params: {
   model_version_id: string | number;
   input_features: Record<string, unknown>;
 }): Promise<PredictResult> =>
   unwrapData(await request.post('/api/v1/inference-records/predict', params));
 
-/** 批量研判单条结果 */
 export interface BatchInferenceItem {
   index: number;
   prediction_label: string | null;
@@ -60,53 +46,42 @@ export interface BatchInferenceItem {
   is_risk_event: boolean;
   inference_record_id: number | null;
   risk_event_id: number | null;
-  /** 该条失败时的原因；成功为 null */
   error: string | null;
 }
 
-/** 批量研判汇总结果 */
 export interface BatchInferenceResult {
   total: number;
   succeeded: number;
   failed: number;
   risk_count: number;
   items: BatchInferenceItem[];
-  /** 样本数超过单批上限、只跑了前面部分时为 true */
   truncated?: boolean;
 }
 
-/** 异步批量研判的提交回执 */
 export interface BatchJobReceipt {
   job_id: string;
   total: number;
-  /** 样本数超过单批上限、只提交了前面部分时为 true */
   truncated: boolean;
 }
 
-/** 批量研判任务视图（GET /inference-records/predict-batch/jobs/{job_id}） */
 export interface BatchInferenceJob extends BatchJobReceipt {
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   model_version_id: number;
-  /** 已处理条数，用于进度展示 */
   processed: number;
   succeeded: number;
   failed: number;
   risk_count: number;
-  /** 任务整体失败时的原因 */
   error: string | null;
-  /** 提交时刻（epoch 秒，服务端时钟）：已用时间以它为准，刷新后不会归零 */
+  // 提交时刻（epoch 秒，服务端时钟）：已用时间以它为准，刷新后不会归零
   created_at: number;
-  /** 终态（DONE / FAILED）才有；进行中为 null */
+  // 终态（DONE / FAILED）才有；进行中为 null
   result: BatchInferenceResult | null;
 }
 
-/**
- * 提交异步批量研判（POST /inference-records/predict-batch/jobs）
- *
- * 200 条最坏可跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒）：同步接口会让
- * 前端拿到 504 而实际已经落了一半记录，所以页面走这条。模型可见性、数据集区间、
- * CSV 列名等校验仍在提交时同步完成，错误照常抛出。
- */
+// 提交异步批量研判（POST /inference-records/predict-batch/jobs）。
+// 0 条最坏要跑十几分钟，超过 nginx 的 proxy_read_timeout（600 秒），走同步接口
+// 前端会拿到 504，而记录其实已经落了一半。所以页面走异步这条。模型可见性、数据集
+// 区间、CSV 列名这些校验还是在提交时同步做完，错了照常抛。
 export const submitInferenceBatch = async (params: {
   model_version_id: string | number;
   source: 'dataset' | 'samples';
@@ -116,7 +91,7 @@ export const submitInferenceBatch = async (params: {
 }): Promise<BatchJobReceipt> =>
   unwrapData(await request.post('/api/v1/inference-records/predict-batch/jobs', params));
 
-/** 上传 CSV 并提交异步批量研判 */
+// 上传 CSV 并提交异步批量研判
 export const submitInferenceBatchUpload = async (params: {
   model_version_id: string | number;
   file: File;
@@ -129,23 +104,17 @@ export const submitInferenceBatchUpload = async (params: {
   );
 };
 
-/** 批量研判任务进度（GET /inference-records/predict-batch/jobs/{job_id}，仅发起人） */
+// 批量研判任务进度（GET /inference-records/predict-batch/jobs/{job_id}，仅发起人）
 export const getInferenceBatchJob = async (jobId: string): Promise<BatchInferenceJob> =>
   unwrapData(await request.get(`/api/v1/inference-records/predict-batch/jobs/${jobId}`));
 
-/** 任务列表视图：不含逐条明细（明细走单任务接口，列表只用来恢复在途状态） */
 export type BatchInferenceJobBrief = Omit<BatchInferenceJob, 'result'>;
 
-/**
- * 我的批量研判任务列表（GET /inference-records/predict-batch/jobs，最近的在前）
- *
- * 任务表在服务端进程内，前端这侧的状态随页面一起没；刷新 / 切页回来靠它把未完成的
- * 任务接回轮询，这样离开研判页也不会丢掉完成通知。
- */
+// 我的批量研判任务列表（GET /inference-records/predict-batch/jobs，最近的在前）。
 export const listInferenceBatchJobs = async (): Promise<BatchInferenceJobBrief[]> =>
   unwrapData(await request.get('/api/v1/inference-records/predict-batch/jobs'));
 
-/** 推理记录分页列表（带 total，供列表页翻页用） */
+// 推理记录分页列表（带 total，供列表页翻页用）
 export interface InferenceRecordPage {
   items: InferenceRecord[];
   total: number;
@@ -169,7 +138,7 @@ export const getInferenceRecordPage = async (params?: {
   };
 };
 
-/** 推理记录可解释性信息（GET /inference-records/{record_id}/explain） */
+// 推理记录可解释性信息（GET /inference-records/{record_id}/explain）
 export const getInferenceExplain = async (recordId: string | number): Promise<{
   inference_record_id: number;
   prediction_label: string;
@@ -184,7 +153,7 @@ export const getInferenceExplain = async (recordId: string | number): Promise<{
 }> =>
   unwrapData(await request.get(`/api/v1/inference-records/${recordId}/explain`));
 
-/** 删除推理记录（DELETE /inference-records/{record_id}，仅管理员；已生成风险事件的记录后端禁止删除） */
+// 删除推理记录（DELETE /inference-records/{record_id}，仅管理员；已生成风险事件的记录后端禁止删除）
 export const removeInferenceRecord = async (recordId: string | number): Promise<void> =>
   unwrapData(await request.delete(`/api/v1/inference-records/${recordId}`));
 
@@ -200,14 +169,13 @@ export interface ExplanationStreamParams {
 
 export interface ExplanationStreamHandlers {
   onStart?: (data: Record<string, unknown>) => void;
-  /** 推理型模型的思维链，只用于展示「确实在生成」，不落库 */
   onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (message: string) => void;
   onDone?: (data: Record<string, unknown>) => void;
 }
 
-/** Read model-result Markdown from the backend SSE endpoint. The key stays server-side. */
+// Read model-result Markdown from the backend SSE endpoint. The key stays server-side.
 export const streamInferenceExplanation = async (
   params: ExplanationStreamParams,
   handlers: ExplanationStreamHandlers,

@@ -1,4 +1,4 @@
-"""Authentication request and response schemas."""
+"""认证相关的请求与响应结构。"""
 from pydantic import BaseModel, Field
 
 

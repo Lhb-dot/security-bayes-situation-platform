@@ -1,4 +1,4 @@
-/** 数据集查询按资源独立跟踪；页面应消费 action 返回值，避免读取其他调用方的结果。 */
+// 数据集查询按资源独立跟踪；页面应消费 action 返回值，避免读取其他调用方的结果。
 import { defineStore } from 'pinia';
 import { computed, reactive, ref, watch } from 'vue';
 import * as datasetApi from '@/api/datasetApi';
@@ -6,7 +6,6 @@ import { useUserStore } from '@/stores/userStore';
 import type { DataPreview, Dataset, DatasetField, DatasetVersion, ScenarioId } from '@/types/security';
 
 export interface DatasetQueryContext {
-  /** 页面选择改变或卸载后，不再回写共享状态。请求结果仍返回给调用方自行判断。 */
   isCurrent: () => boolean;
 }
 
@@ -125,7 +124,7 @@ export const useDatasetStore = defineStore('dataset', () => {
     await fetchVersions(datasetId);
     return version;
   };
-  /** 追加样本：增量文件与当前数据集同结构；是否新开版本由后端迭代策略决定。 */
+  // 追加样本：增量文件与当前数据集同结构；是否新开版本由后端迭代策略决定。
   const appendRows = async (datasetId: string, file: File): Promise<DatasetVersion> => {
     const version = await datasetApi.appendDatasetRows(datasetId, file);
     await fetchVersions(datasetId);

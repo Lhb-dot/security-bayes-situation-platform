@@ -1,4 +1,4 @@
-/** Design exploration only. These taxonomy and cross-tab examples are NOT backend facts. */
+// Design exploration only. These taxonomy and cross-tab examples are NOT backend facts.
 import type { CountItem } from '@/api/dashboardApi';
 import type { ProfileChartSpec } from './profileCharts';
 import { bars } from './profileCharts';

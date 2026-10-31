@@ -1,23 +1,23 @@
-"""报告 Service（Report）—— 对应需求中的"实验记录/报表"。
+"""报告 Service（Report）—— 对应需求中的「实验记录 / 报表」。
 
-对应需求文档章节：6.2（报告生成 P1）、6.8.5（报告数据范围）。
+对应需求文档章节：6.2（报告生成 P1）、6.8.5（报告数据范围）。模型见
+app.models.report.Report。
 
-模型：app.models.report.Report。
+ORM 中没有 ExperimentLog 表，需求文档里的「报告生成」（态势报告）由 report
+表承载，所以 ReportService 就是「实验记录 / 报表」能力的实现。
 
-说明：ORM 中没有 ExperimentLog 表；需求文档中的"报告生成"（态势报告）由
-report 表承载，此处 ReportService 即"实验记录/报表"能力的实现。
+业务规则（需求 6.8.5）的数据范围按三级角色分：
+最外层管理员可统计全平台数据或本人的个人数据，不支持指定单个用户；
+场景管理员可统计本人绑定场景下所有用户的数据，或本人的个人数据；
+场景用户只能统计本人的个人数据（scope 强制为 self）。个人数据 =
+当前账号自己产生的推理记录与风险事件（scope=self）。
 
-业务规则（需求 6.8.5）：
-数据范围（三级角色）：
-1. 最外层管理员（SUPER_ADMIN）：可统计全平台数据，或本人的个人数据；不支持指定单个用户。
-2. 场景管理员（SCENARIO_ADMIN）：可统计本人绑定场景下所有用户的数据，或本人的个人数据。
-3. 场景用户（SCENARIO_USER）：只能统计本人的个人数据（scope 强制为 self）。
-4. 个人数据 = 当前账号自己产生的推理记录与风险事件（scope=self）。
-5. 报告不再包含模型版本评价（模型评价在模型中心单独查看/导出），避免把缓存的 AI 评价文本混入报告。
-6. 查看范围：报告相互独立，所有角色都只能看**本人**生成的报告（2026-10 定稿）。
-7. 定时报告（scheduled=True）：报告本身就是定时任务的载体，跟随账号（generated_by）
-   存在；创建时立刻产出第一份内容，之后由后台调度器按 next_run_at 原地重新生成，
-   删除报告即删除定时任务。调度器见 app/services/report_scheduler.py。
+报告不再包含模型版本评价（模型评价在模型中心单独查看 / 导出），避免把缓存的 AI
+评价文本混入报告。查看范围上报告相互独立，所有角色都只能看本人生成的（2026-10
+定稿）。定时报告（scheduled=True）本身就是定时任务的载体，
+跟随账号（generated_by）存在；创建时立刻产出第一份内容，之后由后台调度器按
+next_run_at 原地重新生成，删除报告即删除定时任务，调度器见
+app/services/report_scheduler.py。
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -114,10 +114,12 @@ class ReportService(ServiceBase):
     ) -> dict:
         """Expose stable display fields while retaining the database field names.
 
-        include_report_data=True 时才附带结构化 report_data（较大，仅详情/生成时返回，
+        include_report_data=True 时才附带结构化 report_data（较大，
+        仅详情/生成时返回，
         列表默认排除以避免载荷膨胀）。
 
-        include_summary=False 时不下发 summary —— 它与 content 同值（都是正文全文），
+        include_summary=False 时不下发 summary —— 它与 content
+        同值（都是正文全文），
         前端列表零消费，每页 10 条等于白传 10 份正文。仅列表接口传 False。
         """
         data = row_to_dict(
@@ -144,11 +146,10 @@ class ReportService(ServiceBase):
         scenario_id: Optional[int],
         scope: str,
     ) -> tuple[object, Optional[int], str]:
-        """Normalize the report data scope after applying the three-level access rules.
+        """按三级数据权限算完之后，再规整报告的数据范围。
 
-        Both report creation paths share this boundary: management roles pick an
-        aggregate scope (whole platform / whole scenario) or their own personal
-        data, while scenario users are always pinned to their own data.
+        报告的两条创建路径共用这道边界：管理侧可以选聚合范围（全平台/全场景）
+        或自己的个人数据，场景用户则始终钉在自己身上。
         """
         role = getattr(current_user, "role", None)
         if role == ROLE_SUPER_ADMIN:
@@ -175,7 +176,8 @@ class ReportService(ServiceBase):
     ) -> tuple[object, Optional[int], str]:
         """生成入参校验 + 数据范围归一，返回 (role, scenario_id, scope)。
 
-        同步接口与异步提交共用这一条边界：异步提交要在 POST 时就返回 400 / 403，
+        同步接口与异步提交共用这一条边界：异步提交要在 POST
+        时就返回 400 / 403，
         而不是等后台线程跑起来才发现参数不对，所以单独抽出来给两处调用。
         """
         self.require_login(current_user)
@@ -213,10 +215,12 @@ class ReportService(ServiceBase):
         - 内容由调用方给出；数据范围仅用于场景绑定校验（不指定单个用户）。
         - 场景管理员/用户：scenario_id 强制为本人绑定场景。
         - 格式：format 取值 markdown/html/pdf。
-        - **不支持定时**：定时报告要求到期时能按真实数据重新生成，而本接口的 content
+        - 不支持定时：定时报告要求到期时能按真实数据重新生成，而本接口的 content
           是外部给的、无法重生成。以前允许传 scheduled=True，结果写了一条
-          next_run_at 为空的记录 —— 出现在「定时报告」列表里显示「下次生成 —」，
-          调度器却永远不认（它要求 next_run_at 非空）。现在直接拒绝，指向 /reports/generate。
+          next_run_at 为空的记录 —— 出现在「定时报告」
+          列表里显示「下次生成 —」，
+          调度器却永远不认（它要求 next_run_at 非空）。现在直接拒绝，
+          指向 /reports/generate。
         """
         self.require_login(current_user)
         err = validate_enum(report_type, REPORT_TYPES, "report_type")
@@ -269,7 +273,8 @@ class ReportService(ServiceBase):
     ):
         """生成态势报告：统计 + 算法多视图研判 + NL 态势分析/风险规避指导。
 
-        数据范围：管理员 = 全平台 / 本场景聚合 或 本人个人数据；场景用户固定为本人数据。
+        数据范围：管理员 = 全平台 / 本场景聚合 或 本人个人数据；
+        场景用户固定为本人数据。
         内容由服务端基于真实 RiskEvent 与推理记录（含 explain_data）组装，
         落库 report.content 与 report.report_data（结构化，供前端渲染图表）。
 
@@ -306,7 +311,8 @@ class ReportService(ServiceBase):
     def _refresh(self, report, owner, role=None, scenario_id=None, scope=None):
         """按 owner 的权限范围重算报告内容，就地写回 report 对象（不提交）。
 
-        定时报告到期时复用本方法：报告的身份（generated_by / report_type）不变，
+        定时报告到期时复用本方法：报告的身份（generated_by / report_type）
+        不变，
         只有 content / report_data / generated_at 跟着最新数据走，
         所以定时报告在列表里始终是一条记录，不会每次触发都堆一份副本。
         """
@@ -360,7 +366,7 @@ class ReportService(ServiceBase):
     def _gather_events(self, current_user, role, scenario_id, scope):
         """汇总风险事件。
 
-        - SUPER_ADMIN：**聚合范围**下仅平台数据集派生的事件（公司/个人数据集对超管不可见）；
+        - SUPER_ADMIN：聚合范围下仅平台数据集派生的事件（公司/个人数据集对超管不可见）；
         - SCENARIO_ADMIN：绑定场景内全部风险事件；
         - scope=self（个人数据）：只按创建者限定为当前账号本人。
           个人数据 = 自己产生的事件，不叠加数据集可见性 —— 否则超管自己的记录
@@ -391,18 +397,17 @@ class ReportService(ServiceBase):
     def _explain_expression():
         """explain_data 的 SQL 侧裁剪：只保留报告真正读到的键。
 
-        消费点（改动前逐行核对过）：
-        - ``_prediction`` 读 ``probability`` / ``class_distribution``；
-        - ``_model_analysis`` 读 ``views`` / ``view_weights`` / ``calculation_method``
-          / ``prediction_label``；
-        - ``_feature_analysis`` 读 ``feature_evidence`` / ``calculation_method``。
+        消费点改动前逐行核对过：_prediction 读 probability /
+        class_distribution；_model_analysis 读 views / view_weights /
+        calculation_method / prediction_label；_feature_analysis 读
+        feature_evidence / calculation_method。
 
-        整列反序列化实测峰值 748 MB，是全量加载里最大的一块；其中
-        ``input_features`` 在报告生成中完全没被读过。
+        整列反序列化实测峰值 748 MB，是全量加载里最大的一块，其中
+        input_features 在报告生成中完全没被读过。
 
-        必须套 ``type_coerce(..., JSONB)``：``func.jsonb_build_object`` 的返回类型是
-        NullType，结果处理器为 None，psycopg2 会把 jsonb 原样当字符串返回，
-        下游 ``record.explain_data.get(...)`` 会直接 AttributeError。
+        必须套 type_coerce(..., JSONB)：func.jsonb_build_object 的返回类型是
+        NullType、结果处理器为 None，psycopg2 会把 jsonb 原样当字符串返回，
+        下游 record.explain_data.get(...) 会直接 AttributeError。
         """
         pairs = []
         for key in _REPORT_EXPLAIN_KEYS:
@@ -413,22 +418,22 @@ class ReportService(ServiceBase):
     def _gather_records(self, current_user, role, scenario_id, scope):
         """汇总推理记录（含所属模型版本）。
 
-        - SUPER_ADMIN：**聚合范围**下仅平台数据集训练出的模型版本；
-        - SCENARIO_ADMIN：绑定场景内全部记录（含未发布模型）；
-        - 场景用户：仅已发布模型（可见性规则，不因 scope=self 而放开）；
-        - scope=self（个人数据）：只按创建者限定为当前账号本人。
+        聚合范围按角色分：超管只取平台数据集训练出的模型版本；
+        场景管理员取绑定场景内全部记录（含未发布模型）；
+        场景用户只看已发布模型（可见性规则，不因 scope=self 而放开）；
+        scope=self 时只按创建者限定为当前账号本人。
 
-        这里**不能**写成 ``select(InferenceRecord, ModelVersion)`` 全量加载实体：
-        ``inference_record.explain_data`` 整列 2394 行反序列化实测 748 MB，
-        ``model_version`` 的 training_parameters / evaluation_metrics /
-        model_attributes / ai_evaluation 四个 JSONB 又占约 503 MB，
-        叠加峰值 1334 MB，远超 sb-api 的 MemoryMax=900MiB —— 报告生成必被 OOM kill。
-        只取用得到的列（裁剪口径见 ``_explain_expression``），实测降到 215 MB。
+        这里不能写成 select(InferenceRecord, ModelVersion) 全量加载实体：
+        inference_record.explain_data 整列 2394 行反序列化实测 748 MB，
+        model_version 的 training_parameters / evaluation_metrics /
+        model_attributes / ai_evaluation 四个 JSONB 又占约 503 MB，叠加峰值
+        1334 MB，远超 sb-api 的 MemoryMax=900MiB，报告生成必被 OOM kill。
+        只取用得到的列（裁剪口径见 _explain_expression），实测降到 215 MB。
 
-        返回值仍是 ``(记录, 模型版本)`` 二元组列表，与 ``_build_report_data`` 的解包一致。
-        记录是 Row 而不是 ORM 实例：它的属性访问（.id / .executed_at /
-        .is_risk_event / .risk_score / .prediction_label / .explain_data）
-        与原来的 InferenceRecord 对下游完全等价。
+        返回值仍是 (记录, 模型版本) 二元组列表，与 _build_report_data
+        的解包一致。记录是 Row 而不是 ORM 实例，但它的 .id / .executed_at /
+        .is_risk_event / .risk_score / .prediction_label / .explain_data
+        属性访问与原来的 InferenceRecord 对下游完全等价。
         """
         if role in (ROLE_SCENARIO_ADMIN, ROLE_SCENARIO_USER) and scenario_id is None:
             return []
@@ -534,7 +539,8 @@ class ReportService(ServiceBase):
         """数据范围的中文口径，供报告正文与详情页展示。
 
         超管也要看 scenario_id：指定了具体场景，统计范围就是那一个场景，
-        再标「全平台数据」与实际口径不符（实测与场景管理员的同场景报告逐条一致）。
+        再标「全平台数据」与实际口径不符（实测与场景管理员的同场景报告逐条一致
+        ）。
         """
         if scope == "self":
             return "本人个人数据"
@@ -544,7 +550,7 @@ class ReportService(ServiceBase):
 
     @staticmethod
     def _period(times):
-        """数据范围的起止日期（**按北京时间取日**）。
+        """数据范围的起止日期（按北京时间取日）。
 
         库里是 UTC，直接 strftime 会拿到 UTC 的日期：例如北京时间 08-22 01:00
         （= UTC 08-21 17:00）会被算成 08-21，报告期整体提前一天。
@@ -560,7 +566,7 @@ class ReportService(ServiceBase):
     def _overview(events, records, thresholds=None):
         """报告总览。
 
-        等级计数按**生成报告的那个账号**的阈值重算（见 risk_view）：
+        等级计数按生成报告的那个账号的阈值重算（见 risk_view）：
         报告是他自己的风险视图，不是把别人算好的等级相加。
         """
         total = len(records)
@@ -819,10 +825,10 @@ class ReportService(ServiceBase):
 
     @staticmethod
     def _key_events(events, records, limit=10, thresholds=None):
-        """重点风险事件 → ``(前 limit 条, 总起数)``。
+        """重点风险事件 -> `(前 limit 条, 总起数)`。
 
         等级按报告生成者的阈值重算，不透传落库的创建者视角。
-        **总起数必须一起返回**：只给截断后的列表，正文会把它当成总数
+        总起数必须一起返回：只给截断后的列表，正文会把它当成总数
         （历史问题：666 条风险、604 条高危的报告写着「重点风险事件 10 起」）。
         """
         thresholds = thresholds or {}
@@ -977,7 +983,7 @@ class ReportService(ServiceBase):
     ):
         """报告列表（按三级角色隔离）。
 
-        报告相互独立：所有角色都只看到**本人**生成的报告（2026-10 定稿）。
+        报告相互独立：所有角色都只看到本人生成的报告（2026-10 定稿）。
         """
         self.require_login(current_user)
         stmt = select(Report)
@@ -1004,7 +1010,8 @@ class ReportService(ServiceBase):
     def _export_inputs(self, current_user, report_id: int, fmt: Optional[str]):
         """导出前的权限与格式校验，返回 (report, target_format)。
 
-        返回整条 report 而不是拆散的字段：导出 html/pdf 时还要用 report_data 补图表。
+        返回整条 report 而不是拆散的字段：导出 html/pdf 时还要用
+        report_data 补图表。
         """
         report = self._load_visible(current_user, report_id)
         target = (fmt or report.format or "markdown").lower()
@@ -1100,7 +1107,7 @@ class ReportService(ServiceBase):
         return ok(data=list_jobs(current_user.id))
 
     # ------------------------------------------------------------------
-    # 异步生成（提交 → 轮询 → 通知；见 app/services/report_generate_runner.py）
+    # 异步生成（提交 -> 轮询 -> 通知；见 app/services/report_generate_runner.py）
     # ------------------------------------------------------------------
 
     @service_call
@@ -1116,8 +1123,10 @@ class ReportService(ServiceBase):
     ):
         """提交异步生成任务：立刻返回 job_id，真正的生成交给后台线程。
 
-        入参校验走与 generate() 同一条边界，参数不对仍然在 POST 时就报 400 / 403，
-        不会把一个注定失败的任务丢进队列。执行器未启动时 503（与导出同一套语义）。
+        入参校验走与 generate() 同一条边界，参数不对仍然在 POST 时就报 400 /
+        403，
+        不会把一个注定失败的任务丢进队列。执行器未启动时
+        503（与导出同一套语义）。
         """
         from app.services.report_generate_runner import create_job, is_running
 
@@ -1226,8 +1235,10 @@ class ReportService(ServiceBase):
     def run_due_scheduled_reports(self, batch: int = 20) -> int:
         """处理一批到期的定时报告，返回成功刷新的条数。
 
-        抢占顺序：先用 SELECT ... FOR UPDATE SKIP LOCKED 锁住到期行，把 next_run_at
-        推进到下一周期并提交，然后才做耗时的重新生成。这样多进程部署时同一条记录
+        抢占顺序：先用 SELECT ... FOR UPDATE SKIP LOCKED
+        锁住到期行，把 next_run_at
+        推进到下一周期并提交，然后才做耗时的重新生成。
+        这样多进程部署时同一条记录
         只会被一个进程拿到，生成期间也不会被别的进程重复触发。
         重新生成失败时回退为「10 分钟后重试」，不占满整个周期。
         """
@@ -1298,7 +1309,8 @@ class ReportService(ServiceBase):
     def _advance_next_run(current, now, interval_days):
         """把下次生成时刻推进到「原定时刻之后的下一个未来时刻」。
 
-        以原定时刻为锚点累加周期，而不是直接用 now —— 每次触发都用 now 会累积漂移，
+        以原定时刻为锚点累加周期，而不是直接用 now —— 每次触发都用 now
+        会累积漂移，
         时间点会一天天往后跑。服务停机较久时一次性跳过欠下的周期，不补跑历史，
         避免重启后瞬间生成一堆报告。
         """

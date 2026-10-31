@@ -1,4 +1,4 @@
-"""rename KFDB / FLNB / FTAWNB for the training UI
+"""训练界面改名 KFDB / FLNB / FTAWNB
 
 Revision ID: 20261015_000001
 Revises: 20261012_000005

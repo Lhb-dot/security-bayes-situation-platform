@@ -1,7 +1,8 @@
 """风险事件相关请求模型（/api/v1/risk-events）。
 
 对应 Service：RiskEventService（backend/app/services/risk_event_service.py）。
-处置状态机：PENDING → PROCESSING / RESOLVED；PROCESSING → RESOLVED（Service 强制校验）。
+处置状态机：PENDING -> PROCESSING / RESOLVED；PROCESSING ->
+RESOLVED（Service 强制校验）。
 """
 from typing import Literal
 

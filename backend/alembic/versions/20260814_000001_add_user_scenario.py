@@ -9,7 +9,7 @@ Create Date: 2026-08-14 00:00:01.000000
 - 普通用户登录后仅能看到自己被分配的场景；
 - 普通用户的场景分配由管理员在创建或管理账号时指定。
 
-实现：app_user 增加可空 scenario_id（FK → scenario.id）。
+实现：app_user 增加可空 scenario_id（FK -> scenario.id）。
 管理员不绑定场景（scenario_id = NULL，可见全部场景）；普通用户绑定一个场景。
 """
 import sqlalchemy as sa

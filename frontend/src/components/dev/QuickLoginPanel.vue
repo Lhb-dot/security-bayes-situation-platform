@@ -1,82 +1,3 @@
-<script setup lang="ts">
-/**
- * QuickLoginPanel —— 开发阶段「快捷登录」面板（完全独立、可整块删除）。
- *
- * 用途：开发/联调时不用手输账号密码，点一下就能切到某个测试账号。
- *
- * 独立性（本组件唯一的设计约束）：
- * 1. 账号清单来自同目录的 devAccounts.generated.ts（由 scripts/gen_quick_login_accounts.py
- *    从数据库生成），样式与交互全部在这一个文件里；不新增全局状态、不改动任何现有
- *    组件/路由/store 的字段。删掉 components/dev/ 整个目录 + Login.vue 里那一行
- *    <QuickLoginPanel />，登录页立即恢复原状。
- * 2. 唯一外部依赖就是「正常登录」这条通道本身：调用 userStore.login()，与 Login.vue
- *    手输账号走的是同一个接口（POST /api/v1/auth/login）。不做任何绕过鉴权的后台调用。
- * 3. 面板绝对定位在登录卡右侧、不参与页面布局：关掉或删掉之后，登录卡仍在原来的居中位置。
- *
- * 开关（写在代码里，不是界面上的控件）：
- * 把下面的 QUICK_LOGIN_ENABLED 改成 false，整块面板就不渲染，登录页与线上完全一致。
- */
-import { computed, ref } from 'vue';
-import { useRouter } from 'vue-router';
-import { useUserStore } from '@/stores/userStore';
-import type { UserRole } from '@/types/security';
-import {
-  DEV_QUICK_SCENARIOS,
-  DEV_QUICK_SUPER_ADMINS,
-  type DevQuickAccount,
-} from './devAccounts.generated';
-
-/** 代码层开关：false = 本面板整块不渲染（登录页与线上完全一致）。 */
-const QUICK_LOGIN_ENABLED = true;
-
-/** 第二个下拉框：界面上一律显示中文角色名。 */
-const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
-  { value: 'SCENARIO_ADMIN', label: '场景管理员' },
-  { value: 'SCENARIO_USER', label: '场景用户' },
-];
-
-const router = useRouter();
-const userStore = useUserStore();
-
-const scenarioCode = ref('');
-const roleCode = ref<UserRole | ''>('');
-const busy = ref(false);
-const message = ref('');
-
-/** 账号/场景全部来自数据库生成的清单，这里不再手写任何账号。 */
-const superAdmins = DEV_QUICK_SUPER_ADMINS;
-const scenarios = DEV_QUICK_SCENARIOS;
-
-/** 两个下拉都选完之后，才列出该场景下符合角色的**全部**账号。 */
-const matchedAccounts = computed<DevQuickAccount[]>(() => {
-  if (!scenarioCode.value || !roleCode.value) return [];
-  const scenario = scenarios.find((item) => item.code === scenarioCode.value);
-  return scenario ? scenario.accounts.filter((account) => account.role === roleCode.value) : [];
-});
-
-const scenarioName = (code: string): string =>
-  scenarios.find((item) => item.code === code)?.name ?? code;
-
-const roleLabel = (role: UserRole): string =>
-  ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role;
-
-/** 走和正常登录完全相同的通道；成功后就交给既有路由逻辑按角色落地。 */
-const signIn = async (account: DevQuickAccount): Promise<void> => {
-  if (busy.value) return;
-  busy.value = true;
-  message.value = '';
-  try {
-    await userStore.login(account.username, account.password);
-    // 落地与正常登录同源：推 '/' 交给 router 的 redirect + 守卫按角色跳转。
-    await router.push('/');
-  } catch (error) {
-    message.value = error instanceof Error ? error.message : '登录失败';
-  } finally {
-    busy.value = false;
-  }
-};
-</script>
-
 <template>
   <aside v-if="QUICK_LOGIN_ENABLED" class="quick-login">
     <header class="quick-login__head">
@@ -143,7 +64,70 @@ const signIn = async (account: DevQuickAccount): Promise<void> => {
     <p v-if="message" class="quick-login__message">{{ message }}</p>
   </aside>
 </template>
+<script setup lang="ts">
+/**
+ * QuickLoginPanel，开发阶段「快捷登录」面板（完全独立、可整块删除）。
+ * 用途：开发/联调时不用手输账号密码，点一下就能切到某个测试账号。
+ */
+import { computed, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { useUserStore } from '@/stores/userStore';
+import type { UserRole } from '@/types/security';
+import {
+  DEV_QUICK_SCENARIOS,
+  DEV_QUICK_SUPER_ADMINS,
+  type DevQuickAccount,
+} from './devAccounts.generated';
 
+// 代码层开关：false = 本面板整块不渲染（登录页与线上完全一致）。
+const QUICK_LOGIN_ENABLED = true;
+
+// 第二个下拉框：界面上一律显示中文角色名。
+const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
+  { value: 'SCENARIO_ADMIN', label: '场景管理员' },
+  { value: 'SCENARIO_USER', label: '场景用户' },
+];
+
+const router = useRouter();
+const userStore = useUserStore();
+
+const scenarioCode = ref('');
+const roleCode = ref<UserRole | ''>('');
+const busy = ref(false);
+const message = ref('');
+
+const superAdmins = DEV_QUICK_SUPER_ADMINS;
+const scenarios = DEV_QUICK_SCENARIOS;
+
+// 两个下拉都选完之后，才列出该场景下符合角色的全部账号。
+const matchedAccounts = computed<DevQuickAccount[]>(() => {
+  if (!scenarioCode.value || !roleCode.value) return [];
+  const scenario = scenarios.find((item) => item.code === scenarioCode.value);
+  return scenario ? scenario.accounts.filter((account) => account.role === roleCode.value) : [];
+});
+
+const scenarioName = (code: string): string =>
+  scenarios.find((item) => item.code === code)?.name ?? code;
+
+const roleLabel = (role: UserRole): string =>
+  ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role;
+
+// 走和正常登录完全相同的通道；成功后就交给既有路由逻辑按角色落地。
+const signIn = async (account: DevQuickAccount): Promise<void> => {
+  if (busy.value) return;
+  busy.value = true;
+  message.value = '';
+  try {
+    await userStore.login(account.username, account.password);
+    // 落地与正常登录同源：推 '/' 交给 router 的 redirect + 守卫按角色跳转。
+    await router.push('/');
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '登录失败';
+  } finally {
+    busy.value = false;
+  }
+};
+</script>
 <style scoped>
 /* 绝对定位在登录卡右侧：不占布局位置，登录卡保持原来的居中 */
 .quick-login {

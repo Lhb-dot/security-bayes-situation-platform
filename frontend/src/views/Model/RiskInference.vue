@@ -1,19 +1,7 @@
 <script setup lang="ts">
 /**
- * RiskInference - 风险研判
- *
- * 三段纵向：
- *   1 选范围   —— 场景 / 数据集 / 模型（一行搞定，模型不再铺卡片列表）
- *   2 选数据来源 —— 样本库（默认）/ 手工录入 / 批量导入
- *   3 结果     —— 单条结果卡 + 批量结果表，完成后自动滚入视口
- *
- * 单条推理（需求 6.3.2 / 6.7.4 / 6.7.5）：选已发布模型 → 按模型绑定数据集字段
- * 生成输入 → 执行推理 → 风险类结果转 RiskEvent。
- *
- * 批量研判：从数据集样本区间或上传 CSV 批量跑，逐条与单条行为一致
- * （风险类照常生成 RiskEvent，保证告警中心/态势大屏/看板都能看到）。
- *
- * 数据链路：页面 → scenarioApi / datasetApi / modelVersionApi / inferenceRecordApi。
+ * 风险研判页：三段纵向 —— 选数据来源（样本库 / 手工录入 / 批量导入）、配置与提交、结果
+ * （单条结果卡 + 批量结果表，完成后自动滚入视口）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -46,41 +34,40 @@ let pageActive = true;
 let sessionRevision = 0;
 watch(() => userStore.currentUser?.user_id, () => { sessionRevision += 1; }, { flush: 'sync' });
 
-// ===================== 具名常量（原先散在代码里的魔法值） =====================
-/** 模型下拉一次拉全量：单个数据集下的模型版本数远小于这个上限 */
+// 模型下拉一次拉全量：单个数据集下的模型版本数远小于这个上限
 const MODEL_LIST_PAGE_SIZE = 200;
-/** 样本表最多展示的输入特征列数（够判断这行是什么样本） */
+// 样本表最多展示的输入特征列数（够判断这行是什么样本）
 const SAMPLE_TABLE_COLUMN_COUNT = 5;
-/** 单条结果里展示的主要影响字段条数 */
+// 单条结果里展示的主要影响字段条数
 const TOP_FEATURE_COUNT = 3;
-/** 批量研判默认条数与单批上限（上限与后端 predict-batch 的校验一致） */
+// 批量研判默认条数与单批上限（上限与后端 predict-batch 的校验一致）
 const DEFAULT_BATCH_LIMIT = 50;
 const MAX_BATCH_LIMIT = 200;
-/** 概率（0~1）→ 百分比的换算系数，以及「小于该值就不报具体数字」的阈值（%） */
+// 概率（0~1）→ 百分比的换算系数，以及「小于该值就不报具体数字」的阈值（%）
 const PERCENT_SCALE = 100;
 const PERCENT_MIN_VISIBLE = 0.01;
-/** 数值输入框步长：浮点留两位小数，整数按 1 递增 */
+// 数值输入框步长：浮点留两位小数，整数按 1 递增
 const FLOAT_INPUT_STEP = '0.01';
 const INT_INPUT_STEP = '1';
-/** 占位文案：指标 / 等级 / 事件号缺失时统一显示它 */
+// 占位文案：指标 / 等级 / 事件号缺失时统一显示它
 const UNKNOWN_TEXT = '—';
-/** 后端约定的场景可用状态与模型已发布状态 */
+// 后端约定的场景可用状态与模型已发布状态
 const SCENARIO_ACCESS_ACTUAL = 'ACTUAL';
 const MODEL_STATUS_PUBLISHED = 'PUBLISHED';
-/** 数据集字段角色与类型（与后端字段定义一致） */
+// 数据集字段角色与类型（与后端字段定义一致）
 const FIELD_ROLE_INPUT = '输入特征';
 const FIELD_ROLE_LABEL = '分类标签';
 const FIELD_TYPE_FLOAT = 'float';
 const FIELD_TYPE_INT = 'int';
 const FIELD_TYPE_STRING = 'string';
-/** 风险等级（大写枚举）→ 中文，键与 types/security 的 RiskLevelUpper 对齐 */
+// 风险等级（大写枚举）→ 中文，键与 types/security 的 RiskLevelUpper 对齐
 const RISK_LEVEL_TEXT: Record<string, string> = { HIGH: '高', MEDIUM: '中', LOW: '低' };
-/** 未选模型时三个执行入口共用的提示 */
+// 未选模型时三个执行入口共用的提示
 const MODEL_REQUIRED_MESSAGE = '请先选择一个已发布模型';
 
-/** 真实场景列表（直接调 /api/v1/scenarios，行类型复用 scenarioApi 的定义） */
+// 真实场景列表（直接调 /api/v1/scenarios，行类型复用 scenarioApi 的定义）
 const scenarios = ref<ApiScenario[]>([]);
-/** 真实模型版本列表（直接调 /api/v1/model-versions） */
+// 真实模型版本列表（直接调 /api/v1/model-versions）
 const modelVersions = ref<BackendModelVersion[]>([]);
 
 const isSuperAdmin = computed(() => userStore.currentUser?.role === 'SUPER_ADMIN');
@@ -92,7 +79,7 @@ const scenarioOptions = computed<{ value: ScenarioId; label: string }[]>(() =>
     .map((s) => ({ value: s.code as ScenarioId, label: s.name }))
 );
 
-// ===================== 1 选范围 =====================
+// 选范围
 const selectedScenario = ref<ScenarioId | ''>('');
 const selectedDatasetId = ref<string>('');
 const loadingDatasets = ref(false);
@@ -116,10 +103,10 @@ const selectedModel = computed(() =>
 const modelLabel = (m: BackendModelVersion) =>
   `#${m.model_version_id} ${m.algorithm_name ?? m.algorithm_id}${m.is_recommended ? '（推荐）' : ''}`;
 
-/** 模型下拉旁展示的指标口径 */
+// 模型下拉旁展示的指标口径
 type MetricKey = 'accuracy' | 'recall' | 'f1' | 'g_mean';
 
-/** 指标展示：缺失（undefined / null / 非数值）一律显示占位符，不能折算成 0% */
+// 指标展示：缺失（undefined / null / 非数值）一律显示占位符，不能折算成 0%
 const metricText = (key: MetricKey) => {
   const raw = selectedModel.value?.evaluation_metrics?.[key];
   if (raw === null || raw === undefined) return UNKNOWN_TEXT;
@@ -127,37 +114,37 @@ const metricText = (key: MetricKey) => {
   return Number.isFinite(value) ? `${(value * PERCENT_SCALE).toFixed(1)}%` : UNKNOWN_TEXT;
 };
 
-// ===================== 2 数据来源 =====================
-/** 两类来源：手工录入（自己输入 / 批量上传）、样本库（勾选若干项 / 前 N 项） */
+// 数据来源
+// 两类来源：手工录入（自己输入 / 批量上传）、样本库（勾选若干项 / 前 N 项）
 type SourceTab = 'manual' | 'sample';
 const sourceTab = ref<SourceTab>('manual');
-/** 手工录入内部的两种方式 */
+// 手工录入内部的两种方式
 type ManualMode = 'input' | 'upload';
 const manualMode = ref<ManualMode>('input');
 
-/** 手工录入：字段与取值 */
+// 手工录入：字段与取值
 const inputFields = ref<DatasetField[]>([]);
 const inputData = ref<Record<string, string | number>>({});
 
-/** 样本库 */
+// 样本库
 const samples = ref<Record<string, string | number>[]>([]);
 const sampleLoading = ref(false);
 const sampleTotal = ref(0);
 const samplePage = ref(1);
 const SAMPLE_PAGE_SIZE = 50;
-/** 已勾选的样本：键是全局序号（1 起），值是整行取值 —— 跨页勾选也能带全数据 */
+// 已勾选的样本：键是全局序号（1 起），值是整行取值，跨页勾选也能带全数据
 const selectedSamples = ref<Record<number, Record<string, string | number>>>({});
 const selectedCount = computed(() => Object.keys(selectedSamples.value).length);
 let sampleSequence = 0;
 
-/** 第 index 行（当前页）对应的全局序号 */
+// 第 index 行（当前页）对应的全局序号
 const ordinalOf = (index: number) => (samplePage.value - 1) * SAMPLE_PAGE_SIZE + index + 1;
 const isRowSelected = (index: number) => ordinalOf(index) in selectedSamples.value;
 const pageAllSelected = computed(
   () => samples.value.length > 0 && samples.value.every((_, i) => isRowSelected(i))
 );
 
-/** 勾选 / 取消一行（整行取值一起带走，翻页后仍能提交） */
+// 勾选 / 取消一行（整行取值一起带走，翻页后仍能提交）
 const toggleSample = (index: number) => {
   const row = samples.value[index];
   if (!row) return;
@@ -166,7 +153,7 @@ const toggleSample = (index: number) => {
   else selectedSamples.value[ordinal] = { ...row };
 };
 
-/** 表头全选：勾中 / 取消当前页 */
+// 表头全选：勾中 / 取消当前页
 const toggleSelectPage = () => {
   if (pageAllSelected.value) {
     samples.value.forEach((_, i) => { delete selectedSamples.value[ordinalOf(i)]; });
@@ -175,7 +162,7 @@ const toggleSelectPage = () => {
   }
 };
 
-/** 反选：当前页内已选的取消、未选的勾上 */
+// 反选：当前页内已选的取消、未选的勾上
 const invertSelection = () => {
   samples.value.forEach((row, i) => {
     const ordinal = ordinalOf(i);
@@ -184,14 +171,14 @@ const invertSelection = () => {
   });
 };
 
-/** 清空全部勾选（含其它页） */
+// 清空全部勾选（含其它页）
 const clearSelection = () => { selectedSamples.value = {}; };
 
 const totalSamplePages = computed(() =>
   Math.max(1, Math.ceil(sampleTotal.value / SAMPLE_PAGE_SIZE))
 );
 
-/** 样本表里展示的列（输入特征前 N 个，够判断这行是什么样本） */
+// 样本表里展示的列（输入特征前 N 个，够判断这行是什么样本）
 const sampleColumns = computed(() =>
   inputFields.value.slice(0, SAMPLE_TABLE_COLUMN_COUNT).map((f) => f.field_name)
 );
@@ -199,16 +186,16 @@ const labelField = computed(
   () => inputFields.value.find((f) => f.field_role === FIELD_ROLE_LABEL)?.field_name ?? ''
 );
 
-/** 批量研判：样本库的「前 N 项 / 勾选项」与手工录入的「上传 CSV」共用这套状态 */
+// 批量研判：样本库的「前 N 项 / 勾选项」与手工录入的「上传 CSV」共用这套状态
 const batchLimit = ref(DEFAULT_BATCH_LIMIT);
 const batchResult = ref<BatchInferenceResult | null>(null);
-/** 提交请求在途（按钮立刻置灰，避免连点提交两批） */
+// 提交请求在途（按钮立刻置灰，避免连点提交两批）
 const batchSubmitting = ref(false);
-/** 正在跑的是哪个批量入口（进度文案只显示在对应的按钮上） */
+// 正在跑的是哪个批量入口（进度文案只显示在对应的按钮上）
 type BatchAction = 'head' | 'selected' | 'upload';
 const batchAction = ref<BatchAction | null>(null);
 
-// ===== 批量研判任务（数据源在 store：离开页面后台照样跑，完成时全局通知） =====
+// 批量研判任务（数据源在 store：离开页面后台照样跑，完成时全局通知）
 // 进度取自 store 里最近登记的那条任务；完成通知与超时兜底都在 store，不随组件卸载。
 const batchJobStore = useBatchJobStore();
 const activeBatchJob = computed(() => batchJobStore.activeJob);
@@ -218,7 +205,7 @@ const batchProgressText = computed(() => {
   return job?.total ? `研判中… ${job.processed}/${job.total}` : '研判中…';
 });
 const uploadFile = ref<File | null>(null);
-/** 隐藏的原生 file input：由云上传图标按钮触发 */
+// 隐藏的原生 file input：由云上传图标按钮触发
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const pickCsvFile = () => {
   const input = fileInputRef.value;
@@ -227,7 +214,7 @@ const pickCsvFile = () => {
   input.click();
 };
 
-// ===================== 3 单条推理结果 =====================
+// 单条推理结果
 const inferResult = ref<PredictResult | null>(null);
 const inferring = ref(false);
 const resultRef = ref<HTMLElement | null>(null);
@@ -254,7 +241,7 @@ const adminExplanationJson = computed(() => {
   }, null, 2);
 });
 
-// ===================== carrier 字段族分组（279 字段折叠防卡顿） =====================
+// carrier 字段族分组（279 字段折叠防卡顿）
 const CARRIER_GROUP_RULES: Array<{ name: string; match: (name: string) => boolean }> = [
   { name: '方向角族', match: (n) => n.startsWith('Plane1_dir_') || n.startsWith('Plane2_dir_') },
   { name: '相对角度族', match: (n) => n.startsWith('relative_angle_') },
@@ -298,18 +285,18 @@ const fieldGroups = computed<FieldGroup[]>(() => {
   return matched;
 });
 
-/** 只有一个分组时，折叠头（「全部字段」）不带信息，直接平铺字段 */
+// 只有一个分组时，折叠头（「全部字段」）不带信息，直接平铺字段
 const singleFieldGroup = computed(() => fieldGroups.value.length === 1);
 
 const expandedGroups = ref<string[]>([]);
 const expandAll = () => { expandedGroups.value = fieldGroups.value.map((g) => g.name); };
 const collapseAll = () => { expandedGroups.value = []; };
 
-/** 数值型字段（float / int）：输入框与默认值填充都按数值处理 */
+// 数值型字段（float / int）：输入框与默认值填充都按数值处理
 const isNumericField = (field: DatasetField) =>
   field.field_type === FIELD_TYPE_FLOAT || field.field_type === FIELD_TYPE_INT;
 
-/** 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value */
+// 默认值填充：数值取 sample_value（解析失败回退 0）；枚举 string 取合法 sample_value
 const buildInputData = (fields: DatasetField[]): Record<string, string | number> => {
   const init: Record<string, string | number> = {};
   for (const f of fields) {
@@ -325,8 +312,8 @@ const buildInputData = (fields: DatasetField[]): Record<string, string | number>
   return init;
 };
 
-// ===================== 级联加载 =====================
-/** 丢弃上一轮 AI 分析：中止在途的流式请求并清空正文与状态 */
+// 级联加载
+// 丢弃上一轮 AI 分析：中止在途的流式请求并清空正文与状态
 const resetExplanation = () => {
   explanationMarkdown.value = '';
   explanationError.value = '';
@@ -336,20 +323,15 @@ const resetExplanation = () => {
   explanationController = null;
 };
 
-/**
- * 结果的归属标签：只展示在"发起它的那一类"里。
- *
- * 切换标签（含手工录入内部的两种方式）会把 resultScope 清空，所以上一类的结果
- * 不会残留在页面下方；后台跑完的批量任务回填时也要先过这一关。
- */
+// 结果的归属标签：只展示在"发起它的那一类"里。
 const resultScope = ref<SourceTab | null>(null);
 
-/** 结果区是否展示：结果归属当前标签，且确有内容 */
+// 结果区是否展示：结果归属当前标签，且确有内容
 const resultVisible = computed(
   () => resultScope.value === sourceTab.value && Boolean(batchResult.value || inferResult.value)
 );
 
-/** 丢弃当前展示的结果（单条 / 批量 / AI 分析），不动勾选状态 */
+// 丢弃当前展示的结果（单条 / 批量 / AI 分析），不动勾选状态
 const clearResultState = () => {
   inferResult.value = null;
   batchResult.value = null;
@@ -357,16 +339,15 @@ const clearResultState = () => {
   resetExplanation();
 };
 
-/** 丢弃上一轮结果与勾选（换场景 / 换数据集 / 换模型时用） */
+// 丢弃上一轮结果与勾选（换场景 / 换数据集 / 换模型时用）
 const resetResults = () => {
   clearResultState();
   selectedSamples.value = {};
 };
 
-// 切换标签：上一类的结果立即作废，不再残留
 watch([sourceTab, manualMode], () => { clearResultState(); });
 
-/** 换场景 / 换数据集 / 换模型时统一清空输入区（字段、取值、样本，并丢弃上一轮结果） */
+// 换场景 / 换数据集 / 换模型时统一清空输入区（字段、取值、样本，并丢弃上一轮结果）
 const resetInputState = () => {
   sampleSequence += 1;
   sampleLoading.value = false;
@@ -379,7 +360,7 @@ const resetInputState = () => {
   resetResults();
 };
 
-/** 每层只校验自身和上游选择，子层变化不会使仍有效的父层查询失效。 */
+// 每层只校验自身和上游选择，子层变化不会使仍有效的父层查询失效。
 const captureSelection = (level: 'scenario' | 'dataset' | 'model') => {
   const session = sessionRevision;
   const owner = userStore.currentUser?.user_id;
@@ -392,12 +373,7 @@ const captureSelection = (level: 'scenario' | 'dataset' | 'model') => {
     && (level !== 'model' || modelId === selectedModelId.value);
 };
 
-/**
- * 默认选中哪个数据集：优先挑第一个「有已发布模型」的。
- *
- * 场景下的第一个数据集不一定有已发布模型（本地库里 nf_unsw_nb15 就没有），
- * 直接取第一个会让用户照样得手点一次，所以这里并发探一遍；一个都没有才退回第一个。
- */
+// 默认选中哪个数据集：优先挑第一个「有已发布模型」的。
 const pickDatasetWithPublishedModel = async (
   candidates: Dataset[],
   isCurrent: () => boolean,
@@ -473,7 +449,7 @@ watch(selectedDatasetId, async (datasetId, _, onCleanup) => {
     });
     if (!isCurrent()) return;
     modelVersions.value = list;
-    // 有推荐模型的优先选推荐，否则取第一个 —— 同样省掉用户手点
+    // 有推荐模型的优先选推荐，否则取第一个，同样省掉用户手点
     const preferred = publishedModels.value.find((m) => m.is_recommended) ?? publishedModels.value[0];
     selectedModelId.value = preferred ? preferred.model_version_id : '';
   } catch {
@@ -498,7 +474,7 @@ watch(selectedModelId, async (modelId, _, onCleanup) => {
     if (!isCurrent()) return;
     inputFields.value = definition.filter((f) => f.field_role === FIELD_ROLE_INPUT);
     inputData.value = buildInputData(inputFields.value);
-    // 需求 7.1：看板点击端口 → /inference?port= 预填 L4_DST_PORT
+    // 看板点击端口 → /inference?port= 预填 L4_DST_PORT
     const port = route.query.port;
     if (port && inputData.value.L4_DST_PORT !== undefined) {
       const n = Number(port);
@@ -540,10 +516,10 @@ const loadSamples = async (page: number) => {
   }
 };
 
-/** 样本区的滚动容器（.pane 自身可滚，翻页要锚住它，见 utils/scrollAnchor.ts） */
+// 样本区的滚动容器（.pane 自身可滚，翻页要锚住它，见 utils/scrollAnchor.ts）
 const samplePaneRef = ref<HTMLElement | null>(null);
 
-/** 样本翻页：包一层滚动锚定，换页后视口停在原处 */
+// 样本翻页：包一层滚动锚定，换页后视口停在原处
 const changeSamplePage = (target: number) => {
   const selectionIsCurrent = captureSelection('model');
   let sequence = sampleSequence;
@@ -554,8 +530,8 @@ const changeSamplePage = (target: number) => {
   }, samplePaneRef.value, () => sequence === sampleSequence && selectionIsCurrent());
 };
 
-// ===================== 执行单条推理 =====================
-/** 未选已发布模型时的统一拦截（单条推理 / 批量研判 / 上传 CSV 三个入口共用） */
+// 执行单条推理
+// 未选已发布模型时的统一拦截（单条推理 / 批量研判 / 上传 CSV 三个入口共用）
 const ensureModelSelected = () => {
   if (selectedModelId.value) return true;
   ElMessage.warning(MODEL_REQUIRED_MESSAGE);
@@ -580,7 +556,6 @@ const handleInfer = async () => {
       model_version_id: selectedModelId.value,
       input_features: { ...inputData.value },
     });
-    // 请求期间切了标签：这一轮结果不再展示（resultScope 已被清空）
     if (resultScope.value !== scope) return;
     inferResult.value = result;
     await scrollToResult();
@@ -594,30 +569,24 @@ const handleInfer = async () => {
   }
 };
 
-// ===================== 批量研判 =====================
+// 批量研判
 const canBatch = computed(
   () => Boolean(selectedModelId.value) && !batchRunning.value && !batchSubmitting.value
 );
-/** 任一批量入口在途（提交中或后台跑着） */
+// 任一批量入口在途（提交中或后台跑着）
 const batchBusy = computed(() => batchRunning.value || batchSubmitting.value);
-/** 进度文案只显示在真正触发的那个按钮上 */
+// 进度文案只显示在真正触发的那个按钮上
 const busyOn = (action: BatchAction) => batchBusy.value && batchAction.value === action;
 // 任务收尾（完成 / 失败）后清掉"正在跑哪个入口"，按钮恢复常态文案
 watch(batchBusy, (busy) => { if (!busy) batchAction.value = null; });
 
-/** 批量研判完成（可能在别的页面）：结果表由 store 的 lastResult 驱动回填 */
+// 批量研判完成（可能在别的页面）：结果表由 store 的 lastResult 驱动回填
 const showBatchResult = async (res: BatchInferenceResult) => {
   batchResult.value = res;
   await scrollToResult();
 };
 
-/**
- * 提交后的公共收尾：提交 → 登记到 store → 立刻返回。
- *
- * 轮询、完成通知、超时兜底都在 batchJobStore 里 —— 那里不随组件卸载，所以用户
- * 离开本页任务照跑、完成时照样弹通知。结果要不要展示由 resultScope 决定：
- * 提交后切过标签就不再回填。
- */
+// 提交后的公共收尾：提交 → 登记到 store → 立刻返回。
 const runBatchJob = async (
   action: BatchAction,
   submit: () => Promise<{ job_id: string; total: number }>,
@@ -642,18 +611,17 @@ watch(
   [() => batchJobStore.lastResult, selectedModelId],
   async ([payload]) => {
     if (!payload || batchResult.value) return;
-    // 结果只回填到"发起它的那一类"：切换过标签就不再展示
     if (resultScope.value !== sourceTab.value) return;
     if (String(payload.modelVersionId) !== String(selectedModelId.value)) return;
     await showBatchResult(payload.result);
   },
 );
 
-/** 通知文案里的任务名（与模型下拉的标签一致） */
+// 通知文案里的任务名（与模型下拉的标签一致）
 const batchJobTitle = () =>
   selectedModel.value ? modelLabel(selectedModel.value) : `模型版本 #${selectedModelId.value}`;
 
-/** 批量入口的公共外壳：统一拦截未选模型、统一错误提示，返回是否提交成功 */
+// 批量入口的公共外壳：统一拦截未选模型、统一错误提示，返回是否提交成功
 const runBatchAction = async (
   action: BatchAction,
   submit: () => Promise<{ job_id: string; total: number }>,
@@ -669,7 +637,7 @@ const runBatchAction = async (
   }
 };
 
-/** 样本库：研判数据集前 N 项 */
+// 样本库：研判数据集前 N 项
 const handleBatchHead = async () => {
   const raw = Math.floor(Number(batchLimit.value));
   const limit = Math.max(1, Math.min(MAX_BATCH_LIMIT, Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_BATCH_LIMIT));
@@ -682,7 +650,7 @@ const handleBatchHead = async () => {
   }), '批量研判失败');
 };
 
-/** 样本库：研判勾选的若干项 */
+// 样本库：研判勾选的若干项
 const handleBatchSelected = async () => {
   const rows = Object.values(selectedSamples.value);
   if (!rows.length) {
@@ -706,7 +674,7 @@ const onFileChange = (event: Event) => {
   uploadFile.value = input.files?.[0] ?? null;
 };
 
-/** 手工录入：上传 CSV 批量研判 */
+// 手工录入：上传 CSV 批量研判
 const handleUpload = async () => {
   if (!uploadFile.value) {
     ElMessage.warning('请先选择 CSV 文件');
@@ -718,7 +686,7 @@ const handleUpload = async () => {
   }), 'CSV 批量研判失败');
 };
 
-// ===================== 结果展示辅助 =====================
+// 结果展示辅助
 const formatPercent = (raw: number | null | undefined) => {
   if (raw === null || raw === undefined || !Number.isFinite(Number(raw))) return UNKNOWN_TEXT;
   const percent = Number(raw) * PERCENT_SCALE;
@@ -735,7 +703,7 @@ const singleRiskPercent = computed(() =>
   )
 );
 
-/** 风险等级 → 中文；未知/缺失等级显示占位符（等级枚举见 types/security） */
+// 风险等级 → 中文；未知/缺失等级显示占位符（等级枚举见 types/security）
 const levelText = (level?: string | null) =>
   (level && RISK_LEVEL_TEXT[level]) || UNKNOWN_TEXT;
 
@@ -774,7 +742,7 @@ const goEventDetail = (eventId?: string | number | null) => {
   router.push({ path: `/events/${eventId}` });
 };
 
-// ===================== AI 场景化分析 =====================
+// AI 场景化分析
 const generateExplanation = async (result: PredictResult) => {
   resetExplanation();
   explanationController = new AbortController();
@@ -854,10 +822,6 @@ onBeforeUnmount(() => {
 
 /**
  * 离开页面时中止在途的 AI 分析流。
- *
- * 流式请求的 AbortController 原先只由「重新生成 / 停止生成 / 级联切换」触发中止，
- * 组件卸载这条路径没人管：SSE 连接会一直挂到服务端自然结束，回调还在往已卸载组件的
- * ref 上追加正文。
  */
 onUnmounted(() => {
   explanationController?.abort();
@@ -874,7 +838,7 @@ onUnmounted(() => {
       <p class="inference-page__desc">样本推理与风险等级判定</p>
     </div>
 
-    <!-- ============ 1 选范围 ============ -->
+    <!-- 1 选范围 -->
     <section class="card scope-bar">
       <div v-if="isSuperAdmin" class="scope-field scope-field--scenario">
         <label class="form-label">业务场景</label>
@@ -928,7 +892,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- ============ 2 选数据来源 ============ -->
+    <!-- 2 选数据来源 -->
     <section v-if="selectedModelId" class="card source-card">
       <div class="source-tabs">
         <button
@@ -1173,8 +1137,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 执行条：必须放在 .card 外面 —— .card 有 backdrop-filter，
-         它会让 position: fixed 改为相对卡片定位，fixed 就失效了。 -->
+    <!-- 执行条：必须放在 .card 外面，.card 有 backdrop-filter -->
     <div
       v-if="selectedModelId && sourceTab === 'manual' && manualMode === 'input'"
       class="action-bar"
@@ -1185,7 +1148,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- ============ 3 结果（只属于发起它的那一类，切标签即消失） ============ -->
+ <!-- 3 结果（只属于发起它的那一类 -->
     <section v-if="resultVisible" ref="resultRef" class="card result-card">
       <!-- 批量结果 -->
       <template v-if="batchResult">
@@ -1337,7 +1300,6 @@ onUnmounted(() => {
   font-size: 0.95rem;
 }
 
-/* ---------- 1 选范围 ---------- */
 .scope-bar {
   display: grid;
   gap: 18px;
@@ -1450,7 +1412,6 @@ select.form-input option {
   color: rgba(220, 234, 255, 0.55);
 }
 
-/* ---------- 2 数据来源 ---------- */
 .source-card {
   display: grid;
   gap: 16px;
@@ -1532,7 +1493,7 @@ select.form-input option {
   gap: 12px;
   min-width: 0;
   /* 字段区内部滚动：页面不会被 279 个字段拉成 30 屏，执行条也始终留在卡片底部。
-     （不用 position: sticky —— 祖先 .app-shell 有 overflow: hidden，
+     （不用 position: sticky，祖先 .app-shell 有 overflow: hidden。
      它会成为 sticky 的参照容器且自身不滚动，粘不住。） */
   max-height: 46vh;
   overflow: auto;
@@ -1749,7 +1710,7 @@ select.form-input option {
 }
 
 /* 执行条：固定在视口底部，字段再多也不用滚到底找按钮。
-   不用 position: sticky —— 祖先 .app-shell 有 overflow: hidden，
+   不用 position: sticky，祖先 .app-shell 有 overflow: hidden。
    它会成为 sticky 的参照容器且自身不滚动，粘不住。 */
 .action-bar {
   position: fixed;
@@ -1766,7 +1727,6 @@ select.form-input option {
   border-top: 1px solid rgba(125, 201, 255, 0.16);
 }
 
-/* ---------- 3 结果 ---------- */
 .result-card {
   display: grid;
   gap: 16px;
@@ -2023,7 +1983,6 @@ select.form-input option {
   overflow-wrap: anywhere;
 }
 
-/* ---------- 通用按钮 ---------- */
 .infer-btn {
   padding: 11px 26px;
   border: none;

@@ -1,9 +1,5 @@
-/**
- * datasetApi.ts — 数据集接口（与后端 /api/v1/datasets 对齐）
- *
- * 将数据库返回结构映射为前端 Dataset / DatasetField / DataPreview 契约，
- * 供数据集中心、详情页、字段预览与数据预览使用。
- */
+// 数据集接口（后端 /api/v1/datasets）。数据库行在这里映射成前端 Dataset / DatasetField /
+// DataPreview 三套契约，数据集中心、详情页、字段预览、数据预览都消费这一层。
 import request, { getCsrfToken, unwrapData } from '@/utils/request';
 import { SCENARIO_CODE_BY_ID } from '@/api/scenarioApi';
 import type {
@@ -14,7 +10,7 @@ import type {
   ScenarioId,
 } from '@/types/security';
 
-/** 后端 dataset 行（含 Service 补充展示字段） */
+// 后端 dataset 行（含 Service 补充展示字段）
 interface ApiDataset {
   id: number;
   logical_id: string;
@@ -71,7 +67,7 @@ interface ApiScenario {
   access_status?: string;
 }
 
-/** 把「数字 ID → 编码」表取逆，避免同一份映射在两处各写一遍导致口径分叉 */
+// Invert the id -> code table. Keep one copy, otherwise the two maps drift apart.
 const invertScenarioCodeMap = (
   byId: Record<number, ScenarioId>
 ): Partial<Record<ScenarioId, number>> => {
@@ -122,7 +118,7 @@ const mapFieldType = (type?: string): string => {
   return t;
 };
 
-/** 后端 fields_schema → 前端 DatasetField */
+// 后端 fields_schema -> 前端 DatasetField
 export const mapApiField = (field: ApiField, labelField?: string): DatasetField => {
   const isLabel =
     field.role === 'label' || (!!labelField && field.name === labelField);
@@ -141,7 +137,7 @@ export const mapApiField = (field: ApiField, labelField?: string): DatasetField 
 const mapFields = (fields: ApiField[] | undefined, labelField?: string): DatasetField[] =>
   (fields ?? []).map((f) => mapApiField(f, labelField));
 
-/** 前端字段 → 后端 fields_schema */
+// 前端字段 -> 后端 fields_schema
 export const toApiFields = (
   fields: Array<{
     field_name: string;
@@ -234,7 +230,7 @@ export const mapApiDatasetVersion = (item: ApiDataset): DatasetVersion => {
 
 const isNumericId = (value: string | number): boolean => /^\d+$/.test(String(value));
 
-/** 将 numeric id / logical_id 解析为后端主键 id */
+// 将 numeric id / logical_id 解析为后端主键 id
 const resolveDatasetPk = async (datasetId: string | number): Promise<number> => {
   if (isNumericId(datasetId)) return Number(datasetId);
   const raw = await getDatasetRawList({ page_size: 200 });
@@ -256,7 +252,7 @@ const latestByLogicalId = (items: ApiDataset[]): ApiDataset[] => {
   return Array.from(map.values()).sort((a, b) => a.id - b.id);
 };
 
-/** 拉取数据集原始行（getDatasetList / getDatasetRawList 共用的取数与参数组装） */
+// 拉取数据集原始行（getDatasetList / getDatasetRawList 共用的取数与参数组装）
 const fetchDatasetItems = async (params?: {
   scenario_id?: ScenarioId;
   page?: number;
@@ -277,7 +273,7 @@ const fetchDatasetItems = async (params?: {
   return (data.items ?? []) as ApiDataset[];
 };
 
-/** 数据集列表（默认返回每个 logical_id 的最新版本） */
+// 数据集列表（默认返回每个 logical_id 的最新版本）
 export const getDatasetList = async (params?: {
   scenario_id?: ScenarioId;
   page?: number;
@@ -289,14 +285,14 @@ export const getDatasetList = async (params?: {
   return selected.map(mapApiDataset);
 };
 
-/** 原始列表（含全部版本，供版本管理） */
+// 原始列表（含全部版本，供版本管理）
 export const getDatasetRawList = async (params?: {
   scenario_id?: ScenarioId;
   page_size?: number;
 }): Promise<ApiDataset[]> =>
   fetchDatasetItems({ scenario_id: params?.scenario_id, page: 1, page_size: params?.page_size ?? 200 });
 
-/** 数据集详情（GET /datasets/{dataset_id}，含字段结构） */
+// 数据集详情（GET /datasets/{dataset_id}，含字段结构）
 export const getDatasetDetail = async (datasetId: string | number): Promise<Dataset> => {
   await ensureScenarioMaps();
   const pk = await resolveDatasetPk(datasetId);
@@ -306,7 +302,7 @@ export const getDatasetDetail = async (datasetId: string | number): Promise<Data
   return mapApiDataset(item);
 };
 
-/** 字段预览（兼容旧调用名 getDatasetFields） */
+// 字段预览（兼容旧调用名 getDatasetFields）
 export const getDatasetFields = async (
   datasetId: string | number,
   _datasetVersion?: string
@@ -320,7 +316,7 @@ export const getDatasetFields = async (
 
 export const getDatasetFieldsSchema = getDatasetFields;
 
-/** 数据内容预览（真实 ARFF 分页） */
+// 数据内容预览（真实 ARFF 分页）
 export const getDatasetPreview = async (
   datasetId: string | number,
   params: { page: number; page_size: number }
@@ -349,7 +345,7 @@ export const getDatasetPreview = async (
   };
 };
 
-/** 版本列表：同一 logical_id 下全部版本 */
+// 版本列表：同一 logical_id 下全部版本
 export const getDatasetVersions = async (datasetId?: string): Promise<DatasetVersion[]> => {
   await ensureScenarioMaps();
   const raw = await getDatasetRawList({ page_size: 200 });
@@ -365,7 +361,7 @@ export const getDatasetVersions = async (datasetId?: string): Promise<DatasetVer
     .map(mapApiDatasetVersion);
 };
 
-/** 上传数据集（POST /datasets） */
+// 上传数据集（POST /datasets）
 export const uploadDataset = async (params: {
   dataset_id?: string;
   logical_id?: string;
@@ -411,7 +407,7 @@ export const uploadDataset = async (params: {
   return mapApiDataset(item);
 };
 
-/** 上传数据集文件（multipart，后端自动识别 ARFF/CSV 并解析字段结构） */
+// 上传数据集文件（multipart，后端自动识别 ARFF/CSV 并解析字段结构）
 export const uploadDatasetFile = async (params: {
   file: File;
   logical_id: string;
@@ -438,7 +434,7 @@ export const uploadDatasetFile = async (params: {
   return mapApiDataset(item);
 };
 
-/** 创建数据集版本（PUT /datasets/{dataset_id}） */
+// 创建数据集版本（PUT /datasets/{dataset_id}）
 export const createDatasetVersion = async (
   datasetId: string | number,
   fieldsOrParams?:
@@ -474,12 +470,9 @@ export const createDatasetVersion = async (
   return mapApiDatasetVersion(item);
 };
 
-/**
- * 追加样本（POST /datasets/{id}/revisions/append，multipart 增量文件）。
- *
- * 增量文件必须与当前数据集同结构（字段名同名同序）。是否新建版本由后端按
- * 迭代策略决定：未被模型引用时原地更新（版本号不变），已引用时自动新建版本。
- */
+// 追加样本（POST /datasets/{id}/revisions/append，multipart 增量文件）。
+// 增量文件的字段名和顺序必须跟当前数据集一致。是否新建版本由后端定：
+// 没被模型引用就原地更新、版本号不变，被引用了才自动开一版。
 export const appendDatasetRows = async (
   datasetId: string | number,
   file: File
@@ -493,7 +486,7 @@ export const appendDatasetRows = async (
   return mapApiDatasetVersion(item);
 };
 
-/** 数据集迭代记录（GET /datasets/{id}/revisions）：含原地更新，用于审计追溯。 */
+// 数据集迭代记录（GET /datasets/{id}/revisions）：含原地更新，用于审计追溯。
 export interface DatasetRevisionItem {
   id: number;
   dataset_id: number;
@@ -517,7 +510,7 @@ export const getDatasetRevisions = async (
   return data?.items ?? [];
 };
 
-/** 停用数据集版本 */
+// 停用数据集版本
 export const disableDataset = async (datasetId: string | number): Promise<void> => {
   const pk = await resolveDatasetPk(datasetId);
   await unwrapData(await request.post(`/api/v1/datasets/${pk}/disable`));
@@ -526,7 +519,7 @@ export const disableDataset = async (datasetId: string | number): Promise<void> 
 export const disableDatasetVersion = async (versionId: string | number): Promise<void> =>
   disableDataset(versionId);
 
-/** 删除数据集版本 */
+// 删除数据集版本
 export const removeDataset = async (datasetId: string | number): Promise<void> => {
   const pk = await resolveDatasetPk(datasetId);
   await unwrapData(await request.delete(`/api/v1/datasets/${pk}`));
@@ -536,7 +529,7 @@ export const deleteDatasetVersion = async (versionId: string | number): Promise<
   removeDataset(versionId);
 
 
-/** 数据集 AI 解析结果（读缓存，不触发 AI） */
+// 数据集 AI 解析结果（读缓存，不触发 AI）
 export interface DatasetAnalysisResponse {
   dataset_id: number;
   name: string;
@@ -546,7 +539,7 @@ export interface DatasetAnalysisResponse {
   generated_at?: string | null;
 }
 
-/** 读取已保存的数据集 AI 解析结果；没有历史时 available=false，由前端显示空状态。 */
+// 读取已保存的数据集 AI 解析结果；没生成过时 available=false，页面显示空状态。
 export const getDatasetAiAnalysis = async (
   datasetId: string | number,
 ): Promise<DatasetAnalysisResponse> => {
@@ -556,22 +549,19 @@ export const getDatasetAiAnalysis = async (
   ) as DatasetAnalysisResponse;
 };
 
-/** 数据集 AI 解析（算法适配）流式回调 */
+// 数据集 AI 解析（算法适配）流式回调
 export interface DatasetAnalysisStreamHandlers {
   onStart?: (data: Record<string, unknown>) => void;
-  /** 推理型模型的思维链，只用于展示「正在生成」 */
+  // 推理型模型的思维链，只用于展示"正在生成"
   onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (message: string) => void;
   onDone?: (data: Record<string, unknown>) => void;
 }
 
-/**
- * 流式生成数据集算法适配解析（POST /api/v1/datasets/{pk}/ai-analysis/stream）
- *
- * 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done，
- * 期间可能先来一个 error 表示「AI 不可用，已降级规则模板」，其后仍会有正文与 done。
- */
+// 流式生成数据集算法适配解析（POST /datasets/{pk}/ai-analysis/stream）。
+// 跟模型评价、推理解释共用一套 SSE：start -> (reasoning | delta)* -> done。
+// 中途可能先来个 error 表示 AI 不可用、已经退回规则模板，后面正文和 done 照样会有。
 export const streamDatasetAiAnalysis = async (
   datasetId: string | number,
   handlers: DatasetAnalysisStreamHandlers,

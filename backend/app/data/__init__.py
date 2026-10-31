@@ -1,1 +1,1 @@
-"""Static, versioned platform data dictionaries."""
+"""平台内置的静态数据字典，随版本管理。"""

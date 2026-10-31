@@ -1,4 +1,4 @@
-"""replace the D-prefixed algorithm registration with CAVWNB"""
+"""把 D 前缀的算法注册换成 CAVWNB"""
 
 import json
 

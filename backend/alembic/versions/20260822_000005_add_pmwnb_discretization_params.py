@@ -1,4 +1,4 @@
-"""expose PMWNB discretization parameters wired by its filtered service"""
+"""暴露 PMWNB 由过滤服务实际接线的离散化参数"""
 
 import json
 

@@ -1,10 +1,6 @@
 /**
- * previewSample —— 仅开发预览用的**示例数据**（不是真实统计，也不被任何生产页面导入）。
- *
- * 用途：在没有后端的环境里把四个场景看板挂起来看版式（截图验收 / 调间距），
- * 数据是手写的示例值，数量级参照平台总览的演示数据；生产页面一律走
- * /api/v1/dashboard/scenarios/{id}/profile 与 /workspace 的真实返回。
- * 预览页左上角固定标注「示例数据」，避免与真实口径混淆。
+ * 仅开发预览用的示例数据，不被任何生产页面导入。用于在没有后端时挂起四个看板看版式，
+ * 生产页面一律走 /api/v1/dashboard/scenarios/{id}/profile 与 /workspace 的真实返回。
  */
 import type {
   DatasetStat,
@@ -16,7 +12,7 @@ import type {
 } from '@/api/dashboardApi';
 import type { UserAccount } from '@/types/security';
 
-/** 数据集示例条目：只覆盖看板真正读到的字段，其余按后端契约给默认值 */
+// 数据集示例条目：只覆盖看板真正读到的字段，其余按后端契约给默认值
 const dataset = (
   logicalId: string,
   recordCount: number,
@@ -49,7 +45,7 @@ const dataset = (
   caliber_registered: caliberRegistered,
 });
 
-/** 运行态示例：summary 的字段全部给齐（看板只读 total / pending / processing / resolved 与 activity_trend） */
+// 运行态示例：summary 的字段全部给齐（看板只读 total / pending / processing / resolved 与 activity_trend）
 const runtime = (scenarioId: number, key: WorkspaceBase['scenario_key'], name: string, total: number, pending: number, processing: number, resolved: number): WorkspaceBase => ({
   scenario_id: scenarioId,
   scenario_code: key === 'flight_deck' ? 'flightdeck_operation' : key === 'network' ? 'network_security' : key === 'power' ? 'power_system' : 'geological_risk',
@@ -101,9 +97,7 @@ const member = (id: number, role: UserAccount['role'], scenarioId: number, code:
   scenario_code: code,
 });
 
-/* ------------------------------------------------------------------ */
-/* 网络安全                                                            */
-/* ------------------------------------------------------------------ */
+// 网络安全
 
 const networkDatasets = [
   dataset('nf_uq_netflow_v2', 26543, 3120, 'Label', 49, 'platform', 2),
@@ -160,9 +154,7 @@ export const networkMembers: UserAccount[] = [
   member(5, 'SCENARIO_USER', 1, 'network_security', 'disabled'),
 ];
 
-/* ------------------------------------------------------------------ */
-/* 电力系统                                                            */
-/* ------------------------------------------------------------------ */
+// 电力系统
 
 const powerDatasets = [dataset('power_grid_telemetry', 2000, 1594, 'Fault_Label', 38, 'platform', 1)];
 
@@ -220,9 +212,7 @@ export const powerMembers: UserAccount[] = [
   member(8, 'SCENARIO_USER', 2, 'power_system'),
 ];
 
-/* ------------------------------------------------------------------ */
-/* 舰面调度态势                                                        */
-/* ------------------------------------------------------------------ */
+// 舰面调度态势
 
 const flightdeckDatasets = [dataset('carrier_landing_pairs', 507, 129, 'Collision', 27, 'company', 2)];
 
@@ -268,9 +258,7 @@ export const flightdeckMembers: UserAccount[] = [
   member(10, 'SCENARIO_USER', 3, 'flightdeck_operation'),
 ];
 
-/* ------------------------------------------------------------------ */
-/* 地质风险                                                            */
-/* ------------------------------------------------------------------ */
+// 地质风险
 
 const geologicalDatasets = [
   dataset('dis_raw_data', 9860, 2760, 'Landslide', 24, 'platform', 3),

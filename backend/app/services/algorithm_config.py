@@ -1,4 +1,4 @@
-"""Runtime configuration shared by Java algorithm clients."""
+"""Java 算法客户端共用的运行期配置。"""
 
 import os
 

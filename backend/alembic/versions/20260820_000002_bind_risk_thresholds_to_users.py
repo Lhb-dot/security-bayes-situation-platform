@@ -1,4 +1,4 @@
-"""bind risk thresholds and audit logs to target users"""
+"""把风险阈值和审计日志绑到目标用户"""
 from alembic import context, op
 import sqlalchemy as sa
 
@@ -10,12 +10,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Preserve existing scene-level values by assigning them to their last updater.
-    # The initial migration builds tables from the current ORM metadata. Keep
-    # this migration safe for both legacy databases and fresh installs that
-    # already have the new columns.
+    # 存量场景级阈值直接归到最后改它的那个账号名下，值本身不动。
+    # 基线迁移是按当时的 ORM 元数据建表的，所以这里要
+    # 同时兼容「老库升级」和「全新安装、表里已经有新列」两种情况，
+    # 不能假定列一定不存在。
     if context.is_offline_mode():
-        # Fresh-install offline SQL already contains the current ORM schema.
+        # 全新安装生成的离线 SQL 已经带上当前 ORM 的完整结构，不必再补。
         return
     inspector = sa.inspect(op.get_bind())
     threshold_columns = {column["name"] for column in inspector.get_columns("risk_threshold")}
@@ -68,15 +68,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # A scene-level table cannot represent multiple users. Keep the earliest row
-    # per scene when reverting the schema so the downgrade remains deterministic.
+    # 退回场景级表后一个场景只能挂一个账号，所以保留最早那一行，
+    # 回滚结果才是确定的。
     inspector = sa.inspect(op.get_bind())
     _drop_foreign_key(inspector, "threshold_audit_log", "user_id", "app_user")
     _drop_foreign_key(inspector, "risk_threshold", "user_id", "app_user")
     op.drop_column("threshold_audit_log", "user_id")
 
-    # A scene-level table cannot represent multiple rows. Keep the latest row
-    # per scene before restoring the legacy primary key.
+    # 退回场景级主键后一个场景只能留一行，恢复旧主键之前先按场景保留最新那一行，
+    # 否则恢复主键会直接撞唯一约束。
     op.execute(
         """
         DELETE FROM risk_threshold duplicate

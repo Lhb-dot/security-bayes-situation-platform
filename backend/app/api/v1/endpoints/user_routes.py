@@ -1,7 +1,8 @@
 """用户管理路由（/api/v1/users）。
 
 对应 Service：UserService（backend/app/services/user_service.py）。
-权限（需求 6.5.2）：用户管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅 ADMIN。
+权限（需求 6.5.2）：用户管理仅 ADMIN；修改本人密码本人或 ADMIN；用户列表仅
+ADMIN。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session

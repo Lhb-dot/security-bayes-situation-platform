@@ -1,22 +1,19 @@
 """模型版本 Service（ModelVersion）—— 生命周期状态机核心。
 
 对应需求文档章节：1.1（场景使用约束）、6.6.3（管理员参数配置规则）、
-6.7（模型版本、发布与推荐规则）、6.5.2（权限矩阵）。
+6.7（模型版本、发布与推荐规则）、6.5.2（权限矩阵）。模型见
+app.models.model_version.ModelVersion。
 
-模型：app.models.model_version.ModelVersion。
+状态机（需求 6.7.2）：TRAINING -> FAILED / DRAFT -> PUBLISHED -> DISABLED，由
+MODEL_STATUS_TRANSITIONS 常量驱动，禁止任意跳转。
 
-状态机（需求 6.7.2）：
-    TRAINING → FAILED / DRAFT → PUBLISHED → DISABLED
-由 MODEL_STATUS_TRANSITIONS 常量驱动，禁止任意跳转。
-
-关键业务规则：
-1. SUPER_ADMIN / SCENARIO_ADMIN 可训练；发布/下线/推荐由本场景任意 SA 执行（不限定训练人）；
-   普通用户仅可见与使用 PUBLISHED 模型。
-2. 训练前必须选择场景、数据集版本和算法；数据集必须属于所选场景（禁止跨场景混合训练）；
-   停用的数据集不得用于训练。
-3. 「推荐」不唯一：同一"场景＋数据集"可推荐多个模型；推荐模型必须 PUBLISHED；
-   模型下线时自动清除推荐状态（需求 6.7.4.5）。
-4. 发布和下线必须记录操作管理员及操作时间（published_by / published_at）。
+关键业务规则：超管和场景管理员可训练，发布 / 下线 /
+推荐由本场景任意场景管理员执行（不限定训练人），普通用户仅可见与使用 PUBLISHED
+模型；训练前必须选择场景、数据集版本和算法，
+数据集必须属于所选场景（禁止跨场景混合训练），停用的数据集不得用于训练；
+「推荐」不唯一，同一「场景 + 数据集」可推荐多个模型，推荐模型必须 PUBLISHED，
+模型下线时自动清除推荐状态（6.7.4.5）；
+发布和下线必须记录操作管理员及操作时间（published_by / published_at）。
 """
 import os
 from datetime import datetime, timezone
@@ -64,8 +61,8 @@ logger = get_logger("model_version")
 # 模型的完整 evaluation_metrics 一次性拉下来。
 TRAINING_FINISHED_LIMIT = 20
 
-#: 普通用户可见的质量指标键；管理级角色返回全量 evaluation_metrics。
-#: 与 model_evaluation_service.public_model_attributes 保持同一口径。
+# 普通用户可见的质量指标键；管理级角色返回全量 evaluation_metrics。
+# 与 model_evaluation_service.public_model_attributes 保持同一口径。
 _PUBLIC_METRIC_KEYS = ("accuracy", "precision", "recall", "specificity", "f1", "g_mean")
 
 class ModelVersionService(ServiceBase):
@@ -88,7 +85,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(403, "无权限操作")
 
     def _to_dict(self, model: ModelVersion, current_user=None, include_model_attributes: bool = False) -> dict:
-        """Serialize a model and hide internal quality metrics from scenario users."""
+        """序列化模型，并把内部质量指标对场景用户藏起来。"""
         data = row_to_dict(
             model,
             exclude=("model_attributes", "ai_evaluation", "training_parameters"),
@@ -117,8 +114,8 @@ class ModelVersionService(ServiceBase):
                 "trained_by_name": model.trainer.username if model.trainer else None,
                 "published_by_name": model.publisher.username if model.publisher else None,
                 "evaluation_metrics": self._visible_metrics(model, current_user),
-                # Training parameters are model-internal tuning details. Keep
-                # the response shape stable while returning them only to management.
+                # 训练参数是模型内部的调参细节，
+                # 只回给管理端，同时保持响应结构不变。
                 "training_parameters": model.training_parameters if management else {},
                 "model_attributes": (
                     attributes if management else public_model_attributes(attributes)
@@ -146,7 +143,7 @@ class ModelVersionService(ServiceBase):
         return data
 
     def _visible_metrics(self, model: ModelVersion, current_user=None) -> dict:
-        """Return full quality data only to management roles."""
+        """完整质量数据只给管理侧角色。"""
         metrics = dict(model.evaluation_metrics or {})
         if is_management(current_user):
             return metrics
@@ -159,7 +156,7 @@ class ModelVersionService(ServiceBase):
     def _validate_dataset_file(self, dataset: Dataset) -> Optional[str]:
         """校验训练数据文件与注册字段结构一致（需求 3.1.1 / 3.1.2）。
 
-        检查项（任一失败 → 返回错误信息，禁止训练）：
+        检查项（任一失败 -> 返回错误信息，禁止训练）：
         - 字段重名：实际文件出现同名两列
         - 标签字段缺失：label_field 不在实际文件中
         - 字段缺失：注册 schema 定义的字段必须全部存在于实际文件
@@ -233,8 +230,10 @@ class ModelVersionService(ServiceBase):
     ):
         """启动训练：生成 TRAINING 状态的模型版本（管理级角色，场景管理员仅自己场景）。
 
-        校验：场景存在；数据集属于所选场景（需求 1.1.3/2.2.3 禁止跨场景混合训练）；
-        数据集 ACTIVE；算法 AVAILABLE；training_parameters 必须完整（需求 6.6.3.4）。
+        校验：场景存在；数据集属于所选场景（需求 1.1.3/2.2.3
+        禁止跨场景混合训练）；
+        数据集 ACTIVE；算法 AVAILABLE；training_parameters
+        必须完整（需求 6.6.3.4）。
         """
         if not self.authz.can_train(current_user):
             raise ServiceError(403, "无权限操作")
@@ -277,7 +276,7 @@ class ModelVersionService(ServiceBase):
             raise ServiceError(400, err)
 
         # 训练数据与注册字段结构一致性校验（需求 3.1.1/3.1.2）：
-        # 字段缺失 / 重名 / 类型不匹配 / 标签字段缺失 → 禁止训练。
+        # 字段缺失 / 重名 / 类型不匹配 / 标签字段缺失 -> 禁止训练。
         file_err = self._validate_dataset_file(dataset)
         if file_err:
             raise ServiceError(400, file_err)
@@ -310,8 +309,8 @@ class ModelVersionService(ServiceBase):
         """训练并落库（需求 6.7.1 训练执行接口，单次调用完成真实训练）。
 
         复用 create() 完成场景/数据集/算法/参数校验并创建 TRAINING 版本，随后：
-        所有算法均调用对应 Java/Weka 真实服务，成功 → TRAINING → DRAFT；
-        服务异常 → TRAINING → FAILED。
+        所有算法均调用对应 Java/Weka 真实服务，成功 -> TRAINING -> DRAFT；
+        服务异常 -> TRAINING -> FAILED。
         """
         created = self.create(
             current_user, scenario_id, dataset_id, algorithm_id, training_parameters
@@ -344,11 +343,13 @@ class ModelVersionService(ServiceBase):
     ):
         """提交异步训练：立刻返回 TRAINING 版本，真实训练在后台线程执行。
 
-        校验、建版本、参数落库与 train_and_save 完全一致（复用 create()），区别只是
+        校验、建版本、参数落库与 train_and_save 完全一致（复用
+        create()），区别只是
         不在请求线程里等训练结束 —— 同步路径最长会占住一个线程池 worker 到
         TRAIN_TIMEOUT（600 秒）。
 
-        训练结果由 training_runner 写回：成功 → DRAFT，失败 → FAILED，字段与同步路径相同。
+        训练结果由 training_runner 写回：成功 -> DRAFT，失败 -> FAILED，
+        字段与同步路径相同。
         """
         from app.services.training_runner import is_running, submit
 
@@ -371,15 +372,16 @@ class ModelVersionService(ServiceBase):
     def list_training_jobs(self, current_user, include_finished: bool = False):
         """当前用户「还在训练中」的模型版本（刷新 / 切页回来能恢复在途状态）。
 
-        训练没有独立任务表：在途状态本身就落在 model_version.status 上，所以
-        「在途任务」= 本人创建且仍为 TRAINING 的版本。这比进程内任务表更结实 ——
-        服务重启后照样查得到，超时未完成的由 training_runner.reap_stale 兜底。
+        训练没有独立任务表：在途状态本身就落在 model_version.status 上，
+        所以「在途任务」= 本人创建且仍为 TRAINING 的版本。
+        这比进程内任务表更结实 —— 服务重启后照样查得到，超时未完成的由
+        training_runner.reap_stale 兜底。
 
-        include_finished=True 时把 DRAFT / FAILED 也一并返回，供顶栏任务面板判定
-        「已完成但没看过」。**model_version 没有完成时间字段**（只有 trained_at，
-        那是提交时刻），所以前端按 id 集合差判定 —— id 自增，没见过的就是没看过，
-        不需要任何时间戳。条数上限 TRAINING_FINISHED_LIMIT，避免把几十个模型的
-        完整指标都拉下来。
+        include_finished=True 时把 DRAFT / FAILED 也一并返回，
+        供顶栏任务面板判定「已完成但没看过」。model_version
+        没有完成时间字段（只有 trained_at，那是提交时刻），所以前端按 id
+        集合差判定 —— id 自增，没见过的就是没看过，不需要任何时间戳。条数上限
+        TRAINING_FINISHED_LIMIT，避免把几十个模型的完整指标都拉下来。
         """
         self.require_login(current_user)
         statuses = (
@@ -401,7 +403,7 @@ class ModelVersionService(ServiceBase):
         return ok(data=[self._to_dict(model, current_user) for model in models])
 
     def apply_training_success(self, model: ModelVersion, metrics: dict) -> None:
-        """训练成功落库：TRAINING → DRAFT，写评估指标与模型属性。"""
+        """训练成功落库：TRAINING -> DRAFT，写评估指标与模型属性。"""
         self._transition(model, MODEL_STATUS_DRAFT)
         model.evaluation_metrics = metrics
         from app.services.model_evaluation_service import build_model_attributes
@@ -409,10 +411,11 @@ class ModelVersionService(ServiceBase):
         self.commit()
 
     def apply_training_failure(self, model: ModelVersion, error: object) -> None:
-        """训练失败落库：TRAINING → FAILED。
+        """训练失败落库：TRAINING -> FAILED。
 
-        ``source="error"`` 是前端 isRealTrain（读 metrics.source 是否以 java_ 开头）的
-        判定依据，必须保留；现成的 fail_training() 只写 error 字段，不能直接复用。
+        `source="error"` 是前端 isRealTrain（读 metrics.source 是否以 java_ 开头）的
+        判定依据，必须保留；现成的 fail_training() 只写 error
+        字段，不能直接复用。
         """
         self._transition(model, MODEL_STATUS_FAILED)
         model.evaluation_metrics = {"source": "error", "error": str(error)}
@@ -421,8 +424,9 @@ class ModelVersionService(ServiceBase):
     def run_training_job(self, model: ModelVersion) -> None:
         """后台执行一次训练并流转状态（供 training_runner 调用）。
 
-        与 train_and_save 的区别只有一处：不向调用方抛异常 —— 后台线程没有请求上下文，
-        失败只能体现在模型状态上（TRAINING → FAILED）。
+        与 train_and_save 的区别只有一处：不向调用方抛异常 ——
+        后台线程没有请求上下文，
+        失败只能体现在模型状态上（TRAINING -> FAILED）。
         """
         model_id = model.id
         try:
@@ -467,7 +471,7 @@ class ModelVersionService(ServiceBase):
     def complete_training(
         self, current_user, model_id: int, evaluation_metrics: Dict[str, Any]
     ):
-        """训练成功：TRAINING → DRAFT，保存评估指标（需求 6.7.2 转换条件）。"""
+        """训练成功：TRAINING -> DRAFT，保存评估指标（需求 6.7.2 转换条件）。"""
         if not isinstance(evaluation_metrics, dict):
             raise ServiceError(400, "evaluation_metrics 必须是 JSON 对象")
         model = self._get(model_id)
@@ -483,7 +487,7 @@ class ModelVersionService(ServiceBase):
     def fail_training(
         self, current_user, model_id: int, error_message: Optional[str] = None
     ):
-        """训练失败：TRAINING → FAILED。"""
+        """训练失败：TRAINING -> FAILED。"""
         model = self._get(model_id)
         self._require_manage(current_user, model)
         self._transition(model, MODEL_STATUS_FAILED)
@@ -507,7 +511,7 @@ class ModelVersionService(ServiceBase):
         return ok(data=self._to_dict(model), message="模型已发布")
 
     def _disable_model(self, current_user, model_id: int):
-        """Disable a published model and clear its recommendation marker."""
+        """下架已发布模型，并清掉它的推荐标记。"""
         model = self._get(model_id)
         self._require_manage(current_user, model)
         self._transition(model, MODEL_STATUS_DISABLED)
@@ -517,12 +521,12 @@ class ModelVersionService(ServiceBase):
 
     @service_call
     def disable(self, current_user, model_id: int):
-        """禁用模型：PUBLISHED → DISABLED，保留模型记录。"""
+        """禁用模型：PUBLISHED -> DISABLED，保留模型记录。"""
         return self._disable_model(current_user, model_id)
 
     @service_call
     def enable(self, current_user, model_id: int):
-        """重新启用模型：DISABLED → PUBLISHED。
+        """重新启用模型：DISABLED -> PUBLISHED。
 
 禁用时已清除推荐标记，重新启用后不自动恢复，需管理员根据当前场景单独设置。
         """
@@ -536,7 +540,8 @@ class ModelVersionService(ServiceBase):
     def recommend(self, current_user, model_id: int):
         """将模型标记为「推荐」（需求 6.7.4）。
 
-        约束：必须 PUBLISHED。推荐**不唯一** —— 同一"场景＋数据集"可以有多个推荐模型
+        约束：必须 PUBLISHED。推荐不唯一 ——
+        同一"场景＋数据集"可以有多个推荐模型
         （2026-10 定稿，已去掉原 uk_mv_default 唯一约束）。
         """
         model = self._get(model_id)
@@ -578,7 +583,8 @@ class ModelVersionService(ServiceBase):
         - SCENARIO_ADMIN：本场景全部（系统管理员未发布的除外）；
         - SCENARIO_USER：本场景已发布/推荐模型（需求 6.7.3.4 / 6.7.5.1）。
 
-        status 支持逗号分隔的多值（如 "TRAINING,FAILED,DRAFT"），供前端「未发布」
+        status 支持逗号分隔的多值（如 "TRAINING,FAILED,DRAFT"），
+        供前端「未发布」
         这类跨状态筛选用；仅管理员生效。
         """
         self.require_login(current_user)
@@ -610,7 +616,8 @@ class ModelVersionService(ServiceBase):
     def get_recommended(self, current_user, scenario_id: int, dataset_id: int):
         """获取某"场景＋数据集"的推荐模型列表（推荐不唯一，可为空）。
 
-        需求 6.7.4 的「默认推荐」在 2026-10 定稿中改为「推荐」：同一范围可推荐多个模型。
+        需求 6.7.4 的「默认推荐」在 2026-10 定稿中改为「推荐」：
+        同一范围可推荐多个模型。
         只返回调用者有权查看的模型。
         """
         self.require_scenario_access(current_user, scenario_id)

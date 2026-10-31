@@ -1,7 +1,10 @@
 """态势路由（/api/v1/situation）。
 
-对应 Service：SituationSnapshotService（backend/app/services/situation_snapshot_service.py）。
-权限：个人/场景态势 → 登录用户；平台总览 → 仅 SUPER_ADMIN；快照生成 → 管理级角色。
+对应 Service：
+SituationSnapshotService（backend/app/services/situation_snapshot_service.py）
+。
+权限：个人/场景态势 -> 登录用户；平台总览 -> 仅 SUPER_ADMIN；
+快照生成 -> 管理级角色。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session

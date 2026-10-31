@@ -1,13 +1,12 @@
 <script setup lang="ts">
 /**
- * DashCard —— 看板区块卡片：标题 + 内容插槽 + 口径来源脚注（对应 demo 的 .src）。
+ * DashCard，看板区块卡片：标题 + 内容插槽 + 口径来源脚注（对应 demo 的 .src）。
  */
 import { SHOW_DASH_HINTS } from './dashHints';
 
 withDefaults(
   defineProps<{
     title: string;
-    /** 口径来源说明，支持多行 */
     source?: string | string[];
     wide?: boolean;
     empty?: boolean;

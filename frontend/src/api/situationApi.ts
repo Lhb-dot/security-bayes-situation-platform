@@ -1,6 +1,5 @@
 /**
- * situationApi.ts — 态势接口（与后端 /api/v1/situation 对齐）
- *
+ * 态势接口（与后端 /api/v1/situation 对齐）
  * 后端已提供态势路由（backend/app/api/v1/endpoints/situation_routes.py），
  * 本模块负责调用与数据映射（后端真实统计 → 前端 SituationData/RiskEvent 结构）。
  */
@@ -15,7 +14,6 @@ import type {
   TrendPoint,
 } from '@/types/security';
 
-/** 场景态势统计（后端 _aggregate 口径） */
 export interface SceneSituationStats {
   total_events: number;
   high_count: number;
@@ -26,7 +24,6 @@ export interface SceneSituationStats {
   resolved_count: number;
 }
 
-/** GET /situation/scenes/{id} 返回结构 */
 export interface SceneSituation {
   scenario_id: number;
   stats: SceneSituationStats;
@@ -39,7 +36,7 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: '已处置',
 };
 
-/** 后端风险事件 → 前端 RiskEvent 结构（字段名/状态枚举映射） */
+// 后端风险事件 → 前端 RiskEvent 结构（字段名/状态枚举映射）
 export const mapRiskEvent = (e: Record<string, unknown>): RiskEvent => ({
   event_id: String(e.id ?? ''),
   inference_record_id: String(e.inference_record_id ?? ''),
@@ -54,14 +51,11 @@ export const mapRiskEvent = (e: Record<string, unknown>): RiskEvent => ({
   risk_level: (e.risk_level as RiskEvent['risk_level']) ?? 'LOW',
   risk_score: Number(e.risk_score ?? 0),
   occurred_at: String(e.occurred_at ?? ''),
-  // 舰面调度场景的故障点坐标（其余场景后端恒为 null）。此前漏映射 →
-  // 详情页的「故障位置 X/Y」两个 v-if 永远不成立，后端有值也显示不出来。
   fault_position_x: e.fault_position_x == null ? undefined : Number(e.fault_position_x),
   fault_position_y: e.fault_position_y == null ? undefined : Number(e.fault_position_y),
   status: (STATUS_LABEL[String(e.status)] ?? String(e.status ?? '待处置')) as RiskEvent['status'],
   raw_features: (e.raw_features ?? {}) as Record<string, unknown>,
   description: String(e.description ?? ''),
-  // 来源名称只有详情接口下发（列表不带）→ 缺省保持 undefined，前端回退显示 ID
   dataset_name: e.dataset_name == null ? undefined : String(e.dataset_name),
   algorithm_name: e.algorithm_name == null ? undefined : String(e.algorithm_name),
   creator_name: e.creator_name == null ? undefined : String(e.creator_name),
@@ -69,13 +63,12 @@ export const mapRiskEvent = (e: Record<string, unknown>): RiskEvent => ({
   handling_comment: e.handling_comment == null ? null : String(e.handling_comment),
 });
 
-/** 场景态势（真实统计 + 近期风险事件） */
 export const getSceneSituation = async (scenarioId: number | string): Promise<SceneSituation> => {
   const id = await resolveScenarioId(scenarioId);
   return unwrapData(await request.get(`/api/v1/situation/scenes/${id}`));
 };
 
-/** 场景态势分析（映射为前端 SituationData；趋势/历史暂无真实数据，置空） */
+// 场景态势分析（映射为前端 SituationData；趋势/历史暂无真实数据，置空）
 export const getSituationData = async (scenarioId: ScenarioId): Promise<SituationData> => {
   const sit = await getSceneSituation(scenarioId);
   const s = sit.stats;
@@ -98,7 +91,6 @@ export const getSituationData = async (scenarioId: ScenarioId): Promise<Situatio
   };
 };
 
-/** 把风险事件按发生日期聚合为真实趋势（无事件时返回空数组，不虚构数据） */
 const buildDailyTrend = (events: RiskEvent[]): TrendPoint[] => {
   const byDay = new Map<string, RiskEvent[]>();
   for (const e of events) {
@@ -134,15 +126,6 @@ const buildDailyTrend = (events: RiskEvent[]): TrendPoint[] => {
     });
 };
 
-/**
- * 全局态势总览（真实数据）。
- *
- * 场景卡片与平台合计**全部来自后端 `/scenarios/overview`**（`DashboardService.get_scenario_overview`），
- * 与场景中心共用同一套去重口径（内容完全相同的重复注册文件只计 1 个）—— 前端不再自行
- * `datasets.filter(scenario_id === code)` 计数（那条路径没有去重，会和场景中心对不上）。
- * SUPER_ADMIN 的风险事件明细由后端限制为本人事件（见 Authz.scope_events）；
- * 平台级统计走 `/situation/global` 的聚合口径，两者不是同一份数据。
- */
 export const getGlobalOverview = async (): Promise<GlobalOverview> => {
   const [overview, rawEvents] = await Promise.all([
     getScenarioOverview(),

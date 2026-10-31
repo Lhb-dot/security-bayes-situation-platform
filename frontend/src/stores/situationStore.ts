@@ -1,6 +1,5 @@
 /**
- * situationStore.ts — 全局态势/场景态势
- *
+ * 全局态势/场景态势
  * 全局总览（fetchGlobalOverview）与场景态势（fetchSituationData）均已接入真实后端 /api/v1。
  */
 import { defineStore } from 'pinia';

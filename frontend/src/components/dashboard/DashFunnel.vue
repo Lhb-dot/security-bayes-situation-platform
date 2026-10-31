@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * DashFunnel —— 处置漏斗（条长按 count 比例，对应 demo 的 .funnel）。
+ * DashFunnel，处置漏斗（条长按 count 比例，对应 demo 的 .funnel）。
  */
 import { computed } from 'vue';
 import { fmtInt } from './dashFormat';

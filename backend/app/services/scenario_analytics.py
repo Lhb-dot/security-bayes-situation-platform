@@ -1,4 +1,5 @@
-"""scenario_analytics.py — 场景差异化辅助计算（V3.0 §8：贝叶斯分类前后的辅助判断层）。
+"""scenario_analytics.py — 场景差异化辅助计算（V3.0 §8：
+贝叶斯分类前后的辅助判断层）。
 
 第 8 节要求：不同场景在其数据集字段基础上提供特有的数据加工/轻量计算，供前端
 大屏（第 7 节卡片/图表/列表）使用。本模块实现后端侧的计算服务，输入统一为
@@ -26,14 +27,14 @@ from app.services.constants import (
 
 
 def _col_map(fields: List[Dict]) -> Dict[str, int]:
-    """字段名 → 列号映射。"""
+    """字段名 -> 列号映射。"""
     return {f["name"]: i for i, f in enumerate(fields)}
 
 
 def _pick_idx(cmap: Dict[str, int], *names: str) -> Optional[int]:
     """按候选名依次取第一个存在的列号；候选名都不存在时返回 None。
 
-    各场景洞察原先各自定义了一份同名的闭包 ``idx``，此处收敛为单一实现。
+    各场景洞察原先各自定义了一份同名的闭包 `idx`，此处收敛为单一实现。
     """
     for name in names:
         if name in cmap:
@@ -44,9 +45,12 @@ def _pick_idx(cmap: Dict[str, int], *names: str) -> Optional[int]:
 def _label_is_risk(logical_id: Optional[str], value: str) -> bool:
     """标签是否正类（风险）——只认显式登记表。
 
-    口径唯一真源是 ``constants.DATASET_POSITIVE_LABELS``。需求 6.4.1 明令禁止按标签字符串 /
-    取值大小 / 文件排列顺序自动推断正类，因此未登记的数据集（logical_id 缺失或未登记）
-    一律返回 False：宁可少报异常样本，也不猜（异常样本数会由 API 的 logical_id 字段自证口径）。
+    口径唯一真源是 `constants.DATASET_POSITIVE_LABELS`。需求 6.4.1
+    明令禁止按标签字符串 /
+    取值大小 / 文件排列顺序自动推断正类，
+    因此未登记的数据集（logical_id 缺失或未登记）
+    一律返回 False：宁可少报异常样本，也不猜（异常样本数会由 API 的
+    logical_id 字段自证口径）。
     """
     if not logical_id:
         return False
@@ -57,7 +61,7 @@ _INTERVAL_RE = re.compile(r"[\[(]\s*([-0-9.]+)\s*[-~,]\s*([-0-9.]+)\s*[\])]")
 
 
 def _to_float(v: str) -> Optional[float]:
-    """把值转 float；支持地质离散化区间 `(a-b]` → 取中点（§3.6 数据已离散化）。"""
+    """把值转 float；支持地质离散化区间 `(a-b]` -> 取中点（§3.6 数据已离散化）。"""
     if v in (None, "", "?"):
         return None
     try:
@@ -98,8 +102,10 @@ def network_insights(
 ) -> Dict[str, Any]:
     """网络场景洞察：核心指标、TOP 端口、协议分布、流量段分布。
 
-    logical_id：数据集登记编码，必须由调用方传入（API 层传 dataset.logical_id）。
-    未传入时正类判定一律为否，异常样本数恒为 0——不做任何自动推断（需求 6.4.1）。
+    logical_id：数据集登记编码，必须由调用方传入（API 层传
+    dataset.logical_id）。
+    未传入时正类判定一律为否，异常样本数恒为
+    0——不做任何自动推断（需求 6.4.1）。
     """
     cmap = _col_map(fields)
 
@@ -251,7 +257,7 @@ def geological_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, 
                 "max": round(max(vals), 2),
             }
 
-    # 归一化叠加：把各因子 0-1 归一后等权求和 → 0-100 易发性（§8.3）
+    # 归一化叠加：把各因子 0-1 归一后等权求和 -> 0-100 易发性（§8.3）
     scale = 100.0 / len(factors) if factors else 0.0
     contrib = {}
     for name, stats in factors.items():
@@ -270,7 +276,7 @@ def geological_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, 
 # ---------------------------------------------------------------------------
 # 航母甲板（§8.4）：轨迹时序特征 / 碰撞风险评分
 # ---------------------------------------------------------------------------
-#: 碰撞风险占位公式的参数：间距归一分母（m）、接近率归一分母（m/s）、两项权重
+# 碰撞风险占位公式的参数：间距归一分母（m）、接近率归一分母（m/s）、两项权重
 _COLLISION_DIST_SCALE = 100.0
 _COLLISION_RATE_SCALE = 10.0
 _COLLISION_WEIGHT_DIST = 0.6
@@ -297,7 +303,7 @@ def carrier_insights(fields: List[Dict], rows: List[List[str]]) -> Dict[str, Any
     min_dist = round(min(min_dists), 1) if min_dists else None
     approach_rate = round(abs(statistics.mean(changes)), 2) if changes else None
 
-    # 碰撞风险评分（§8.4：最小间距越小、接近率越高 → 分越高，0-100 占位公式）
+    # 碰撞风险评分（§8.4：最小间距越小、接近率越高 -> 分越高，0-100 占位公式）
     score = 0
     if min_dist is not None and approach_rate is not None:
         dist_part = max(0.0, min(1.0, (_COLLISION_DIST_SCALE - min_dist) / _COLLISION_DIST_SCALE))
@@ -341,8 +347,9 @@ def compute_scenario_insights(
 ) -> Dict[str, Any]:
     """按场景风险类型分发到各场景计算函数。未知场景返回空结构。
 
-    logical_id 为数据集登记编码，透传给需要判定正类的场景洞察（当前仅网络场景），
-    使正类口径唯一来自 ``constants.DATASET_POSITIVE_LABELS``。
+    logical_id 为数据集登记编码，
+    透传给需要判定正类的场景洞察（当前仅网络场景），
+    使正类口径唯一来自 `constants.DATASET_POSITIVE_LABELS`。
     """
     if risk_type == RISK_TYPE_NETWORK:
         return {

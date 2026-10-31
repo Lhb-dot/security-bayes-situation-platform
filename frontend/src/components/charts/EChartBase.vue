@@ -1,7 +1,9 @@
+<template>
+  <div ref="container" class="echart-base" :style="{ height }"></div>
+</template>
 <script setup lang="ts">
 /**
- * EChartBase.vue — 通用 ECharts 包装器（Task 008）
- *
+ * 通用 ECharts 包装器
  * 职责边界：仅负责 init / setOption / resize / dispose / loading，
  * 不含任何业务图表逻辑；option 由上层组件传入。
  */
@@ -20,7 +22,6 @@ import {
 import { CanvasRenderer } from 'echarts/renderers';
 import type { ChartOption } from './chartTypes';
 
-// 按需注册（模块级执行一次；echarts.use 重复调用会合并，无副作用）
 use([
   BarChart,
   LineChart,
@@ -74,13 +75,12 @@ registerBayesDarkTheme();
 
 const props = withDefaults(
   defineProps<{
-    /** ECharts option（由上层组件/页面提供） */
     option: ChartOption;
-    /** 容器高度（宽度始终 100%） */
+    // 容器高度（宽度始终 100%）
     height?: string;
-    /** 加载态：true 时显示 loading 遮罩 */
+    // 加载态：true 时显示 loading 遮罩
     loading?: boolean;
-    /** setOption 是否不合并（默认 false 增量合并） */
+    // setOption 是否不合并（默认 false 增量合并）
     notMerge?: boolean;
   }>(),
   {
@@ -91,7 +91,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  /** ECharts 实例点击事件（供上层实现"点击图表联动/跳转"交互） */
+  // ECharts 实例点击事件（供上层实现"点击图表联动/跳转"交互）
   'chart-click': [params: ECElementEvent];
 }>();
 
@@ -149,11 +149,6 @@ onBeforeUnmount(() => {
   }
 });
 </script>
-
-<template>
-  <div ref="container" class="echart-base" :style="{ height }"></div>
-</template>
-
 <style scoped>
 .echart-base {
   width: 100%;

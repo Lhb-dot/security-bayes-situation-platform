@@ -3,7 +3,6 @@ import type { Router } from 'vue-router';
 import type { useUserStore } from '@/stores/userStore';
 import { setUnauthorizedHandler } from './request';
 
-/** 恢复会话后再安装路由，保留直接打开的业务地址；恢复失败也要挂载可登录的应用。 */
 export const startApplication = async (
   app: App,
   router: Router,

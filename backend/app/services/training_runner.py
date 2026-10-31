@@ -1,25 +1,22 @@
 """训练任务后台执行器（守护线程 + 队列）。
 
-部署形态是单进程 FastAPI（uvicorn app.main:app），所以与 report_scheduler 一致，
-不引入 celery / APScheduler —— 多一个中间件就多一处运维面。
+部署形态是单进程 FastAPI（uvicorn app.main:app），所以与 report_scheduler
+一致，不引入 celery / APScheduler —— 多一个中间件就多一处运维面。
 
-分工：
-- 请求线程：只做 create()（建 TRAINING 版本）后立刻返回，不再被 TRAIN_TIMEOUT 卡住；
-- 后台线程：从队列取模型 ID，调 Java 算法服务真实训练，成功 / 失败分别流转状态。
+分工：请求线程只做 create()（建 TRAINING 版本）后立刻返回，不再被
+TRAIN_TIMEOUT 卡住；后台线程从队列取模型 ID，调 Java 算法服务真实训练，成功 /
+失败分别流转状态。状态流转复用 ModelVersionService 里与同步路径同一套实现，
+保证写入 evaluation_metrics / model_attributes 的字段形状完全一致。
 
-状态流转复用 ModelVersionService 里与同步路径同一套实现，保证写入
-evaluation_metrics / model_attributes 的字段形状完全一致。
+队列在进程内，不做跨进程分发。若将来上多副本，需要给 model_version
+加一个「已被某副本认领」的标记，并用 SELECT ... FOR UPDATE SKIP LOCKED 抢占，
+做法与 ReportService.run_due_scheduled_reports 一致。
 
-多副本部署：队列在进程内，不做跨进程分发。若将来上多副本，需要给 model_version
-加一个「已被某副本认领」的标记并用 SELECT ... FOR UPDATE SKIP LOCKED 抢占，
-与 ReportService.run_due_scheduled_reports 的做法一致。
-
-环境变量：
-- TRAINING_RUNNER_ENABLED  默认 1；置 0 关闭（此时 /train-async 返回 503）
-- TRAINING_RUNNER_WORKERS  默认 1，并发训练数，上限 4
-- TRAINING_STALE_MINUTES   默认 60；启动时以及每 REAP_INTERVAL_SECONDS 把超过该
-                           时长仍停在 TRAINING 的版本标记为 FAILED（进程重启后
-                           无人推进的在途任务兜底）
+环境变量：TRAINING_RUNNER_ENABLED 默认 1，置 0 关闭（此时 /train-async 返回
+503）；TRAINING_RUNNER_WORKERS 默认 1，并发训练数，上限 4；
+TRAINING_STALE_MINUTES 默认 60，启动时以及每 REAP_INTERVAL_SECONDS
+把超过该时长仍停在 TRAINING 的版本标记为
+FAILED（进程重启后无人推进的在途任务兜底）。
 """
 import os
 import queue
@@ -85,7 +82,8 @@ def _execute(model_id: int) -> None:
 def reap_stale(stale_minutes: int | None = None) -> int:
     """把超过 stale_minutes 仍停在 TRAINING 的版本标记为 FAILED，返回处理条数。
 
-    治的是「进程重启导致在途任务无人推进」：状态机里 TRAINING 只能转 FAILED / DRAFT，
+    治的是「进程重启导致在途任务无人推进」：状态机里 TRAINING
+    只能转 FAILED / DRAFT，
     没有别的角色会去推进它，不兜底就会永远显示「训练中」。
     """
     minutes = _stale_minutes(stale_minutes)

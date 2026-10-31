@@ -2,17 +2,15 @@
 
 对应需求文档章节：5.1（统一原则）、5.2（最小字段结构 / 访问控制）、
 5.3（风险类型映射）、5.4（风险等级生成规则）、5.5（raw_features 使用规则）、
-6.8（数据访问与态势统计规则）。
+6.8（数据访问与态势统计规则）。模型见 app.models.risk_event.RiskEvent。
 
-模型：app.models.risk_event.RiskEvent。
-
-关键业务规则：
-1. 风险事件由推理结果生成（正常结果只保存推理记录，不生成事件，需求 4.x）。
-2. 冗余字段（original_label/risk_type/risk_level/risk_score/dataset_version/raw_features）
-   写入时与来源保持一致（需求 5.2 + 数据库设计文档 v2 2.7 冗余说明）。
-3. risk_level 由 risk_score 与场景阈值计算（需求 5.4）：high > medium，均配置在 risk_threshold。
-4. 访问控制（需求 5.2）：普通用户强制按 created_by_user_id 过滤；管理员可查全部。
-5. 历史风险事件不得被无痕删除或自动改写（需求 5.2 访问控制第 4 条）→ 不提供删除。
+关键业务规则：风险事件由推理结果生成，正常结果只保存推理记录、不生成事件（需求
+4.x）；冗余字段（original_label / risk_type / risk_level / risk_score /
+dataset_version / raw_features）写入时与来源保持一致（5.2 + 数据库设计文档 v2
+2.7 冗余说明）；risk_level 由 risk_score 与场景阈值计算（5.4），high 高于
+medium，两者都配置在 risk_threshold；访问控制（5.2）上普通用户强制按
+created_by_user_id 过滤，管理员可查全部；
+历史风险事件不得被无痕删除或自动改写（5.2 访问控制第 4 条），所以不提供删除。
 """
 from datetime import datetime, timezone
 
@@ -58,7 +56,8 @@ class RiskEventService(ServiceBase):
     def _require_event_access(self, current_user, event: RiskEvent) -> None:
         """风险事件访问控制（走集中式策略，需求 0.2 / 5.2）：
 
-        SUPER_ADMIN / SCENARIO_USER 仅本人创建的事件；SCENARIO_ADMIN 本场景全部。
+        SUPER_ADMIN / SCENARIO_USER 仅本人创建的事件；
+        SCENARIO_ADMIN 本场景全部。
         """
         self.require_login(current_user)
         self.authz.require_view_event(current_user, event)
@@ -66,7 +65,8 @@ class RiskEventService(ServiceBase):
     @staticmethod
     def _calc_risk_level(risk_score: float, medium: float, high: float) -> str:
         """需求 5.4 风险等级生成规则（实现统一收敛到 risk_view.classify）：
-        risk_score >= high → HIGH；medium <= risk_score < high → MEDIUM；risk_score < medium → LOW。
+        risk_score >= high -> HIGH；medium <= risk_score < high -> MEDIUM；
+        risk_score < medium -> LOW。
         """
         return risk_view.classify(risk_score, medium, high)
 
@@ -74,7 +74,8 @@ class RiskEventService(ServiceBase):
         """获取指定账号在场景下的阈值。
 
         需求 5.4.1.6：本文不把未经验证的具体数值写成正式默认阈值；阈值应通过
-        risk_threshold 配置提供。此处缺失时仅用兜底值并记录 warning，提示尽快配置。
+        risk_threshold 配置提供。此处缺失时仅用兜底值并记录
+        warning，提示尽快配置。
         """
         threshold = self.db.scalar(
             select(RiskThreshold).where(
@@ -97,7 +98,8 @@ class RiskEventService(ServiceBase):
     ) -> tuple:
         """计算航母甲板故障点坐标（需求 V3.0 §7.4.1）。
 
-        仅航母甲板作业场景生成坐标，其余场景返回 (None, None)（前端不渲染红点）。
+        仅航母甲板作业场景生成坐标，其余场景返回 (None,
+        None)（前端不渲染红点）。
         坐标基准：甲板底图原始宽度 1000px，取值范围 [0, 1000]。
 
         计算逻辑（占位，待与业务方确认正式映射）：
@@ -141,7 +143,8 @@ class RiskEventService(ServiceBase):
         def _pick(*names: str):
             """按候选键名取第一个存在且非空的值（不同数据集的同义字段名不同，需要别名回退）。
 
-            不能用 `a or b` 回退：0 是有效值（如流入字节数 0），会被 or 当成缺失吞掉，
+            不能用 `a or b` 回退：0 是有效值（如流入字节数 0），
+            会被 or 当成缺失吞掉，
             于是同一数据集里字符串 "0" 会输出、数字 0 不输出。
             """
             for name in names:
@@ -150,7 +153,7 @@ class RiskEventService(ServiceBase):
                     return v
             return None
 
-        # 只记分数，不记等级：等级是**视角相关**的（按查看者阈值重算），
+        # 只记分数，不记等级：等级是视角相关的（按查看者阈值重算），
         # 写进历史正文会与查看者当前看到的等级自相矛盾。
         # 分数按百分比格式化 —— 裸插 float 会把 0.9999999999998914 这类浮点误差写进正文；
         # 该文本固化入库、事后改不了，历史数据由前端 utils/explanationText.ts 兜底清洗。
@@ -180,7 +183,7 @@ class RiskEventService(ServiceBase):
             dport = _pick("L4_DST_PORT", "dst_port")
             proto = _pick("PROTOCOL", "protocol_type")
             in_bytes = _pick("IN_BYTES", "src_bytes")
-            # 只认真正的重传字段。KDD 系的 dst_bytes 是「目标→源」反向流量、不是重传，
+            # 只认真正的重传字段。KDD 系的 dst_bytes 是「目标->源」反向流量、不是重传，
             # 拿它冒充会写出「流入方向重传 0 字节，重传率偏高」这种自相矛盾的话；
             # 而「偏高」本身也无从判断（没有重传率字段），所以只陈述字节数、不下结论。
             retrans = _pick("RETRANSMITTED_IN_BYTES")
@@ -343,11 +346,14 @@ class RiskEventService(ServiceBase):
         - SUPER_ADMIN / SCENARIO_USER：仅本人创建的事件（需求 5.2 访问控制第 1 条）；
         - SCENARIO_ADMIN：本场景全部事件。
 
-        已隐藏（`hidden_at` 非空）的事件默认不出现在列表里，`include_hidden=True` 才带上
+        已隐藏（`hidden_at` 非空）的事件默认不出现在列表里，
+        `include_hidden=True` 才带上
         —— 隐藏是可见性开关，不是删除（见 :meth:`set_hidden`）。
 
-        risk_level 过滤按**查看者**阈值判级（见 risk_view），等价条件随账号阈值变化，
-        无法写进 SQL，因此传了该参数时先取轻量投影在 Python 侧判级，再对命中的 id
+        risk_level 过滤按查看者阈值判级（见 risk_view），
+        等价条件随账号阈值变化，
+        无法写进 SQL，因此传了该参数时先取轻量投影在 Python
+        侧判级，再对命中的 id
         切片分页；未传时仍走常规 SQL 分页，行为与之前完全一致。
         """
         self.require_login(current_user)
@@ -369,7 +375,7 @@ class RiskEventService(ServiceBase):
         # 已隐藏的默认不查（隐藏是可见性开关，不是删除）
         if not include_hidden:
             stmt = stmt.where(RiskEvent.hidden_at.is_(None))
-        # risk_level 按**查看者**的阈值重算：落库值是创建者视角，不能直接透传。
+        # risk_level 按查看者的阈值重算：落库值是创建者视角，不能直接透传。
         thresholds = risk_view.load_thresholds(self.db, current_user)
         if risk_level is not None:
             rows = self.db.execute(
@@ -410,8 +416,10 @@ class RiskEventService(ServiceBase):
     def _resolved_comment(self, event_id: int) -> str | None:
         """取「流转到已处置」时填写的处置方法。
 
-        来源是 handling_record 里 ``status_after = RESOLVED`` 的最新一条（处置动作是审计留痕，
-        只读不改）。功能上线前已处置的历史事件没有这条记录，返回 None —— 前端保留位置、
+        来源是 handling_record 里 `status_after = RESOLVED`
+        的最新一条（处置动作是审计留痕，
+        只读不改）。功能上线前已处置的历史事件没有这条记录，返回
+        None —— 前端保留位置、
         内容留空，不回填、不虚构。
         """
         comment = self.db.scalar(
@@ -430,13 +438,14 @@ class RiskEventService(ServiceBase):
     def get(self, current_user, event_id: int):
         """风险事件详情（按角色与数据边界校验）。
 
-        risk_level 按**查看者**的阈值重算（同 list）。
-        额外下发来源名称（数据集 / 算法 / 创建者）：详情页要显示人能看懂的名字，
+        risk_level 按查看者的阈值重算（同 list）。
+        额外下发来源名称（数据集 / 算法 / 创建者）：
+        详情页要显示人能看懂的名字，
         而 risk_event 表里存的是内部外键 ID；这里用已有的 relationship 补，
         不让前端拿着 ID 再去猜名字（前端拉数据集/算法/用户列表还受权限过滤）。
         只在详情补，列表不补 —— 列表 200 条会触发大量懒加载。
 
-        另下发 ``handling_comment``：流转到「已处置」时填写的处置方法，
+        另下发 `handling_comment`：流转到「已处置」时填写的处置方法，
         只随详情走（列表不带），供详情页的「处置信息」区块展示。
         """
         event = self._get(event_id)
@@ -467,8 +476,9 @@ class RiskEventService(ServiceBase):
     ):
         """更新风险事件处置状态，并写入处置记录（handling_record）。
 
-        状态流转由 RISK_EVENT_STATUS_TRANSITIONS 约束（需求 5.2）：PENDING 可直达
-        PROCESSING 或 RESOLVED，PROCESSING → RESOLVED，RESOLVED 为终态。
+        状态流转由 RISK_EVENT_STATUS_TRANSITIONS 约束（需求 5.2）：PENDING
+        可直达
+        PROCESSING 或 RESOLVED，PROCESSING -> RESOLVED，RESOLVED 为终态。
         USER 仅能处置本人事件；ADMIN 可处置其数据边界内的事件。
         """
         self.require_login(current_user)
@@ -525,12 +535,15 @@ class RiskEventService(ServiceBase):
     def set_hidden(self, current_user, event_id: int, hidden: bool):
         """隐藏或取消隐藏风险事件（软删除，数据一行不动）。
 
-        为什么不是删除：需求 5.2 访问控制第 4 条要求历史事件不得被无痕删除或自动改写，
-        风险事件因此不提供删除，只提供可见性开关 —— ``hidden_at`` 非空即隐藏，置回 NULL 即恢复，
+        为什么不是删除：需求 5.2 访问控制第 4
+        条要求历史事件不得被无痕删除或自动改写，
+        风险事件因此不提供删除，只提供可见性开关 —— `hidden_at`
+        非空即隐藏，置回 NULL 即恢复，
         处置记录（handling_record）与统计口径全程不受影响。
 
-        权限与「处置」一致（:meth:`_require_event_access`）：能处置才谈得上隐藏。
-        统计口径**不跟着隐藏走** —— 仪表盘/报告仍把已隐藏事件算进去，
+        权限与「处置」一致（:meth:`_require_event_access`）：
+        能处置才谈得上隐藏。
+        统计口径不跟着隐藏走 —— 仪表盘/报告仍把已隐藏事件算进去，
         改口径属于另一件事（会影响历史报告数字），不在这里顺手做。
         """
         self.require_login(current_user)

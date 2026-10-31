@@ -8,7 +8,8 @@ Create Date: 2026-08-02 12:40:31.456836
 - scenario：3 个场景（network_security / power_system / flightdeck_operation）
 - algorithm：5 个算法（A2WNB / MAWNB / EMAWNB / CAVWNB / PMWNB）
 
-display_name / param_schema 待算法组确认后以增量迁移更新，Seed 阶段先写入编码与状态。
+display_name / param_schema 待算法组确认后以增量迁移更新，Seed
+阶段先写入编码与状态。
 使用原生 SQL + ::jsonb 强转，保证 online / offline（--sql）两种模式均可执行。
 """
 import json

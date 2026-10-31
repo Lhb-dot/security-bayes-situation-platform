@@ -1,8 +1,7 @@
 <script setup lang="ts">
 /**
- * DashLine —— 折线/面积图（纯 SVG），支持双序列。
+ * DashLine，折线/面积图（纯 SVG），支持双序列。
  * 用于「机间距变化曲线」「近 10 天推理活动趋势」。
- *
  * 坐标按容器实测宽度计算（viewBox 与渲染尺寸 1:1），
  * 因此圆点恒为正圆、文字不被横向拉伸。
  */
@@ -13,17 +12,12 @@ const props = withDefaults(
   defineProps<{
     points: Array<{ label: string; value: number | null; value2?: number | null }>;
     height?: number;
-    /** 主序列名称 */
     name?: string;
-    /** 次序列名称（不传则不画） */
     name2?: string;
     color?: string;
     color2?: string;
-    /** 主序列是否填充面积 */
     area?: boolean;
-    /** 次序列是否填充面积 */
     area2?: boolean;
-    /** 数值后缀 */
     suffix?: string;
   }>(),
   {
@@ -40,9 +34,9 @@ const props = withDefaults(
 
 const TOP = 18;
 const BOTTOM = 24;
-/** 首末数据点距绘图区左右边缘的留白 */
+// 首末数据点距绘图区左右边缘的留白
 const PAD_X = 20;
-/** 容器宽度未知时的兜底宽度 */
+// 容器宽度未知时的兜底宽度
 const FALLBACK_W = 560;
 
 const hostRef = ref<HTMLElement | null>(null);
@@ -101,7 +95,7 @@ const areaPath = (points: Array<{ x: number; y: number }>) => {
   return `${path(points)} L${points[points.length - 1].x},${base} L${points[0].x},${base} Z`;
 };
 
-/** 横轴标签稀疏度：按容器宽度算，每 64px 最多放一个标签，避免重叠 */
+// 横轴标签稀疏度：按容器宽度算，每 64px 最多放一个标签，避免重叠
 const labelStep = computed(() => {
   const maxLabels = Math.max(2, Math.floor(viewWidth.value / 64));
   return Math.max(1, Math.ceil(props.points.length / maxLabels));

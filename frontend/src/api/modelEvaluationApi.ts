@@ -1,6 +1,6 @@
 import request, { getCsrfToken, unwrapData } from '@/utils/request';
 
-/** 模型评价的展示字段；其余快照字段保留 unknown，按实际使用处收窄。 */
+// Fields the evaluation view actually renders. The rest of the snapshot stays unknown.
 export interface ModelEvaluationAttributes extends Record<string, unknown> {
   algorithm?: { name?: string | null; code?: string | null };
   dataset?: { name?: string | null; logical_id?: string | null };
@@ -23,7 +23,7 @@ export interface ModelEvaluationResponse {
 
 export interface ModelEvaluationStreamHandlers {
   onStart?: (data: Record<string, unknown>) => void;
-  /** 推理型模型的思维链，只用于展示「确实在生成」，不落库 */
+  // 推理型模型的思维链，只用于展示"确实在生成"，不落库
   onReasoning?: (content: string) => void;
   onDelta?: (content: string) => void;
   onError?: (data: Record<string, unknown>) => void;

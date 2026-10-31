@@ -1,9 +1,9 @@
 """风险事件路由（/api/v1/risk-events）。
 
 对应 Service：RiskEventService（backend/app/services/risk_event_service.py）。
-权限（需求 5.2/6.5.2）：查看/处置 → 登录用户（普通用户仅本人事件，后端强制按
-created_by_user_id 过滤；场景管理员可见本场景全部）；**不提供删除**（历史事件必须
-保持可追溯，需求 5.2）；隐藏 → 软隐藏（POST /{id}/hide、/{id}/unhide），
+权限（需求 5.2/6.5.2）：查看/处置 -> 登录用户（普通用户仅本人事件，后端强制按
+created_by_user_id 过滤；场景管理员可见本场景全部）；不提供删除（历史事件必须
+保持可追溯，需求 5.2）；隐藏 -> 软隐藏（POST /{id}/hide、/{id}/unhide），
 数据一行不动，只切可见性。
 """
 from fastapi import APIRouter, Depends, Query

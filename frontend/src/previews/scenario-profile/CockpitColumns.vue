@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * CockpitColumns —— 纵向柱状对比（纯 CSS，柱高按本组最大值归一）。
+ * CockpitColumns，纵向柱状对比（纯 CSS，柱高按本组最大值归一）。
  * 用 flex + 百分比高度而不是 SVG：在面板里自适应宽度，不需要测量容器，
  * 也不会出现文字被横向拉伸的问题。数值标注在柱顶、类别名在柱底，均随 --u 缩放。
  */
@@ -12,7 +12,6 @@ export interface CockpitColumnItem {
   label: string;
   value: number | null;
   tone?: Tone;
-  /** 柱底类别名的补充说明（第二行小字） */
   caption?: string;
 }
 

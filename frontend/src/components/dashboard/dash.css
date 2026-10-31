@@ -1,7 +1,4 @@
-/* ==========================================================================
-   首页看板样式 —— 统一的设计令牌与组件样式
-   全部类名以 d- 前缀并挂在 .dash-page 下，避免与全局 .card/.row 等冲突。
-   ========================================================================== */
+/* 首页看板样式，统一的设计令牌与组件样式 全部类名以 d- 前缀并挂在 .dash-page 下，避免与全局 .card/.row 等冲突。 */
 
 .dash-page {
   font-family: var(--font-ui);
@@ -16,7 +13,7 @@
   gap: 18px;
 }
 
-/* ---------- 顶部标题 ---------- */
+/* 顶部标题 */
 .dash-page .d-top {
   display: flex;
   justify-content: space-between;
@@ -64,7 +61,7 @@
   color: #5ba6ff;
 }
 
-/* ---------- KPI ---------- */
+/* KPI */
 .dash-page .d-kpis {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -134,7 +131,7 @@
   color: rgba(220, 234, 255, 0.4);
 }
 
-/* ---------- 布局 ---------- */
+/* 布局 */
 .dash-page .d-grid2 {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
@@ -147,7 +144,7 @@
   gap: 16px;
 }
 
-/* ---------- 卡片 ---------- */
+/* 卡片 */
 .dash-page .d-card {
   padding: 16px 18px;
   border-radius: 16px;
@@ -181,7 +178,7 @@
   color: rgba(220, 234, 255, 0.42);
 }
 
-/* ---------- 横向条形 ---------- */
+/* 横向条形 */
 .dash-page .d-hbars {
   display: grid;
   gap: 9px;
@@ -224,7 +221,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 环形图 ---------- */
+/* 环形图 */
 .dash-page .d-donut {
   display: flex;
   align-items: center;
@@ -266,7 +263,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 行列表 ---------- */
+/* 行列表 */
 .dash-page .d-rows {
   display: grid;
   gap: 8px;
@@ -294,7 +291,7 @@
   text-align: right;
 }
 
-/* ---------- 矩阵表（管理端跨数据集对比） ---------- */
+/* 矩阵表（管理端跨数据集对比） */
 .dash-page .d-table-wrap {
   overflow-x: auto;
 }
@@ -349,7 +346,7 @@
 .dash-page .d-tag--warn { background: rgba(255, 209, 102, 0.14); color: #ffd166; border: 1px solid rgba(255, 209, 102, 0.3); }
 .dash-page .d-tag--muted { background: rgba(255, 255, 255, 0.05); color: rgba(220, 234, 255, 0.5); border: 1px solid rgba(125, 201, 255, 0.12); }
 
-/* ---------- 标签 ---------- */
+/* 标签 */
 .dash-page .d-tag {
   display: inline-block;
   padding: 2px 9px;
@@ -366,7 +363,7 @@
 .dash-page .d-tag--resolved { background: rgba(125, 201, 255, 0.12); color: #9ad6ff; border: 1px solid rgba(125, 201, 255, 0.28); }
 .dash-page .d-tag--ok { background: rgba(83, 229, 200, 0.14); color: #53e5c8; border: 1px solid rgba(83, 229, 200, 0.3); }
 
-/* ---------- 事件列表 ---------- */
+/* 事件列表 */
 .dash-page .d-evs {
   display: grid;
   gap: 8px;
@@ -408,7 +405,7 @@
   font-size: 12.5px;
 }
 
-/* ---------- 刻度条 ---------- */
+/* 刻度条 */
 .dash-page .d-gauge {
   margin-bottom: 14px;
 }
@@ -464,7 +461,7 @@
   margin-top: 3px;
 }
 
-/* ---------- 漏斗 ---------- */
+/* 漏斗 */
 .dash-page .d-funnel {
   display: grid;
   gap: 8px;
@@ -502,7 +499,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 状态 ---------- */
+/* 状态 */
 .dash-page .d-state {
   display: grid;
   place-items: center;
@@ -534,7 +531,7 @@
   background: rgba(83, 229, 200, 0.18);
 }
 
-/* ---------- 响应式 ---------- */
+/* 响应式 */
 @media (max-width: 1200px) {
   .dash-page .d-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-page .d-grid2,

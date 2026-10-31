@@ -1,9 +1,9 @@
-/** 会话重置或轮询停止后，异步响应必须先确认自己仍属于当前轮次。 */
+// 会话重置或轮询停止后，异步响应必须先确认自己仍属于当前轮次。
 export interface PollContext {
   isCurrent(): boolean;
 }
 
-/** 只管理调度与失效响应；查询接口、终态、通知和下载由各 Store 决定。 */
+// 只管理调度与失效响应；查询接口、终态、通知和下载由各 Store 决定。
 export const createJobPoller = (
   intervalMs: number,
   onTick: (context: PollContext) => Promise<void>,
@@ -14,7 +14,6 @@ export const createJobPoller = (
   let round = 0;
   let pending: Promise<void> | null = null;
 
-  // 恢复列表与下载属于会话，不因所有任务完成后自动停表而失效。
   const capture = (): PollContext => {
     const version = session;
     const owner = getOwner();
@@ -59,7 +58,7 @@ export const createJobPoller = (
   };
 };
 
-/** 每个 Pinia Store 实例独立持有调度器，避免测试或多应用共享模块级锁。 */
+// 每个 Pinia Store 实例独立持有调度器，避免测试或多应用共享模块级锁。
 export const createStorePoller = (intervalMs: number, getOwner: () => string | null) => {
   const pollers = new WeakMap<object, ReturnType<typeof createJobPoller>>();
   return (store: { _poll(context: PollContext): Promise<void> }) => {

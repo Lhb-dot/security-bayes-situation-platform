@@ -1,12 +1,8 @@
 <script setup lang="ts">
 /**
- * DataPreviewTable.vue — 数据集数据内容预览表（Task 011 / 需求 2.4）
- *
+ * 数据集数据内容预览表
  * 只读分页表格：列用正式字段名动态生成，极宽表整表横向滚动（不冻结首列），
  * 标签列（labelField）高亮。数据经 datasetStore.fetchPreview（页面不直连 API）。
- *
- * 滚轮优先级：表格是定高（max-height）内滚容器，浏览器默认会先滚表格、页面不动。
- * 这里用 attachOuterFirstWheel 反转滚动链 —— 先把外层页面滚到顶/底，余量再滚表格。
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useDatasetStore } from '@/stores/datasetStore';
@@ -37,7 +33,6 @@ let loadSequence = 0;
 let mounted = true;
 const rows = computed(() => preview.value?.rows ?? []);
 const total = computed(() => preview.value?.total ?? 0);
-/** 动态列：以首行键为正式字段名（跨分页字段结构稳定） */
 const columns = computed<string[]>(() => (rows.value.length > 0 ? Object.keys(rows.value[0]) : []));
 
 const loadPage = async (page: number) => {
@@ -61,11 +56,10 @@ const loadPage = async (page: number) => {
   }
 };
 
-/** 标签列单元格高亮（列属性等于 labelField） */
+// 标签列单元格高亮（列属性等于 labelField）
 const cellClass = ({ column }: { column: { property: string } }): string =>
   column.property === props.labelField ? 'preview-label-cell' : '';
 
-/** 标签列表头高亮 */
 const headerClass = ({ column }: { column: { property: string } }): string =>
   column.property === props.labelField ? 'preview-label-header' : '';
 
@@ -95,7 +89,7 @@ watch(tableWrapRef, (el) => {
   if (el) detachWheel = attachOuterFirstWheel(el);
 });
 
-/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+// 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts）
 const changePage = (target: number) => {
   let sequence = loadSequence;
   return keepScroll(() => {
@@ -115,8 +109,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="data-preview">
-    <!-- 加载状态：只有还没有数据时才用整块状态卡。
-         翻页时保留表格、只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <!-- 加载状态 -->
     <div v-if="loading && !rows.length" class="data-preview__state">
       <div class="loader"></div>
       <p>正在加载数据内容...</p>
@@ -141,9 +134,7 @@ onBeforeUnmount(() => {
           :cell-class-name="cellClass"
           :header-cell-class-name="headerClass"
         >
-          <!-- 全部列等宽、整表一起横向滚动：不冻结首列。
-               冻结列是 position:sticky 叠在滚动内容之上的独立图层，叠上本表的半透明单元格底色后，
-               滚过去的列会从首列底下透出来，看起来就是「第一列不动、和第二列文字重叠」。 -->
+          <!-- 全部列等宽、整表一起横向滚动 -->
           <el-table-column
             v-for="col in columns"
             :key="col"
@@ -237,13 +228,11 @@ onBeforeUnmount(() => {
 }
 
 .data-preview .el-table td.el-table__cell {
-  /* 使用不透明底色：整表横向滚动，半透明底会让滚过的列互相透出 */
   background: #06101c !important;
   color: rgba(175, 198, 230, 0.85) !important;
   border-bottom: 1px solid rgba(125, 201, 255, 0.04) !important;
 }
 
-/* 斑马纹（与数据集中心等表格同一套口径） */
 .data-preview .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
   background-color: #0a182c !important;
 }
@@ -283,10 +272,10 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-/* ---------------- 分页器（暗色） ----------------
+/* 分页器（暗色）
    background 模式下页码按钮的底色来自 --el-pagination-button-bg-color（EP 默认 #f0f2f5）、
    禁用态来自 --el-pagination-button-disabled-bg-color（EP 默认 #fff），而页码文字用的是
-   我们覆盖过的浅色 —— 浅底浅字所以「看不清」。下面补齐这组变量，并对按钮做定点覆盖。
+   我们覆盖过的浅色，浅底浅字所以「看不清」。下面补齐这组变量，并对按钮做定点覆盖。
    （总数文案已改为自绘的「共 N 条」，见上方 .data-preview__pager-total，不再走 EP 的 total。） */
 .data-preview .el-pagination {
   --el-pagination-bg-color: rgba(8, 17, 31, 0.8);

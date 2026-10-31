@@ -3,7 +3,8 @@
 对应《数据库设计文档v2》2.5。
 
 推荐模型：`is_recommended` 仅表示「这是本场景推荐使用的模型」，与「默认」无关，
-不设唯一约束 —— 同一（scenario_id, dataset_id）可以同时推荐多个模型（2026-10 定稿）。
+不设唯一约束 —— 同一（scenario_id, dataset_id）
+可以同时推荐多个模型（2026-10 定稿）。
 """
 from datetime import datetime
 
@@ -35,8 +36,8 @@ class ModelVersion(Base):
     )
     training_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
     evaluation_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    # Model-level explanation facts and role-scoped AI wording. These are
-    # independent from any inference record and can be reviewed by model ID.
+    # 模型级的解释事实与按角色分层的 AI 措辞。这两块与任何一条推理记录都无关，
+    # 可以只凭模型 ID 查看。
     model_attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ai_evaluation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     trained_by: Mapped[int] = mapped_column(

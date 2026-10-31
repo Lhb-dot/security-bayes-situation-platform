@@ -1,4 +1,4 @@
-"""Shared filesystem locations used by application services."""
+"""各服务共用的文件系统路径。"""
 
 from pathlib import Path
 

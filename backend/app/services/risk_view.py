@@ -1,21 +1,19 @@
-"""账号级风险视图：同一份事实（risk_score），按**当前账号**的阈值判级。
+"""账号级风险视图：同一份事实（risk_score），按当前账号的阈值判级。
 
-口径（用户明确要求）：
-- 阈值是跟随账号的设置。一个账号在**所有**跟风险有关的地方，都用它自己的阈值
-  判断「有没有到高风险」。
-- 事实（risk_score）不变，但每个账号看到的是**自己的**风险视图。
-- 统计口径同理：不能把别人已经算好的等级直接相加，必须用当前账号的阈值重算。
+阈值是跟随账号的设置 —— 一个账号在所有跟风险有关的地方，
+都用它自己的阈值判断「有没有到高风险」。事实（risk_score）不变，
+但每个账号看到的是自己的风险视图；统计口径同理，
+不能把别人已经算好的等级直接相加，必须用当前账号的阈值重算。
 
-因此本模块是唯一的判级入口：
-- ``RiskEvent.risk_level`` 是**创建者视角**的落库值，只作历史留痕，**不用于对外展示**；
-- 任何对外的读取 / 统计，都用 :func:`level_of` 从 ``risk_score`` 重算。
+因此本模块是唯一的判级入口：RiskEvent.risk_level
+是创建者视角的落库值，只作历史留痕，不用于对外展示；任何对外的读取 /
+统计，都用 level_of 从 risk_score 重算。
 
-兜底：账号在某场景没有配置阈值时，用 ``DEFAULT_MEDIUM/HIGH_THRESHOLD``（0.5 / 0.8），
-与 ``risk_event_service`` 原有的兜底保持一致。
-
-阈值层级：``risk_threshold`` 以 (user_id, scenario_id) 为业务主键，**只有账号级一层**，
-不存在场景级 / 平台级默认阈值行；未配置的 (账号, 场景) 一律走上面两个兜底常量。
-因此这里的"合并"只有两步：先取账号在该场景的行，取不到再用常量。
+兜底：账号在某场景没有配置阈值时，用 DEFAULT_MEDIUM / HIGH_THRESHOLD（0.5 /
+0.8），与 risk_event_service 原有的兜底保持一致。阈值层级上 risk_threshold 以
+(user_id, scenario_id) 为业务主键，只有账号级一层，不存在场景级 /
+平台级默认阈值行；未配置的 (账号, 场景) 一律走上面两个兜底常量，
+所以这里的「合并」只有两步：先取账号在该场景的行，取不到再用常量。
 """
 from collections.abc import Iterable
 
@@ -34,14 +32,15 @@ from app.services.constants import (
 )
 from app.utils.common import row_to_dict
 
-#: (medium, high)，均为 0~1
+# (medium, high)，均为 0~1
 ThresholdPair = tuple[float, float]
 
 
 def classify(risk_score: float, medium: float, high: float) -> str:
-    """按阈值判级：``>= high`` → HIGH，``>= medium`` → MEDIUM，否则 LOW。
+    """按阈值判级：`>= high` -> HIGH，`>= medium` -> MEDIUM，否则 LOW。
 
-    边界归属为闭区间下界（等于阈值即算命中该档），与 ``risk_event_service`` 原实现一致。
+    边界归属为闭区间下界（等于阈值即算命中该档），与
+    `risk_event_service` 原实现一致。
     """
     score = float(risk_score)
     if score >= float(high):
@@ -52,9 +51,10 @@ def classify(risk_score: float, medium: float, high: float) -> str:
 
 
 def load_thresholds(db, user) -> dict[int, ThresholdPair]:
-    """一次查出该账号在**全部场景**的阈值：``{scenario_id: (medium, high)}``。
+    """一次查出该账号在全部场景的阈值：`{scenario_id: (medium, high)}`。
 
-    只返回已配置的场景；未配置的由 :func:`thresholds_for` 兜底，避免在此处写死默认值
+    只返回已配置的场景；未配置的由 :func:`thresholds_for` 兜底，
+    避免在此处写死默认值
     造成「配置了 0.5/0.8 的账号」与「未配置走兜底的账号」不可区分。
     """
     if user is None or getattr(user, "id", None) is None:
@@ -82,7 +82,7 @@ def thresholds_for(
 def level_of(event, thresholds: dict[int, ThresholdPair]) -> str:
     """按当前账号阈值算出该事件的等级。
 
-    ``risk_score`` 缺失时（历史脏数据）退回落库的 ``risk_level``，不再凭空造数。
+    `risk_score` 缺失时（历史脏数据）退回落库的 `risk_level`，不再凭空造数。
     """
     score = getattr(event, "risk_score", None)
     stored = getattr(event, "risk_level", None)
@@ -95,7 +95,7 @@ def level_of(event, thresholds: dict[int, ThresholdPair]) -> str:
 
 
 def view_of(event, thresholds: dict[int, ThresholdPair]) -> dict:
-    """把事件序列化成**当前账号视角**的 dict（risk_level 已按本人阈值重算）。"""
+    """把事件序列化成当前账号视角的 dict（risk_level 已按本人阈值重算）。"""
     data = row_to_dict(event)
     data["risk_level"] = level_of(event, thresholds)
     return data
@@ -107,9 +107,9 @@ def view_events(events: Iterable, thresholds: dict[int, ThresholdPair]) -> list:
 
 
 def aggregate(events: Iterable, thresholds: dict[int, ThresholdPair]) -> dict:
-    """按**当前账号**阈值聚合风险等级计数，处置状态计数不受阈值影响。
+    """按当前账号阈值聚合风险等级计数，处置状态计数不受阈值影响。
 
-    这是替代 ``SituationSnapshotService._aggregate`` 的口径：等级计数一律重算，
+    这是替代 `SituationSnapshotService._aggregate` 的口径：等级计数一律重算，
     状态计数沿用落库值。
     """
     events = list(events)

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 /**
  * DatasetCenter - 数据集中心页面
- *
  * 全平台数据集统一管理
- * 支持按场景筛选、数据集列表展示、数据集字段预览
+ * 支持按场景筛选、数据集列表展示、数据集字段预览。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -28,7 +27,7 @@ import { useUserStore } from '@/stores/userStore';
 
 const router = useRouter();
 
-/** 场景名称映射（表格标签与上传弹窗选项共用） */
+// 场景名称映射（表格标签与上传弹窗选项共用）
 const SCENARIO_LABEL: Record<ScenarioId, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
@@ -36,26 +35,26 @@ const SCENARIO_LABEL: Record<ScenarioId, string> = {
   flightdeck_operation: '舰面调度态势',
 };
 
-/** 数据格式标签（键为 Dataset.data_format 全集，取值不会落空） */
+// 数据格式标签（键为 Dataset.data_format 全集，取值不会落空）
 const FORMAT_LABEL: Record<Dataset['data_format'], string> = {
   csv: 'CSV',
   arff: 'ARFF',
   json: 'JSON',
 };
 
-// ===================== 状态 =====================
-/** 全部数据集（缓存，用于前端筛选） */
+// 状态
+// 全部数据集（缓存，用于前端筛选）
 const allDatasets = ref<Dataset[]>([]);
-/** 筛选后的数据集列表（绑定表格） */
+// 筛选后的数据集列表（绑定表格）
 const filteredDatasets = ref<Dataset[]>([]);
-/** 当前选中的场景筛选值 */
+// 当前选中的场景筛选值
 const selectedScenario = ref<ScenarioId | 'all'>('all');
-/** 加载状态 */
+// 加载状态
 const loading = ref(true);
-/** 错误信息 */
+// 错误信息
 const error = ref('');
 
-/** current user (new uploads are available to all roles; version mutations remain admin-only) */
+// current user (new uploads are available to all roles; version mutations remain admin-only)
 const userStore = useUserStore();
 const isManagement = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
@@ -68,13 +67,13 @@ const uploadForm = ref({
   scenario_id: '' as ScenarioId | '',
   label_field: '',
 });
-/** 上传数据集时选择的文件 */
+// 上传数据集时选择的文件
 const selectedFile = ref<File | null>(null);
-/** 隐藏的原生 file input：由云上传图标按钮触发（复用 RiskInference 批量上传的交互） */
+// 隐藏的原生 file input：由云上传图标按钮触发（复用 RiskInference 批量上传的交互）
 const uploadFileInputRef = ref<HTMLInputElement | null>(null);
 const appendFileInputRef = ref<HTMLInputElement | null>(null);
 
-/** 云上传图标按钮：把点击转发给隐藏的原生 file input（清空后重选同一个文件也能触发 change） */
+// 云上传图标按钮：把点击转发给隐藏的原生 file input（清空后重选同一个文件也能触发 change）
 const pickFile = (input: HTMLInputElement | null) => {
   if (!input) return;
   input.value = '';
@@ -97,7 +96,7 @@ const openUploadDialog = () => {
   uploadDialogVisible.value = true;
 };
 
-/** 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段 */
+// 上传新数据集：选择文件 + 填标签字段，后端自动识别 ARFF/CSV 并解析字段
 const submitNewDataset = async () => {
   if (!uploadForm.value.dataset_id.trim()) {
     ElMessage.warning('请填写数据集编码');
@@ -139,7 +138,7 @@ const submitUpload = async () => {
   await submitNewDataset();
 };
 
-// ===================== 追加数据（迭代：增加数据条数） =====================
+// 追加数据（迭代：增加数据条数）
 // 增量文件必须与当前数据集同结构；是否新开版本由后端迭代策略决定
 // （未被模型引用 → 原地更新，版本号不变；已引用 → 自动新建版本）。
 const appendDialogVisible = ref(false);
@@ -188,17 +187,17 @@ const submitAppend = async () => {
   }
 };
 
-// ===================== 版本管理（需求 2.3.3/2.3.5/2.3.6） =====================
+// 版本管理
 const versionDialogVisible = ref(false);
 const versionDialogTitle = ref('');
 const versionTarget = ref<Dataset | null>(null);
 const versionList = ref<DatasetVersion[]>([]);
 const versionLoading = ref(false);
-/** 迭代记录：含原地更新（不新增版本的那类迭代），版本列表看不出来，这里补齐审计视角。 */
+// 迭代记录：含原地更新（不新增版本的那类迭代），版本列表看不出来，这里补齐审计视角。
 const revisionList = ref<DatasetRevisionItem[]>([]);
 const revisionLoading = ref(false);
 
-/** 版本 + 迭代记录一起刷新（两者是同一数据集的两种视角，必须同步）。 */
+// 版本 + 迭代记录一起刷新（两者是同一数据集的两种视角，必须同步）。
 const loadVersionDialogData = async (datasetId: string) => {
   try {
     versionList.value = await getDatasetVersions(datasetId);
@@ -256,7 +255,7 @@ const handleDeleteVersion = async (v: DatasetVersion) => {
   }
 };
 
-// ===================== 数据加载 =====================
+// 数据加载
 const loadDatasets = async () => {
   loading.value = true;
   error.value = '';
@@ -271,7 +270,7 @@ const loadDatasets = async () => {
   }
 };
 
-/** 根据场景筛选 */
+// 根据场景筛选
 const applyFilter = () => {
   if (selectedScenario.value === 'all') {
     filteredDatasets.value = allDatasets.value;
@@ -282,17 +281,17 @@ const applyFilter = () => {
   }
 };
 
-/** 监听筛选变化 */
+// 监听筛选变化
 watch(selectedScenario, () => {
   applyFilter();
 });
 
-// ===================== AI 解析（算法适配，需求：判断数据集适合的算法） =====================
-/** 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done。 */
+// AI 解析（算法适配，需求：判断数据集适合的算法）
+// 与模型评价 / 推理解释共用同一套 SSE 协议：start → (reasoning | delta)* → done。
 const aiDialogVisible = ref(false);
 const aiDialogTitle = ref('');
 const aiDialogLoading = ref(false);
-/** 已尝试读取过历史结果（含「确实没有」），避免重复请求。 */
+// 已尝试读取过历史结果（含「确实没有」），避免重复请求。
 const aiDialogLoaded = ref(false);
 const aiDialogStatus = ref('');
 const aiDialogError = ref('');
@@ -309,7 +308,7 @@ const aiDialogHtml = computed(() =>
     : ''
 );
 
-/** 生成期间把可滚动容器钉在底部，让最新的思考链 / 正文始终可见。 */
+// 生成期间把可滚动容器钉在底部，让最新的思考链 / 正文始终可见。
 const stickAiToBottom = () => {
   if (!aiDialogLoading.value) return;
   void nextTick(() => {
@@ -323,7 +322,7 @@ const stickAiToBottom = () => {
 
 watch([aiDialogReasoning, aiDialogMarkdown], stickAiToBottom);
 
-/** 打开弹窗时读取已保存的解析结果，不触发 AI；没有历史则留给空状态呈现。 */
+// 打开弹窗时读取已保存的解析结果，不触发 AI；没有历史则留给空状态呈现。
 const loadAiAnalysis = async () => {
   if (!aiDialogDatasetId.value || aiDialogLoaded.value) return;
   aiDialogStatus.value = '';
@@ -418,12 +417,12 @@ onBeforeUnmount(() => {
   aiAbort = null;
 });
 
-/** 跳转数据集详情页，并打开字段结构或数据内容页签。 */
+// 跳转数据集详情页，并打开字段结构或数据内容页签。
 const goDatasetDetail = (dataset: Dataset, tab: 'fields' | 'preview') => {
   router.push({ path: `/datasets/${dataset.dataset_id}`, query: { tab } });
 };
 
-// ===================== 生命周期 =====================
+// 生命周期
 onMounted(async () => {
   if (!userStore.initialized) {
     await userStore.bootstrap();
@@ -591,7 +590,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 上传数据集弹窗（管理员，需求 2.3.2；append-to-body 防 topbar 遮挡） -->
+    <!-- 上传数据集弹窗（管理员，需求 2.3.2 -->
     <el-dialog
       v-model="uploadDialogVisible"
       title="上传数据集"
@@ -623,7 +622,7 @@ onMounted(async () => {
         <div class="upload-form__row">
           <label class="upload-form__label">数据文件<span class="required">*</span>（.arff / .csv）</label>
           <div class="upload-picker">
-            <!-- 原生 file input 藏起来，由云上传图标按钮代它触发（与 RiskInference 批量上传同一交互） -->
+            <!-- 原生 file input 藏起来 -->
             <input
               ref="uploadFileInputRef"
               type="file"
@@ -662,7 +661,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6；append-to-body 防 topbar 遮挡） -->
+    <!-- 版本管理弹窗（管理员，需求 2.3.3 / 2.3.5 / 2.3.6 -->
     <el-dialog
       v-model="versionDialogVisible"
       :title="versionDialogTitle"
@@ -801,7 +800,7 @@ onMounted(async () => {
         <div class="upload-form__row">
           <label class="upload-form__label">增量文件<span class="required">*</span>（.arff / .csv）</label>
           <div class="upload-picker">
-            <!-- 原生 file input 藏起来，由云上传图标按钮代它触发（与 RiskInference 批量上传同一交互） -->
+            <!-- 原生 file input 藏起来 -->
             <input
               ref="appendFileInputRef"
               type="file"
@@ -1222,7 +1221,7 @@ onMounted(async () => {
 }
 
 /* 增量文件选择：隐藏原生 file input（原生控件悬停会冒出「未选择文件」提示），
-   改由云上传图标按钮触发 —— 与 RiskInference 批量上传复用同一套按钮样式。 */
+   改由云上传图标按钮触发，与 RiskInference 批量上传复用同一套按钮样式。 */
 .upload-picker {
   display: flex;
   align-items: center;
@@ -1377,11 +1376,11 @@ onMounted(async () => {
 
 /* 版本管理弹窗（append-to-body，不在 .dataset-center 内）：
    加宽避免表格横向滚动；整体高度受限于视口并垂直居中。
-   上下两块（版本表 / 迭代记录）各自最多占「弹窗最大高度」的一半，多出来的部分
+   上下两块（版本表 / 迭代记录）各自最多占「弹窗最大高度」的一半，多出来的部分。
    在各自区域内滚动，因此弹窗永远不会超出屏幕。 */
 .version-dialog {
   /* 88vh 扣掉标题、工具栏、小标题与间距等固定开销后对半分。
-     版本表的 max-height 通过属性绑定同一个变量：只有走 Element Plus 的 max-height
+     版本表的 max-height 通过属性绑定同一个变量：只有走 Element Plus 的 max-height。
      属性，表格内部才会正确感知纵向滚动条并补上表头占位列。 */
   --version-pane-max-h: calc((88vh - 220px) / 2);
   display: flex;

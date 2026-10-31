@@ -1,13 +1,15 @@
 """数据集迭代表 dataset_revision —— 每一次迭代一条记录。
 
-设计动机见 app/services/dataset_iteration.py：**迭代**与**版本**是两件事。
+设计动机见 app/services/dataset_iteration.py：迭代与版本是两件事。
 - 每次数据/结构/元数据变更都算一次迭代，无论最终是原地更新还是新开版本，都落一条本表记录；
 - 版本快照（dataset 行）只在策略判定需要时才新增。
 
-于是「追加数据条数」这类兼容迭代在未被引用时可以原地更新，不涨版本号，但依然可追溯；
+于是「追加数据条数」这类兼容迭代在未被引用时可以原地更新，
+不涨版本号，但依然可追溯；
 被引用后自动改为新建版本，冻结旧文件。前端「版本管理」看版本，审计看本表。
 
-本表是纯日志，不参与业务计算；dataset 被物理删除时随库级 ON DELETE CASCADE 一并清理。
+本表是纯日志，不参与业务计算；dataset 被物理删除时随库级 ON DELETE CASCADE
+一并清理。
 """
 from datetime import datetime
 

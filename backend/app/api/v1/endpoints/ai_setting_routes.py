@@ -1,4 +1,4 @@
-"""User-bound AI provider settings. Raw keys never leave the backend."""
+"""按用户绑定的 AI 供应商配置。明文 key 不出后端。"""
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 

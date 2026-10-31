@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * UserWorkspacePage —— 我的工作台（场景用户首页）。
+ * UserWorkspacePage，我的工作台（场景用户首页）。
  * 按 scenario_key 分发到 4 个场景分区组件，字段口径见 docs/首页字段口径说明.md。
  * 数据来自 /dashboard/scenarios/{id}/workspace，范围严格限定当前登录用户本人。
  */
@@ -26,7 +26,6 @@ const loading = ref(true);
 const error = ref('');
 const workspace = ref<ScenarioWorkspace | null>(null);
 
-/** 按 scenario_key 收窄类型，模板中据此渲染对应场景分区 */
 const networkData = computed<NetworkWorkspace | null>(() =>
   workspace.value?.scenario_key === 'network' ? (workspace.value as NetworkWorkspace) : null,
 );

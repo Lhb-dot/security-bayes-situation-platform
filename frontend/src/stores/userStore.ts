@@ -96,7 +96,7 @@ export const useUserStore = defineStore('user', {
       return task;
     },
 
-    /** 仅清前端会话；401 使用此动作，不向后端额外发送退出请求。 */
+    // 仅清前端会话；401 使用此动作，不向后端额外发送退出请求。
     expireSession(options?: { clearCredentials?: boolean }): void {
       const session = sessionFor(this);
       session.revision += 1;

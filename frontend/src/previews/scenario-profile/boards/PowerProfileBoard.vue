@@ -1,18 +1,6 @@
 <script setup lang="ts">
 /**
- * PowerProfileBoard —— 电力系统 · 场景管理员首页看板（纯展示）。
- * 取数在 sections/ProfilePower.vue（/profile 由父组件传入，/workspace 与 /users 本页另取）。
- *
- * 视角：**管理端看资源与流程，不是执行端看任务**。与场景用户「我的工作台」的分工：
- *   用户侧 ＝ 我手上的活（电参量 gauge、设备告警排行、问题类型构成、最近告警）；
- *   管理侧 ＝ 这个场景健康吗（跨数据集的电参量基线是否一致、设备/系统被哪些数据覆盖、
- *             数据集有没有被建模、处置流程积压多少、这个场景有哪些人）。
- * 因此本页不出现任何 gauge、告警排行、问题类型构成 —— 那是执行端研判图。
- *
- * 可空口径：`telemetry_by_dataset` / `component_matrix` / `modeling` 都是必填字段
- * （dashboardApi.ts 未标可选、后端 get_profile 恒返回），故不做「字段没下发」的空数组兜底 ——
- * 那种兜底会把「没取到」误渲染成「0 个模型 → 数据白躺」的假告警。真正需要降级的是
- * **另一个请求**的数据：运行态 runtime 与成员 members，失败时保持 null，各块显示「—」。
+ * 电力系统 · 场景管理员首页看板，纯展示。取数在 sections/ProfilePower.vue。
  */
 import { computed } from 'vue';
 import type { PowerProfile, TelemetryByDataset, WorkspaceBase } from '@/api/dashboardApi';
@@ -33,38 +21,29 @@ import { percentText } from '../profileTokens';
 
 const props = defineProps<{
   data: PowerProfile;
-  /** 运行态（/workspace）；本看板只读 summary / activity_trend 这两个四场景同构字段 */
   runtime: WorkspaceBase | null;
   members: UserAccount[] | null;
   memberTotal?: number | null;
 }>();
 
-/* ------------------------------------------------------------------ */
-/* 口径常量                                                            */
-/* ------------------------------------------------------------------ */
 
 const MEMBER_PAGE_SIZE = 200;
 const VISIBILITY_TEXT: Record<string, string> = { platform: '平台', company: '公司', personal: '个人' };
 
-/** D1 三个电参量列 → 后端 `telemetry_by_dataset[].params[].key`（与后端 POWER_PARAMS 一致） */
 const PARAM_KEYS = {
   voltage: 'VoltageLevel_kV',
   current: 'CurrentAmp',
   temperature: 'Temperature_C',
 } as const;
 
-/** D1 卡片脚注的基线口径：与后端 POWER_BASELINE 逐项一致 */
 const BASELINE_SOURCE =
   '电力基线：电压 300–700 kV · 电流 400–1600 A · 温度 30–90 ℃ · 工频 49.8–50.2 Hz · 丢包 ≤1%';
 
-/* ------------------------------------------------------------------ */
-/* S1 场景资产总览 KPI ×4                                              */
-/* ------------------------------------------------------------------ */
 
 /**
  * 工频合格率：按各数据集 `record_count` 加权的 `frequency_pass_rate` 平均。
  * 电力场景里两个数据集的样本量可能差一个数量级，不加权会让小数据集与大数据集等权，口径失真。
- * 分母（样本总量）为 0 时返回 null —— 显示「—」，不能写成 0%（那是「全部不合格」的假结论）。
+ * 分母（样本总量）为 0 时返回 null，显示「—」，不能写成 0%（那是「全部不合格」的假结论）。
  */
 const frequencyPassRate = computed<number | null>(() => {
   const rows = props.data.telemetry_by_dataset;
@@ -101,11 +80,7 @@ const overviewKpis = computed<CockpitKpi[]>(() => [
   },
 ]);
 
-/* ------------------------------------------------------------------ */
-/* 01 数据集资产                                                        */
-/* ------------------------------------------------------------------ */
 
-/** 单数据集场景用键值行把资产口径铺开（表格只有一行时信息密度过低） */
 const datasetRows = computed<CockpitRow[]>(() => {
   const list = props.data.datasets;
   if (!list.length) return [];
@@ -128,14 +103,11 @@ const datasetRows = computed<CockpitRow[]>(() => {
   ];
 });
 
-/* ------------------------------------------------------------------ */
-/* 02 ★ 电参量基线一致性（跨数据集）                                    */
-/* ------------------------------------------------------------------ */
 
 /**
  * 电参量均值取值：按 key 从该数据集的 params 里找。
  * mean 为 null 的语义是「该数据集没有这个字段 / 无法计算」，写成 0 会被读成
- * 「实测均值为 0」，是完全相反的管理结论 —— 交给单元格渲染「—」。
+ * 「实测均值为 0」，是完全相反的管理结论，交给单元格渲染「—」。
  */
 const meanText = (row: TelemetryByDataset, key: string): string | null => {
   const param = row.params.find((item) => item.key === key);
@@ -143,7 +115,6 @@ const meanText = (row: TelemetryByDataset, key: string): string | null => {
   return param.unit ? `${fmtNum(param.mean)} ${param.unit}` : fmtNum(param.mean);
 };
 
-/** 结论：基线全部达标给绿标；否则把越界项逐条列出并标红 —— 管理端要看到具体越界在哪一项 */
 const verdictOf = (row: TelemetryByDataset) =>
   row.baseline_ok
     ? { text: '达标', tone: 'ok' as const }
@@ -172,9 +143,6 @@ const telemetryRows = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* 03 建模覆盖                                                          */
-/* ------------------------------------------------------------------ */
 
 const modelingBars = computed(() =>
   props.data.modeling.map((item) => ({ label: item.logical_id, value: item.total, suffix: ' 个版本' })),
@@ -195,9 +163,6 @@ const modelKpis = computed<CockpitKpi[]>(() => [
   { label: '数据白躺', value: idleDatasets.value.length, unit: '份', tone: 'warning' },
 ]);
 
-/* ------------------------------------------------------------------ */
-/* 04 场景运行态势                                                      */
-/* ------------------------------------------------------------------ */
 
 const summary = computed(() => props.runtime?.summary ?? null);
 
@@ -227,15 +192,7 @@ const trendPoints = computed(() =>
   (props.runtime?.activity_trend ?? []).map((item) => ({ label: item.date.slice(5), value: item.total, value2: item.risk })),
 );
 
-/* ------------------------------------------------------------------ */
-/* 05 ★ 设备 × 系统 覆盖矩阵                                            */
-/* ------------------------------------------------------------------ */
 
-/**
- * 管理端的第二问：设备与系统到底被哪些数据集覆盖？
- * 覆盖数 = 含该设备/系统的数据集数量；明细列出「数据集（样本数, 风险占比）」，
- * 让管理员直接看到同一台设备在不同数据源里的样本量与风险口径差异。
- */
 const componentColumns: CockpitColumn[] = [
   { key: 'value', label: '设备 / 系统', ellipsis: true, ellipsisWidth: 120 },
   { key: 'kind', label: '类型' },
@@ -254,9 +211,7 @@ const componentRows = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* 06 可见性与场景成员                                                  */
-/* ------------------------------------------------------------------ */
+// 可见性与场景成员
 
 const visibilityItems = computed(() => {
   const map = new Map<string, number>();
@@ -295,12 +250,12 @@ const runtimeHint = computed(() =>
   <CockpitKpis :items="overviewKpis" />
 
   <div class="pf-board">
-    <!-- 01 数据集资产 -->
+    <!-- 数据集资产 -->
     <CockpitPanel index="01" title="数据集资产" hint="本场景唯一数据源" align="top" foot="单数据集场景：资产口径逐项铺开，标签口径与登记状态在此一次说清">
       <CockpitRows :rows="datasetRows" :columns="2" />
     </CockpitPanel>
 
-    <!-- 02 ★ 电参量基线一致性 -->
+    <!-- 电参量基线一致性 -->
     <CockpitPanel
       index="02"
       title="电参量基线一致性（跨数据集）"
@@ -311,7 +266,7 @@ const runtimeHint = computed(() =>
       <CockpitMatrix :columns="telemetryColumns" :rows="telemetryRows" row-key="logical_id" />
     </CockpitPanel>
 
-    <!-- 03 建模覆盖 -->
+    <!-- 建模覆盖 -->
     <CockpitPanel
       index="03"
       title="建模覆盖"
@@ -323,7 +278,7 @@ const runtimeHint = computed(() =>
       <CockpitBars :items="modelingBars" :label-width="86" :value-width="56" />
     </CockpitPanel>
 
-    <!-- 04 场景运行态势 -->
+    <!-- 场景运行态势 -->
     <CockpitPanel index="04" title="场景运行态势" :hint="runtimeHint" align="top" foot="运行态为全场景口径（含所有用户），与数据资产的全量统计相互独立">
       <CockpitKpis size="sm" :columns="3" :items="runtimeKpis" />
       <template v-if="runtime">
@@ -333,7 +288,7 @@ const runtimeHint = computed(() =>
       <p v-else class="pf-empty">运行态数据未取到</p>
     </CockpitPanel>
 
-    <!-- 05 ★ 设备 × 系统 覆盖矩阵 -->
+    <!-- 设备 × 系统 覆盖矩阵 -->
     <CockpitPanel
       index="05"
       title="设备 × 系统 覆盖矩阵"
@@ -344,7 +299,7 @@ const runtimeHint = computed(() =>
       <CockpitMatrix :columns="componentColumns" :rows="componentRows" row-key="value" />
     </CockpitPanel>
 
-    <!-- 06 可见性与场景成员 -->
+    <!-- 可见性与场景成员 -->
     <CockpitPanel index="06" title="数据集可见性与场景成员" hint="范围限本场景" align="top" foot="成员按账号角色分组计数；可见性为数据集注册时的共享范围">
       <CockpitDonut :items="visibilityItems" center-label="数据集" :percent="false" suffix=" 个" />
       <p v-if="members === null" class="pf-empty">成员数据未取到</p>

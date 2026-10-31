@@ -1,22 +1,19 @@
 """报告导出后台任务（进程内任务表 + 守护线程）。
 
-PDF 渲染走 Chromium，单次 1–2 秒、等待上限 120 秒；同步接口会让请求线程一直等。
-改成「提交 → 轮询 → 取文件」后：
+PDF 渲染走 Chromium，单次 1–2 秒、等待上限 120 秒，同步接口会让请求线程一直等。
+改成「提交 -> 轮询 -> 取文件」后：POST 立刻返回 job_id；后台线程用既有的
+build_export 产出文件，字节与老接口完全一致；GET .../file 复用老接口同一段
+Content-Disposition 逻辑，下载文件名不变。
 
-- POST 立刻返回 job_id；
-- 后台线程用既有的 build_export 产出文件，字节与老接口完全一致；
-- GET .../file 复用老接口同一段 Content-Disposition 逻辑，下载文件名不变。
-
-只有 pdf 需要排队：markdown 是 str.encode()、html 是模板套壳，都是毫秒级，
+只有 pdf 需要排队 —— markdown 是 str.encode()、html 是模板套壳，都是毫秒级，
 异步化只会增加复杂度，所以提交时直接同步完成（任务登记即为 DONE）。
 
 任务表放在进程内是有意的：产物只是一次性的下载文件，进程重启后重新导一次即可，
 不值得为它建表。若将来需要跨重启存活，再建 export_job 表并落文件。
 
-环境变量：
-- EXPORT_RUNNER_ENABLED   默认 1；置 0 关闭（异步导出入口返回 503）
-- EXPORT_JOB_TTL_SECONDS  默认 900，终态任务保留多久（供前端取结果）
-- EXPORT_JOB_MAX          默认 50，在册任务上限，超了先清最旧的终态任务
+环境变量：EXPORT_RUNNER_ENABLED 默认 1，置 0 关闭（异步导出入口返回 503）；
+EXPORT_JOB_TTL_SECONDS 默认 900，终态任务保留多久；EXPORT_JOB_MAX 默认 50，
+在册任务上限，超了先清最旧的终态任务。
 """
 import os
 import queue

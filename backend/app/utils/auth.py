@@ -1,4 +1,4 @@
-"""Helpers for opaque, server-side authentication sessions."""
+"""服务端不透明会话的相关工具。"""
 import hashlib
 import hmac
 import os
@@ -35,7 +35,7 @@ def csrf_cookie_name() -> str:
 
 
 def cookie_secure() -> bool:
-    """Use Secure cookies by default; local HTTP development opts out explicitly."""
+    """默认用 Secure cookie；本地 HTTP 开发显式关掉。"""
     return os.environ.get("AUTH_COOKIE_SECURE", "true").lower() == "true"
 
 

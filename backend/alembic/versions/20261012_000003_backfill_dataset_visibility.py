@@ -1,20 +1,17 @@
-"""backfill dataset visibility/uploader_role to the 2026-10 ownership model
+"""backfill dataset visibility / uploader_role to the 2026-10 ownership model
 
-数据级别（visibility）在 2026-10 定稿里**只由上传者角色决定、创建后不可变**：
+数据级别（visibility）在 2026-10 定稿里只由上传者角色决定、
+创建后不可变：SUPER_ADMIN 对应 platform，SCENARIO_ADMIN 对应 company，
+SCENARIO_USER 对应 personal。
 
-    SUPER_ADMIN     → platform
-    SCENARIO_ADMIN  → company
-    SCENARIO_USER   → personal
+存量行里有两类与之一致的缺口：uploader_role 为空（20260814_000003 只加了列，
+没回填）；visibility 是旧默认值 platform，但上传者其实是场景管理员 / 场景用户
+—— 旧模型允许上传时自选可见性，
+历史数据可能标错级别（例如场景用户传的数据被标成 platform，
+在新模型下会泄漏给超管）。
 
-存量行里有两类与之一致的缺口：
-
-1. ``uploader_role`` 为空（20260814_000003 只加了列，没回填）；
-2. ``visibility`` 是旧默认值 ``platform``，但上传者其实是场景管理员/场景用户
-   —— 旧模型允许上传时自选可见性，历史数据可能标错级别（例如场景用户传的
-   数据被标成 platform，在新模型下会泄漏给超管）。
-
-因此按上传者当前角色重算这两列。上传者账号已删除（外键 SET NULL 之外不应发生）
-的行保持原值不动。
+因此按上传者当前角色重算这两列。上传者账号已删除（外键 SET NULL
+之外不应发生）的行保持原值不动。
 """
 
 import sqlalchemy as sa

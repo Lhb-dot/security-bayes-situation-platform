@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * DashRows —— 键值行列表（对应 demo 的 .row）。
+ * DashRows，键值行列表（对应 demo 的 .row）。
  */
 withDefaults(
   defineProps<{

@@ -1,7 +1,7 @@
 """场景管理路由（/api/v1/scenarios）。
 
 对应 Service：ScenarioService（backend/app/services/scenario_service.py）。
-权限（需求 6.5.2）：查看场景列表/切换场景 → 登录用户；增删改 → 仅 ADMIN。
+权限（需求 6.5.2）：查看场景列表/切换场景 -> 登录用户；增删改 -> 仅 ADMIN。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session

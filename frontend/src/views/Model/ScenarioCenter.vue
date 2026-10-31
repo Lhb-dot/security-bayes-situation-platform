@@ -1,50 +1,3 @@
-<script setup lang="ts">
-/**
- * ScenarioCenter - 场景中心页面
- *
- * 展示全部业务场景卡片：网络安全 / 电力系统 / 舰面调度态势 / 地质风险
- * 卡片指标为后端真实聚合值（去重口径数据集数、有效样本量、已发布模型数），
- * 数据源 GET /api/v1/scenarios/overview。点击卡片跳转至对应场景大屏。
- */
-import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
-import type { Scenario } from '@/types/security';
-import { useScenarioStore } from '@/stores/scenarioStore';
-import ScenarioCard from '@/components/common/ScenarioCard.vue';
-
-const router = useRouter();
-const scenarioStore = useScenarioStore();
-
-/** 场景列表数据（由 scenarioStore 的真实聚合接口注入，页面不直连 API） */
-const scenarios = computed<Scenario[]>(() => scenarioStore.scenarios);
-/** 加载状态 */
-const loading = ref(true);
-/** 错误信息 */
-const error = ref('');
-
-/** 获取场景列表（真实数据集 / 已发布模型 / 有效样本量） */
-const loadScenarios = async () => {
-  loading.value = true;
-  error.value = '';
-  try {
-    await scenarioStore.fetchScenarioOverview();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '场景数据加载失败';
-  } finally {
-    loading.value = false;
-  }
-};
-
-/** 点击卡片 -> 跳转场景大屏 */
-const goScenarioDashboard = (scenarioId: string) => {
-  router.push({ path: `/scenarios/${scenarioId}/dashboard` });
-};
-
-onMounted(() => {
-  loadScenarios();
-});
-</script>
-
 <template>
   <div class="scenario-center">
     <!-- 页面头部 -->
@@ -84,7 +37,45 @@ onMounted(() => {
     </div>
   </div>
 </template>
+<script setup lang="ts">
+/**
+ * 场景中心页：展示全部业务场景卡片，指标为后端真实聚合值
+ * （去重口径数据集数、有效样本量、已发布模型数），点击卡片跳转对应场景大屏。
+ */
+import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import type { Scenario } from '@/types/security';
+import { useScenarioStore } from '@/stores/scenarioStore';
+import ScenarioCard from '@/components/common/ScenarioCard.vue';
 
+const router = useRouter();
+const scenarioStore = useScenarioStore();
+
+// 场景列表数据（由 scenarioStore 的真实聚合接口注入，页面不直连 API）
+const scenarios = computed<Scenario[]>(() => scenarioStore.scenarios);
+const loading = ref(true);
+const error = ref('');
+
+const loadScenarios = async () => {
+  loading.value = true;
+  error.value = '';
+  try {
+    await scenarioStore.fetchScenarioOverview();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '场景数据加载失败';
+  } finally {
+    loading.value = false;
+  }
+};
+
+const goScenarioDashboard = (scenarioId: string) => {
+  router.push({ path: `/scenarios/${scenarioId}/dashboard` });
+};
+
+onMounted(() => {
+  loadScenarios();
+});
+</script>
 <style scoped>
 .scenario-center {
   position: relative;
@@ -120,7 +111,6 @@ onMounted(() => {
   gap: 20px;
 }
 
-/* 响应式降级 */
 @media (max-width: 1200px) {
   .scenario-center__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

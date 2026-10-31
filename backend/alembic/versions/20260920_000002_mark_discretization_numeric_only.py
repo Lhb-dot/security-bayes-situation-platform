@@ -2,7 +2,8 @@
 
 `discrete_method` / `discrete_bins` 由平台的 `FilteredClassifierWithDiscretize`
 （Weka `Discretize`）消费，只对数值特征分箱。数据集本身已是离散属性时过滤器空转 ——
-实测在 `dis_r*` 系列（全 enum）上 bins=2 与 bins=100 的指标与模型字节几乎完全一致。
+实测在 `dis_r*` 系列（全 enum）上 bins=2 与 bins=100
+的指标与模型字节几乎完全一致。
 
 标记 `requires_numeric_features` 后：
 - `validate_params_schema` 对无数值特征的数据集跳过这两项（不再必填）；

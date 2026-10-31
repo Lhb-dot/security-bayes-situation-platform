@@ -1,8 +1,7 @@
 <script setup lang="ts">
 /**
- * DashColumns —— 纵向柱状图（纯 SVG，对应 demo 内联 svg 的柱图）。
+ * DashColumns，纵向柱状图（纯 SVG，对应 demo 内联 svg 的柱图）。
  * 用于「各场景有效样本量 / 数据集数量 / 风险占比 / 包长五段 / 两数据集规模对比」等。
- *
  * 坐标按容器实测宽度计算（viewBox 与渲染尺寸 1:1），
  * 因此柱子圆角与文字不会被横向拉伸/压缩。
  */
@@ -13,14 +12,11 @@ const props = withDefaults(
   defineProps<{
     items: Array<{ label?: unknown; value?: number | null; count?: number | null }>;
     height?: number;
-    /** 数值是 0-1 的比率 */
     percent?: boolean;
-    /** 数值是 0-100 的百分数 */
+    // 数值是 0-100 的百分数
     percentValue?: boolean;
     digits?: number;
-    /** 单色柱；不传则按索引取色 */
     color?: string;
-    /** 轴标题（左下角单位提示） */
     axisUnit?: string;
   }>(),
   { height: 200, percent: false, percentValue: false, digits: 2, color: '', axisUnit: '' },
@@ -28,9 +24,7 @@ const props = withDefaults(
 
 const TOP = 20;
 const BOTTOM = 26;
-/** 绘图区左右留白 */
 const PAD_X = 30;
-/** 容器宽度未知时的兜底宽度 */
 const FALLBACK_W = 560;
 
 const hostRef = ref<HTMLElement | null>(null);

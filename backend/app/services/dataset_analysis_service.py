@@ -1,12 +1,12 @@
 """数据集级 AI 解析：判断该数据集适合使用哪些已注册算法。
 
 沿用 explanation_service 里已经跑通的 OpenAI 兼容流式内核（_openai_stream /
-_classify_ai_error / _chunk_text）。设计原则与模型评价一致：**适用性判断留在
-Python 里**，LLM 只负责对已算好的事实做排序与措辞，不允许自行发明算法能力。
+_classify_ai_error / _chunk_text）。设计原则与模型评价一致：适用性判断留在
+Python 里，LLM 只负责对已算好的事实做排序与措辞，不允许自行发明算法能力。
 
-算法适用性知识来自仓库根目录 ``nb_alg_summary.md``。算法只能由开发人员通过代码
+算法适用性知识来自仓库根目录 `nb_alg_summary.md`。算法只能由开发人员通过代码
 接入（见 AlgorithmService：页面增删改一律 403），所以这份与实现强耦合的知识也
-留在代码里，按 ``code`` 与库中算法行合并，避免引入新的可编辑来源造成口径漂移。
+留在代码里，按 `code` 与库中算法行合并，避免引入新的可编辑来源造成口径漂移。
 """
 from __future__ import annotations
 
@@ -42,16 +42,16 @@ from app.utils.common import (
 
 logger = get_logger("dataset_analysis")
 
-#: 契约版本，随产物一起返回，便于回溯「这份解析是按哪版口径生成的」。
+# 契约版本，随产物一起返回，便于回溯「这份解析是按哪版口径生成的」。
 DATASET_ANALYSIS_VERSION = "1.0"
 DATASET_ANALYSIS_PROMPT_VERSION = "1.0"
 
-#: 算法适用性知识，键为 algorithm.code。
-#:
-#: - ``requires_raw_numeric``：算法内部自行离散、必须吃原始数值特征（PMWNB）。
-#:   数据集若已全部离散，它的多视图扰动会退化成同一份输入，性能大幅下降。
-#: - ``needs_discrete_input``：基分类器只接受离散属性，数值特征需前置离散；
-#:   平台在训练时通过 Weka Discretize 自动完成，所以含数值特征也不影响可用性。
+# 算法适用性知识，键为 algorithm.code。
+#
+# - `requires_raw_numeric`：算法内部自行离散、必须吃原始数值特征（PMWNB）。
+#   数据集若已全部离散，它的多视图扰动会退化成同一份输入，性能大幅下降。
+# - `needs_discrete_input`：基分类器只接受离散属性，数值特征需前置离散；
+#   平台在训练时通过 Weka Discretize 自动完成，所以含数值特征也不影响可用性。
 ALGORITHM_APPLICABILITY: dict[str, dict[str, Any]] = {
     "PMWNB": {
         "requires_raw_numeric": True,
@@ -319,8 +319,8 @@ class DatasetAnalysisService(ServiceBase):
     """数据集算法适配解析（登录用户可读，与数据集可见性一致）。
 
     产物按受众分格（management / user），与研判解释、模型评价同一套机制：
-    场景用户重新生成时只覆盖 ``user`` 格，不会冲掉管理员看到的平台级解析。
-    产物记录 ``generated_by``，便于回溯是谁生成的。
+    场景用户重新生成时只覆盖 `user` 格，不会冲掉管理员看到的平台级解析。
+    产物记录 `generated_by`，便于回溯是谁生成的。
     """
 
     def _authorized_dataset(self, current_user, dataset_id: int) -> Dataset:
@@ -335,7 +335,7 @@ class DatasetAnalysisService(ServiceBase):
 
     @staticmethod
     def _cached(dataset: Dataset, audience: str) -> dict[str, Any]:
-        """读取该受众那一格产物；历史单格 ``latest`` 视为管理层产物。"""
+        """读取该受众那一格产物；历史单格 `latest` 视为管理层产物。"""
         payload = getattr(dataset, "ai_analysis", None) or {}
         if not isinstance(payload, dict):
             return {}
@@ -413,7 +413,7 @@ class DatasetAnalysisService(ServiceBase):
     def stream(
         self, current_user, dataset_id: int, regenerate: bool = False
     ) -> Iterable[tuple[str, dict[str, Any]]]:
-        """产出 SSE 事件：start → (reasoning | delta)* → done，error 表示已降级。"""
+        """产出 SSE 事件：start -> (reasoning | delta)* -> done，error 表示已降级。"""
         dataset = self._authorized_dataset(current_user, dataset_id)
         audience = evaluation_audience(getattr(current_user, "role", None))
         generated_by = getattr(current_user, "id", None)

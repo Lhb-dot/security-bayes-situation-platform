@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * DashScatter —— 二维散点图（对应 demo 的「双机航向映射散点图」）。
+ * DashScatter，二维散点图（对应 demo 的「双机航向映射散点图」）。
  * 坐标来源为 risk_event.fault_position_x/y（后端用航向角映射的占位坐标，非真实甲板位置）。
  * 颜色按风险分：≥0.9 红 / ≥0.7 黄 / 其余 绿。
  */
@@ -11,7 +11,6 @@ import { SHOW_DASH_HINTS } from './dashHints';
 const props = withDefaults(
   defineProps<{
     points: Array<{ event_id: number; x: number | null; y: number | null; risk_score: number | null; status: string }>;
-    /** 坐标基准上限（后端 0-1000 底图） */
     domain?: number;
     height?: number;
   }>(),
@@ -39,8 +38,6 @@ const dots = computed(() =>
       cx: Math.round((PLOT_X + (Number(point.x) / props.domain) * PLOT_W) * 10) / 10,
       cy: Math.round((PLOT_Y + (Number(point.y) / props.domain) * PLOT_H) * 10) / 10,
       fill: color(point.risk_score),
-      // risk_score 为 null 时 fmtNum 会把 Number(null)=0 渲染成「0.00」，与「无风险分」混淆；
-      // 这里与 color() 的分色口径分开：颜色仍按 0 分兜底，文案则如实显示「—」。
       scoreText: point.risk_score === null ? '—' : fmtNum(point.risk_score, 2),
     })),
 );

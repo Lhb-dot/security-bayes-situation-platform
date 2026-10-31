@@ -1,4 +1,4 @@
-"""Requests for user-bound OpenAI-compatible AI settings."""
+"""用户 AI 配置的请求体。"""
 from typing import Optional
 
 from pydantic import BaseModel, Field

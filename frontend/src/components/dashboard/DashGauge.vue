@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * DashGauge —— 刻度条（低/正常/高三段 + 均值游标），对应 demo 的 .gaugebar。
+ * DashGauge，刻度条（低/正常/高三段 + 均值游标），对应 demo 的 .gaugebar。
  * 用于电力工作台的「告警样本电参量均值」。
  */
 import { computed } from 'vue';
@@ -13,7 +13,6 @@ const props = withDefaults(
     mean: number | null;
     min: number | null;
     max: number | null;
-    /** 正常区间（用于把轨道切成低/正常/高三段） */
     low?: number | null;
     high?: number | null;
   }>(),
@@ -27,7 +26,6 @@ const ratio = (value: number | null | undefined): number => {
   return Math.min(100, Math.max(0, ((Number(value) - Number(props.min || 0)) / scale.value) * 100));
 };
 
-/** 三段：低（绿）/ 正常（蓝）/ 高（红）；无数据时不显示分色，仅保留灰底轨道 */
 const segments = computed(() => {
   if (props.mean === null || props.mean === undefined) {
     return [{ width: 100, color: 'rgba(255,255,255,.06)' }];

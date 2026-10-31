@@ -1,17 +1,17 @@
 """register KFDB / FLNB / FTAWNB as trainable algorithms
 
-三个论文算法的平台接入（源码见 backend/java/algorithm-src/NB/{KFDB,FLNB,FTAWNB}，
-编译进共用的 nb-algorithm-service.jar，端口 12315）。
+三个论文算法的平台接入，源码在 backend/java/algorithm-src/NB/{KFDB,FLNB,
+FTAWNB}，编译进共用的 nb-algorithm-service.jar，端口 12315。
 
-- KFDB：K-Free Dependence Bayesian Classifier（Meng/Zhang 等，TNNLS 2026）。
-  适配器 weka.classifiers.zh.KFDB.KFDB 包装作者仓库的 KFDB.wdBayesOnlinePYP。
-- FLNB：Frequency-based Lazy Naive Bayes（Zhang/Jiang）。作者仓库提供 poly / log
-  两个相似度版本，平台通过 weight_scheme 参数选择，默认 poly。
-- FTAWNB：Fine Tuning Attribute Weighted Naive Bayes（Zhang/Jiang，Neurocomputing 2021）。
+KFDB 是 K-Free Dependence Bayesian Classifier（Meng/Zhang 等，TNNLS 2026），
+适配器 weka.classifiers.zh.KFDB.KFDB 包装作者仓库的 KFDB.wdBayesOnlinePYP。
+FLNB 是 Frequency-based Lazy Naive Bayes（Zhang/Jiang），作者仓库提供 poly /
+log 两个相似度版本，平台通过 weight_scheme 参数选择，默认 poly。FTAWNB 是 Fine
+Tuning Attribute Weighted Naive Bayes（Zhang/Jiang，Neurocomputing 2021）。
 
-三者都按离散属性工作，数值特征由平台前置离散化；因此离散化参数与既有算法一致，
-并带 requires_numeric_features 标记（纯离散数据集上不生效，见 20260920_000002）。
-display_name 采用既有「中文名(英文缩写)」格式（见 20260822_000006）。
+三者都按离散属性工作，数值特征由平台前置离散化，因此离散化参数与既有算法一致，
+并带 requires_numeric_features 标记（纯离散数据集上不生效，见 20260920_000002）
+。display_name 采用既有「中文名(英文缩写)」格式（见 20260822_000006）。
 使用原生 SQL + CAST(... AS jsonb)，online / offline 两种模式均可执行。
 """
 import json

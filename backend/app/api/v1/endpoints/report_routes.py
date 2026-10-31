@@ -1,9 +1,11 @@
 """报告路由（/api/v1/reports）。
 
 对应 Service：ReportService（backend/app/services/report_service.py）。
-权限（需求 6.8.5/6.2 P1）：生成/查看 → 登录用户（场景用户仅本人数据；
-管理员可全平台/本场景聚合或本人数据，不再支持指定单个用户）；删除 → 生成者本人或管理员。
-定时报告：创建时带 scheduled=true 登记，GET /reports/scheduled 只看本账号配置的定时报告，
+权限（需求 6.8.5/6.2 P1）：生成/查看 -> 登录用户（场景用户仅本人数据；
+管理员可全平台/本场景聚合或本人数据，不再支持指定单个用户）；删除 ->
+生成者本人或管理员。
+定时报告：创建时带 scheduled=true 登记，GET /reports/scheduled
+只看本账号配置的定时报告，
 到期由后台调度器（app/services/report_scheduler.py）原地重新生成。
 """
 from fastapi import APIRouter, Depends, Query, Response
@@ -28,8 +30,9 @@ def _file_download_response(resp, report_id: int | None = None):
     导出接口不走 unwrap 的统一 JSON 结构：成功时直接回文件流，失败时 unwrap
     已经给出 JSONResponse，这里原样透传。
 
-    文件名里的 report_id 以 payload 为准（``read_export_file`` 的任务记录里存了报告
-    ID），路径参数只在 payload 没带时兜底（``export`` 的 payload 就不带）。
+    文件名里的 report_id 以 payload 为准（`read_export_file`
+    的任务记录里存了报告
+    ID），路径参数只在 payload 没带时兜底（`export` 的 payload 就不带）。
     """
     if isinstance(resp, JSONResponse):
         return resp
@@ -93,9 +96,10 @@ def submit_export_job(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):
-    """导出改为「提交 → 轮询 → 取文件」：PDF 渲染不再占住请求线程。
+    """导出改为「提交 -> 轮询 -> 取文件」：PDF 渲染不再占住请求线程。
 
-    老接口 GET /reports/{report_id}/export 一行未改，行为不变，出问题可一键回退。
+    老接口 GET /reports/{report_id}/export 一行未改，行为不变，
+    出问题可一键回退。
     """
     return unwrap(
         ReportService(db).submit_export(
@@ -160,10 +164,12 @@ def submit_generate_job(
     db: Session = Depends(get_db),
     current_user: AppUser = Depends(get_current_user),
 ):
-    """生成改为「提交 → 轮询 → 通知」：POST 立刻返回 job_id，用户不必干等在弹窗里。
+    """生成改为「提交 -> 轮询 -> 通知」：POST 立刻返回 job_id，用户不必干等在弹窗里。
 
-    生成一份报告要做数据聚合 + 多视图研判 + NL 分析，慢的时候十几秒起步，同步返回会把
-    请求线程和界面一起钉住。老接口 POST /reports/generate 一行未改，出问题可一键回退。
+    生成一份报告要做数据聚合 + 多视图研判 + NL 分析，
+    慢的时候十几秒起步，同步返回会把
+    请求线程和界面一起钉住。老接口 POST /reports/generate
+    一行未改，出问题可一键回退。
     """
     return unwrap(
         ReportService(db).submit_generate(

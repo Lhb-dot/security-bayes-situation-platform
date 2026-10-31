@@ -1,15 +1,7 @@
 <script setup lang="ts">
 /**
- * ReportCenter - 报告中心页面
- *
- * 报告列表：名称（定时报告带闹钟标志）、场景、格式、创建时间、状态
- * 操作：查看、下载、重新生成、删除（所有行一致）
- * 定时报告：「定时报告」按钮只做查看与删除，跟随账号；新建走「生成报告」并打开定时生成。
- *          到期由服务端调度器原地重新生成，前端不做调度。
- *
- * 生成与导出都是服务端后台任务：提交后立刻返回，页面不等结果（详见 reportJobStore）。
- * 在途 / 已完成任务统一显示在顶栏铃铛里（App.vue 的 runningTasks / finishedTasks），
- * 页面内不放任务条；完成 / 失败另由 store 弹通知。
+ * 报告中心页：列表 + 查看 / 下载 / 重新生成 / 删除。定时报告跟随账号，
+ * 到期由服务端调度器原地重新生成，前端不做调度。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Report, ReportData, ScenarioId } from '@/types/security';
@@ -40,7 +32,7 @@ const currentUser = computed(() => userStore.currentUser);
 const canUseAggregateScope = computed(() => userStore.isManagement);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
-// ===================== 列表分页 =====================
+// 列表分页
 const page = ref(1);
 const pageSize = 10;
 const total = ref(0);
@@ -68,17 +60,16 @@ const goPage = (target: number) => {
   void changePage(target);
 };
 
-// ===================== 报告名称列宽 =====================
+// 报告名称列宽
 // 标题长短差得远（"123" 到 "flightdeck_operation 场景态势聚合报告"），
-// 定宽会让短标题那几行空出半屏。改成按当前页最长标题量出的宽度，
 // 富余的宽度由后面几列分掉，表格仍然是满宽。
 const TITLE_COL_MIN = 200;
 const TITLE_COL_MAX = 460;
-/** .el-table .cell 左右内边距各 12px，再加 8px 余量 */
+// .el-table .cell 左右内边距各 12px，再加 8px 余量
 const TITLE_CELL_PADDING = 32;
-/** 另外几列的基准宽度：场景 / 格式 / 创建时间 / 状态（弹性下限）与操作（定宽） */
+// 另外几列的基准宽度：场景 / 格式 / 创建时间 / 状态（弹性下限）与操作（定宽）
 const OTHER_COLS_MIN = 120 + 120 + 160 + 100 + 340;
-/** 定时报告标题后的闹钟标志占宽：SVG 14px + 前后各 6px 间距（与模板里的 width 及 gap 保持一致） */
+// 定时报告标题后的闹钟标志占宽：SVG 14px + 前后各 6px 间距（与模板里的 width 及 gap 保持一致）
 const CLOCK_ICON_WIDTH = 14 + 12;
 
 const titleColWidth = ref(220);
@@ -86,10 +77,10 @@ const tableWrapRef = ref<HTMLElement | null>(null);
 const titleProbeRef = ref<HTMLElement | null>(null);
 const intervalProbeRef = ref<HTMLElement | null>(null);
 
-/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+// 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts）
 const changePage = (target: number) => keepScroll(() => loadReports(target), tableWrapRef.value);
 
-/** 用隐藏探针量文字宽度 —— 探针挂的就是单元格里的那两个 class，字体不用另抄一份 */
+// 用隐藏探针量文字宽度，探针挂的就是单元格里的那两个 class，字体不用另抄一份
 const measureTitleColWidth = () => {
   const probe = titleProbeRef.value;
   if (!probe) return;
@@ -117,7 +108,7 @@ const measureTitleColWidth = () => {
   titleColWidth.value = Math.min(upper, Math.max(TITLE_COL_MIN, Math.ceil(widest) + TITLE_CELL_PADDING));
 };
 
-/** 本账号配置的定时报告（「定时报告」弹窗用，跟随账号，只看本人生成的） */
+// 本账号配置的定时报告（「定时报告」弹窗用，跟随账号，只看本人生成的）
 const scheduledReports = ref<Report[]>([]);
 
 const loadScheduled = async () => {
@@ -128,13 +119,13 @@ const loadScheduled = async () => {
   }
 };
 
-/** 两个列表共用同一批记录，增删改后一起刷新，避免弹窗里留下已删除的条目 */
+// 两个列表共用同一批记录，增删改后一起刷新，避免弹窗里留下已删除的条目
 const reloadAll = async () => {
   await loadReports();
   await loadScheduled();
 };
 
-/** 查看详情的竞态令牌：连着点两行时，只认最后一次点击的结果 */
+// 查看详情的竞态令牌：连着点两行时，只认最后一次点击的结果
 let viewToken = 0;
 
 const handleView = async (report: Report) => {
@@ -144,14 +135,13 @@ const handleView = async (report: Report) => {
   try {
     // 拉取详情以获取结构化 report_data（列表接口不返回，避免载荷膨胀）
     const detail = await getReportDetail(report.report_id);
-    // 期间又点了别的行：这次响应已过期，丢掉，否则弹窗里显示的是上一行的报告
     if (token === viewToken) viewTarget.value = detail;
   } catch {
     // 详情拉取失败时回退到列表数据（仅显示摘要文本）
   }
 };
 
-// ===== 操作中的 UI 状态 =====
+// 操作中的 UI 状态
 // 提交本身是毫秒级的，这几个状态只覆盖「POST 在途」这一小段，防止连点重复提交；
 // 真正的等待由后台任务承担，进度在顶栏铃铛里看。
 const submittingGenerate = ref(false);                // 生成弹窗提交中
@@ -159,14 +149,14 @@ const exportSubmittingId = ref<string | null>(null);  // 正在提交导出的�
 const regeneratingId = ref<string | null>(null);      // 正在提交重新生成的报告
 const deletingId = ref<string | null>(null);          // 正在删除的报告
 
-/** 该报告的导出是否在途（提交中，或后台任务还没跑完） */
+// 该报告的导出是否在途（提交中，或后台任务还没跑完）
 const exportBusy = (report: Report) =>
   exportSubmittingId.value === report.report_id || jobStore.runningExportIds.has(report.report_id);
 
-/** 该标题是否有生成任务在跑（「重新生成」据此置灰；标题重名时一并置灰，无害） */
+// 该标题是否有生成任务在跑（「重新生成」据此置灰；标题重名时一并置灰，无害）
 const generateBusy = (report: Report) => jobStore.runningTitles.has(report.title);
 
-/** 导出报告：提交后台任务，产物就绪后由 store 自动下载并通知 */
+// 导出报告：提交后台任务，产物就绪后由 store 自动下载并通知
 const handleDownload = async (report: Report) => {
   exportSubmittingId.value = report.report_id;
   try {
@@ -180,10 +170,9 @@ const handleDownload = async (report: Report) => {
   }
 };
 
-/** 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告） */
+// 重新生成报告（基于当前用户数据范围，产出一份立刻可看的普通报告）
 const handleRegenerate = async (report: Report) => {
   // 无场景 = 超管的全平台聚合报告，重新生成即再出一份全平台报告；
-  // 场景角色遇到无场景报告（历史数据）仍拦住，别把空场景丢给 resolveScenarioId 报「场景不存在: 」。
   if (!report.scenario_id && !isSuperAdmin.value) {
     ElMessage.error('该报告未绑定场景，无法重新生成');
     return;
@@ -206,7 +195,7 @@ const handleRegenerate = async (report: Report) => {
   }
 };
 
-/** 删除报告（生成者本人或管理员） */
+// 删除报告（生成者本人或管理员）
 const handleDelete = async (report: Report) => {
   try {
     await ElMessageBox.confirm(
@@ -231,7 +220,7 @@ const handleDelete = async (report: Report) => {
   }
 };
 
-// ===================== 定时报告（跟随账号） =====================
+// 定时报告（跟随账号）
 const schedListVisible = ref(false);
 
 const openScheduleList = async () => {
@@ -239,7 +228,7 @@ const openScheduleList = async () => {
   await loadScheduled();
 };
 
-// ===================== 生成报告（需求 6.2 P1） =====================
+// 生成报告
 /**
  * 超管「全部场景」哨兵：选中它即不限定场景，后端按全平台聚合（下发 scenario_id = null）。
  * 与 ScenarioSelector 的 'all' 约定一致，避免再造一个取值。
@@ -259,8 +248,10 @@ const genForm = ref({
 const viewVisible = ref(false);
 const viewTarget = ref<Report | null>(null);
 
-/** 打开生成弹窗；勾上「定时生成」即为创建定时报告。
- *  超管默认「全部场景」（全平台聚合）；场景角色固定为本人绑定场景，不出下拉。 */
+/**
+ * 打开生成弹窗；勾上「定时生成」即为创建定时报告。
+ * 超管默认「全部场景」（全平台聚合）；场景角色固定为本人绑定场景，不出下拉。
+ */
 const openGenerate = () => {
   genForm.value = {
     title: '',
@@ -288,7 +279,7 @@ const submitGenerate = async () => {
     return;
   }
   // 提交后立刻关弹窗：真正的生成在服务端后台跑，用户可以接着做别的事，
-  // 完成后由 store 弹通知并刷新列表 —— 这里只等 POST 这一个来回。
+  // 完成后由 store 弹通知并刷新列表，这里只等 POST 这一个来回。
   submittingGenerate.value = true;
   const title = genForm.value.title.trim();
   // 「全部场景」= 不限定场景，下发 null，后端按全平台聚合
@@ -314,7 +305,7 @@ const submitGenerate = async () => {
   }
 };
 
-/** 输入框聚焦时全选，避免在原数字后追加导致拼接（如 7 变 78） */
+// 输入框聚焦时全选，避免在原数字后追加导致拼接（如 7 变 78）
 const selectAll = (e: Event) => {
   (e.target as HTMLInputElement)?.select();
 };
@@ -326,12 +317,12 @@ const scenarioLabel: Record<string, string> = {
   flightdeck_operation: '舰面调度态势',
 };
 
-/** 报告生成场景选项：从 scenarioStore.activeScenarios 注入（Task 016） */
+// 报告生成场景选项：从 scenarioStore.activeScenarios 注入
 const scenarioOptions = computed(() =>
   scenarioStore.activeScenarios.map((s) => ({ value: s.scenario_id, label: s.name }))
 );
 
-/** 报告列表 / 详情的场景文案：无场景 = 超管的全平台聚合报告 */
+// 报告列表 / 详情的场景文案：无场景 = 超管的全平台聚合报告
 const scenarioText = (scenarioId: string): string =>
   scenarioId ? (scenarioLabel[scenarioId] ?? scenarioId) : '全部场景';
 
@@ -341,7 +332,7 @@ const formatLabel: Record<string, string> = {
   pdf: 'PDF',
 };
 
-// ===================== 报告结构化详情（report_data 渲染，6.10.3） =====================
+// 报告结构化详情（report_data 渲染，6.10.3）
 const viewReportData = computed<ReportData | undefined>(() => {
   const d = viewTarget.value?.report_data;
   // 旧结构报告（无 report_info）回退纯文本，避免模板访问 undefined 报错。
@@ -351,7 +342,7 @@ const viewReportData = computed<ReportData | undefined>(() => {
 
 const pctText = (v: number | null | undefined): string => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
 
-/** 态势核心指标卡 */
+// 态势核心指标卡
 const overviewMetrics = computed(() => {
   const o = viewReportData.value?.overview;
   if (!o) return [];
@@ -368,19 +359,19 @@ const overviewMetrics = computed(() => {
   ];
 });
 
-/** 预测标签分布（柱状） */
+// 预测标签分布（柱状）
 const labelDistBar = computed(() => {
   const dist = viewReportData.value?.prediction?.label_distribution ?? [];
   return dist.map((d) => ({ name: d.label, score: d.count }));
 });
 
-/** 风险概率区间（横向柱状） */
+// 风险概率区间（横向柱状）
 const riskProbBar = computed(() => {
   const buckets = viewReportData.value?.prediction?.risk_prob_buckets ?? [];
   return buckets.map((b) => ({ name: b.range, score: b.count }));
 });
 
-/** 类别概率（环形图） */
+// 类别概率（环形图）
 const classProbItems = computed(() => {
   const dist = viewReportData.value?.prediction?.class_probability ?? [];
   const palette = ['#5ba6ff', '#53e5c8', '#ff7b72', '#ffd166', '#a78bfa'];
@@ -391,7 +382,7 @@ const classProbItems = computed(() => {
   }));
 });
 
-/** 单个模型的多视图对比图数据（视图不足 2 个时不出图） */
+// 单个模型的多视图对比图数据（视图不足 2 个时不出图）
 const buildViewChart = (model: ReportData['model_analysis'][number]) => {
   const views = model.views ?? [];
   if (views.length < 2) return null;
@@ -407,29 +398,31 @@ const buildViewChart = (model: ReportData['model_analysis'][number]) => {
   };
 };
 
-/** 有独立视图的模型；对比图数据一并算好挂在 chart 上 ——
- *  模板里一张图要读 data / categories / series 三处，内联调用会把同一份数据构造三遍 */
+/**
+ * 有独立视图的模型；对比图数据一并算好挂在 chart 上，
+ * 模板里一张图要读 data / categories / series 三处，内联调用会把同一份数据构造三遍。
+ */
 const multiViewModels = computed(() =>
   (viewReportData.value?.model_analysis ?? [])
     .filter((m) => m.has_views)
     .map((m) => ({ ...m, chart: buildViewChart(m) })),
 );
 
-/** 无独立视图的模型 */
+// 无独立视图的模型
 const singleViewModels = computed(() =>
   (viewReportData.value?.model_analysis ?? []).filter((m) => !m.has_views),
 );
 
-/** 关键风险特征 Top-K */
+// 关键风险特征 Top-K
 const topFeatures = computed(() => viewReportData.value?.feature_analysis?.top_features ?? []);
 
-/** 风险趋势 */
+// 风险趋势
 const trendRows = computed(() => viewReportData.value?.trend ?? []);
 
-/** 重点风险事件 */
+// 重点风险事件
 const keyEvents = computed(() => viewReportData.value?.key_events ?? []);
 
-/** 总起数：key_events 只是概率最高的前 N 条，不能拿它的长度当总数 */
+// 总起数：key_events 只是概率最高的前 N 条，不能拿它的长度当总数
 const keyEventsLabel = computed(() => {
   const total = viewReportData.value?.key_events_total;
   // 修复前生成的报告没有总起数：宁可不写数量，也不要拿截断后的长度冒充
@@ -483,8 +476,7 @@ watch(
       </div>
     </div>
 
-    <!-- 首屏加载：骨架占住真实表格高度，加载完成时页面不跳。
-         翻页时列表已在，只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <!-- 首屏加载 -->
     <div v-if="loading && !reports.length" class="report-skeleton" aria-hidden="true">
       <div class="report-skeleton__head"></div>
       <div v-for="n in 10" :key="n" class="report-skeleton__row"></div>
@@ -615,7 +607,7 @@ watch(
       </div>
     </div>
 
-    <!-- 生成报告弹窗（与数据集中心字段预览同款 el-dialog；场景下拉仅系统管理员可见） -->
+    <!-- 生成报告弹窗（与数据集中心字段预览同款 el-dialog -->
     <el-dialog
       v-model="genVisible"
       class="report-dialog"
@@ -946,8 +938,8 @@ watch(
   background: rgba(8, 18, 34, 0.7);
 }
 
-/* ---------------- 页码条（暗色） ----------------
-   与告警 / 推理记录页保持同一套分页外观；变量挂在包裹层上，
+/* 页码条（暗色）
+   与告警 / 推理记录页保持同一套分页外观；变量挂在包裹层上。
    由 CSS 自定义属性继承进 el-pagination 内部。 */
 .report-pager {
   display: flex;
@@ -1254,7 +1246,6 @@ watch(
   line-height: 1.7;
 }
 
-/* ===================== 结构化报告详情 ===================== */
 .report-detail {
   max-height: 68vh;
   overflow: auto;

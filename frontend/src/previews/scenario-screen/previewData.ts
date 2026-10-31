@@ -1,4 +1,4 @@
-/** 独立设计预览的演示数据；字段受现有后端约束，数值仅用于排版，不发出业务请求。 */
+// 独立设计预览的演示数据；字段受现有后端约束，数值仅用于排版，不发出业务请求。
 import type { DatasetStat, ScenarioProfile, WorkspaceBase } from '@/api/dashboardApi';
 const dataset = (logical_id: string, record_count: number, attribute_count: number, risk_rate: number, label_field: string, group: string): DatasetStat => ({
   dataset_id: 0, logical_id, version: 1, label_field, is_risk_label: true, record_count,

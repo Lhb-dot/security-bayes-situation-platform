@@ -5,7 +5,7 @@ Revises: 20260814_000004
 Create Date: 2026-08-16 00:00:01.000000
 
 报告支持场景隔离与定时生成：
-- scenario_id：报告归属场景（FK → scenario.id），用于三级角色场景隔离
+- scenario_id：报告归属场景（FK -> scenario.id），用于三级角色场景隔离
 - format：报告格式（markdown/html/pdf）
 - scheduled：是否定时生成
 - interval_days：定时生成周期（天）

@@ -1,12 +1,8 @@
 <script setup lang="ts">
 /**
  * RiskEventListView - 风险事件列表页
- *
  * P0 功能：展示跨场景风险事件，支持场景/风险等级/状态筛选
- * 数据来源：getRiskEventPage() 跨场景聚合
- *
- * 筛选与分页都在后端执行（每页 10 条）：前端只持有当前页数据，
- * 因此筛选结果跨全量事件生效，翻页也不会把页面拉长。
+ * 数据来源：getRiskEventPage() 跨场景聚合。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -16,7 +12,7 @@ import { shortExplanation } from '@/utils/explanationText';
 import { keepScroll } from '@/utils/scrollAnchor';
 import { useUserStore } from '@/stores/userStore';
 
-/** 真实风险事件（后端 /api/v1/risk-events 返回结构） */
+// 真实风险事件（后端 /api/v1/risk-events 返回结构）
 interface RiskEventItem {
   id: number;
   scenario_id: number;
@@ -30,7 +26,7 @@ interface RiskEventItem {
   hidden_at: string | null; // 非空 = 已隐藏（软隐藏，不是删除）
 }
 
-/** 风险事件列表（当前页） */
+// 风险事件列表（当前页）
 const events = ref<RiskEventItem[]>([]);
 const loading = ref(true);
 const error = ref('');
@@ -39,7 +35,7 @@ const page = ref(1);
 const pageSize = 10;
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
-/** 页码项：页数多时收成 `1 2 … 末`（与用户管理 / 报告中心同一套） */
+// 页码项：页数多时收成 `1 2 … 末`（与用户管理 / 报告中心同一套）
 const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
   const totalN = totalPages.value;
   const cur = page.value;
@@ -62,14 +58,14 @@ const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
 const userStore = useUserStore();
 const router = useRouter();
 
-/** 筛选条件 */
+// 筛选条件
 const selectedScenario = ref<number | 'all'>('all');
 const selectedRiskLevel = ref<string>('all');
 const selectedStatus = ref<string>('all');
-/** 是否把已隐藏的事件一起查出来（默认不查 —— 隐藏是可见性开关，不是删除） */
+// 是否把已隐藏的事件一起查出来（默认不查，隐藏是可见性开关，不是删除）
 const showHidden = ref(false);
 
-/** 场景数字 ID → 名称（与后端 scenario 表 id 对齐） */
+// 场景数字 ID → 名称（与后端 scenario 表 id 对齐）
 const SCENARIO_META: Record<number, { name: string }> = {
   1: { name: '网络安全' },
   2: { name: '电力系统' },
@@ -78,13 +74,13 @@ const SCENARIO_META: Record<number, { name: string }> = {
 };
 const scenarioName = (id: number) => SCENARIO_META[id]?.name ?? String(id);
 
-/** 场景选项（系统管理员可按场景过滤） */
+// 场景选项（系统管理员可按场景过滤）
 const scenarioOptions: Array<{ value: number | 'all'; label: string }> = [
   { value: 'all', label: '所有场景' },
   ...Object.entries(SCENARIO_META).map(([id, meta]) => ({ value: Number(id), label: meta.name })),
 ];
 
-/** 风险等级选项 */
+// 风险等级选项
 const riskLevelOptions = [
   { value: 'all', label: '全部等级' },
   { value: 'HIGH', label: '高危' },
@@ -92,7 +88,7 @@ const riskLevelOptions = [
   { value: 'LOW', label: '低危' },
 ];
 
-/** 状态选项（前端中文 ↔ 后端枚举） */
+// 状态选项（前端中文 ↔ 后端枚举）
 const statusOptions = [
   { value: 'all', label: '全部状态' },
   { value: '待处置', label: '待处置' },
@@ -110,7 +106,7 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: '已处置',
 };
 
-/** 当前筛选条件 → 后端查询参数（'all' 表示该维度不过滤） */
+// 当前筛选条件 → 后端查询参数（'all' 表示该维度不过滤）
 const queryParams = computed(() => ({
   scenario_id: selectedScenario.value === 'all' ? undefined : selectedScenario.value,
   risk_level:
@@ -124,7 +120,7 @@ const queryParams = computed(() => ({
   include_hidden: showHidden.value || undefined,
 }));
 
-/** 加载数据（筛选与分页均由后端执行） */
+// 加载数据（筛选与分页均由后端执行）
 const loadEvents = async (targetPage: number = page.value) => {
   loading.value = true;
   error.value = '';
@@ -144,27 +140,27 @@ const loadEvents = async (targetPage: number = page.value) => {
   }
 };
 
-/** 筛选条件变化时回到第 1 页重新查询 */
+// 筛选条件变化时回到第 1 页重新查询
 watch([selectedScenario, selectedRiskLevel, selectedStatus, showHidden], () => {
   loadEvents(1);
 });
 
 const tableWrapRef = ref<HTMLElement | null>(null);
 
-/** 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts） */
+// 翻页：包一层滚动锚定，换页后视口停在原处（见 utils/scrollAnchor.ts）
 const goPage = (target: number) => {
   if (target < 1 || target > totalPages.value || target === page.value) return;
   keepScroll(() => loadEvents(target), tableWrapRef.value);
 };
 
-/** 风险等级 → 中文（配色由 .ev-level--* 类承担，这里只管文案） */
+// 风险等级 → 中文（配色由 .ev-level--* 类承担，这里只管文案）
 const RISK_LEVEL_LABEL: Record<string, string> = {
   HIGH: '高危',
   MEDIUM: '中危',
   LOW: '低危',
 };
 
-/** 原始标签中文化（模型输出的原始类标；未收录的原样显示） */
+// 原始标签中文化（模型输出的原始类标；未收录的原样显示）
 const ORIGINAL_LABEL: Record<string, string> = {
   anomaly: '异常',
   normal: '正常',
@@ -173,21 +169,15 @@ const ORIGINAL_LABEL: Record<string, string> = {
 };
 const originalLabel = (value: string) => ORIGINAL_LABEL[value] ?? value;
 
-/** 行内「查看」→ 风险事件详情页 */
+// 行内「查看」→ 风险事件详情页
 const goEventDetail = (row: RiskEventItem) => {
   router.push({ path: `/events/${row.id}` });
 };
 
-/** 正在切换隐藏状态的事件 id（按钮置灰用） */
+// 正在切换隐藏状态的事件 id（按钮置灰用）
 const togglingId = ref<number | null>(null);
 
-/**
- * 隐藏 / 取消隐藏风险事件。
- *
- * 走软隐藏：需求 5.2 访问控制第 4 条要求历史事件不得被无痕删除，后端 DELETE 接口
- * 因此永远返回 400，所以这里改的是可见性开关 —— 数据与处置记录一行不动。
- * 隐藏后该行默认从列表消失；取消隐藏后如果没勾「显示」，行同样会消失，两种情况都重拉列表。
- */
+// 隐藏 / 取消隐藏风险事件。
 const toggleHidden = async (row: RiskEventItem) => {
   const willHide = !row.hidden_at;
   try {
@@ -235,9 +225,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉）。
-         这里用 store 的 isSuperAdmin（role 恰为 SUPER_ADMIN），不是 isManagement
-         —— 场景管理员也该被固定在自己的场景上。 -->
+    <!-- 筛选栏：系统管理员可按场景；管理员/用户固定自己场景（隐藏场景下拉）。 这里用 store 的 isSuperAdmin（role 恰为 SUPER_ADMIN） -->
     <div class="risk-events-filters">
       <label v-if="userStore.isSuperAdmin" class="filter-item">
         <span class="filter-item__label">场景</span>
@@ -266,8 +254,7 @@ onMounted(() => {
       </label>
     </div>
 
-    <!-- 首屏加载：骨架占住真实表格高度，加载完成时页面不跳。
-         翻页时列表已在，只盖遮罩 —— 内容高度不变，滚动位置才不会跳。 -->
+    <!-- 首屏加载 -->
     <div v-if="loading && !events.length" class="risk-events-skeleton" aria-hidden="true">
       <div class="risk-events-skeleton__head"></div>
       <div v-for="n in 10" :key="n" class="risk-events-skeleton__row"></div>
@@ -318,8 +305,7 @@ onMounted(() => {
 
         <el-table-column label="处置状态" width="94" align="center">
           <template #default="{ row }: { row: RiskEventItem }">
-            <!-- 类名直接用后端枚举（PENDING/PROCESSING/RESOLVED）：
-                 此前是拿中文文案拼类名（ev-status--待处置），非 ASCII 类名既难搜也易错 -->
+            <!-- 类名直接用后端枚举（PENDING/PROCESSING/RESOLVED） -->
             <span class="event-table__status" :class="`ev-status--${row.status}`">
               {{ STATUS_LABEL[row.status] ?? row.status }}
             </span>
@@ -525,7 +511,7 @@ onMounted(() => {
   color: rgba(83, 229, 200, 0.65);
 }
 
-/* ---------------- 分页器 ----------------
+/* 分页器
    与用户管理 / 报告中心同一套：首页 / 上一页 / 页码 / 下一页 / 末页 + 页数信息。 */
 .risk-events-pager {
   display: flex;
@@ -620,7 +606,7 @@ onMounted(() => {
 }
 
 /* 风险说明：单元格内单行截断，完整说明进详情页看。
-   这里不挂 show-overflow-tooltip —— 悬停浮层会盖住上下相邻行。
+   这里不挂 show-overflow-tooltip，悬停浮层会盖住上下相邻行。
    EP 的 .cell 默认 white-space: normal 会折行，必须显式钉成单行 + 省略号。
    列表里展示的是 shortExplanation() 的短文本（去掉与「所属场景」「风险等级」
    两列重复的开头、以及每种类型固定的「建议…」模板尾巴），详情页仍是完整正文。 */
@@ -638,7 +624,7 @@ onMounted(() => {
 }
 
 /* 两个按钮等宽：文案在「查看」/「隐藏」/「不隐藏」之间切，按最宽的「不隐藏」定 64px。
-   实测（字体 12px、左右 padding 各 11px、边框 1px）：查看/隐藏 48px、不隐藏 60px、
+   实测（字体 12px、左右 padding 各 11px、边框 1px）：查看/隐藏 48px、不隐藏 60px。
    取消隐藏 72px。64px 放下「不隐藏」还余 4px；两个都写 width，宽度不随状态变。 */
 .risk-events-page .ev-ops .el-button {
   width: 64px;

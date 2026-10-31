@@ -1,13 +1,9 @@
-/**
- * modelVersionApi.ts — 模型版本接口（与后端 /api/v1/model-versions 对齐）
- *
- * 薄封装：仅 request 调用 + unwrapData 解包，不含业务逻辑。
- * 权限边界由后端强制（需求 6.7/6.5.2）：训练/发布/禁用/删除/推荐仅管理级角色。
- */
+// 模型版本接口（后端 /api/v1/model-versions）。只有 request 调用和 unwrapData 解包。
+// 权限边界由后端强制：训练、发布、禁用、删除、推荐都只对管理级角色开放。
 import request, { unwrapData } from '@/utils/request';
 import type { EvaluationMetrics, ModelStatus, ScenarioId } from '@/types/security';
 
-/** /api/v1/model-versions 返回的数据库模型行。 */
+// /api/v1/model-versions 返回的数据库模型行。
 export interface BackendModelVersion {
   id: number;
   model_version_id: number;
@@ -16,7 +12,6 @@ export interface BackendModelVersion {
   scenario_name?: string | null;
   dataset_id: number;
   dataset_logical_id?: string | null;
-  /** 数据集名（= logical_id） */
   dataset_name?: string | null;
   dataset_version?: number | null;
   algorithm_id: number;
@@ -36,7 +31,6 @@ export interface BackendModelVersion {
   model_attributes?: Record<string, unknown>;
 }
 
-/** 模型版本分页结果（GET /model-versions 的 data） */
 export interface ModelVersionPage {
   items: BackendModelVersion[];
   total: number;
@@ -44,11 +38,6 @@ export interface ModelVersionPage {
   page_size: number;
 }
 
-/**
- * 模型版本分页列表（含 total，列表页服务端分页用；场景用户仅见 PUBLISHED）。
- *
- * status 支持逗号分隔多值（如 `TRAINING,FAILED,DRAFT`），供「未发布」这类跨状态筛选下推。
- */
 export const getModelVersionPage = async (params?: {
   scenario_id?: ScenarioId | number;
   dataset_id?: string | number;
@@ -67,7 +56,6 @@ export const getModelVersionPage = async (params?: {
   };
 };
 
-/** 模型版本列表（GET /model-versions，场景用户仅见 PUBLISHED） */
 export const getModelVersionList = async (params?: {
   scenario_id?: ScenarioId | number;
   dataset_id?: string | number;
@@ -76,7 +64,6 @@ export const getModelVersionList = async (params?: {
   page_size?: number;
 }): Promise<BackendModelVersion[]> => (await getModelVersionPage(params)).items;
 
-/** 训练并保存模型版本（POST /model-versions/train，仅管理员；PMWNB 真实调用，其余 mock 占位） */
 export const trainModel = async (params: {
   scenario_id: ScenarioId | number;
   dataset_id: string | number;
@@ -84,27 +71,24 @@ export const trainModel = async (params: {
   training_parameters: Record<string, unknown>;
 }): Promise<BackendModelVersion> => unwrapData(await request.post('/api/v1/model-versions/train', params));
 
-/** 发布模型（POST /model-versions/{model_id}/publish，仅管理员） */
 export const publishModel = async (modelId: string | number): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/publish`));
 
-/** 禁用模型（POST /model-versions/{model_id}/disable，仅管理员） */
 export const disableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/disable`));
 
-/** 重新启用模型（POST /model-versions/{model_id}/enable，仅管理员；不自动恢复推荐状态） */
 export const enableModel = async (modelId: number | string): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/enable`));
 
-/** 删除禁用中的模型（DELETE /model-versions/{model_id}，仅管理员） */
+// 删除禁用中的模型（DELETE /model-versions/{model_id}，仅管理员）
 export const deleteModelVersion = async (modelId: number | string): Promise<void> => {
   await unwrapData(await request.delete(`/api/v1/model-versions/${modelId}`));
 };
 
-/** 设为推荐模型（POST /model-versions/{model_id}/recommend，仅管理员；推荐不唯一） */
+// 设为推荐模型（POST /model-versions/{model_id}/recommend，仅管理员；推荐不唯一）
 export const recommendModel = async (modelId: string | number): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/recommend`));
 
-/** 取消推荐状态（POST /model-versions/{model_id}/unrecommend，仅管理员） */
+// 取消推荐状态（POST /model-versions/{model_id}/unrecommend，仅管理员）
 export const unrecommendModel = async (modelId: string | number): Promise<BackendModelVersion> =>
   unwrapData(await request.post(`/api/v1/model-versions/${modelId}/unrecommend`));

@@ -1,4 +1,4 @@
-"""add opaque authentication sessions and enforce three-role bindings"""
+"""新增不透明登录会话，并落实三角色绑定约束"""
 from alembic import op
 import sqlalchemy as sa
 

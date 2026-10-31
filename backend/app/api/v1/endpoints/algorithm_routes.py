@@ -1,8 +1,8 @@
 """算法管理路由（/api/v1/algorithms）。
 
 对应 Service：AlgorithmService（backend/app/services/algorithm_service.py）。
-权限（需求 6.6.2/6.5.2）：查看已注册算法 → 登录用户；
-新增/修改/删除算法实现 → 禁止（仅开发人员代码接入，Service 层统一返回 403）。
+权限（需求 6.6.2/6.5.2）：查看已注册算法 -> 登录用户；
+新增/修改/删除算法实现 -> 禁止（仅开发人员代码接入，Service 层统一返回 403）。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session

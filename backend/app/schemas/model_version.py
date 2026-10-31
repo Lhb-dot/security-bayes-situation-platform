@@ -1,6 +1,7 @@
 """模型版本相关请求模型（/api/v1/model-versions）。
 
-对应 Service：ModelVersionService（backend/app/services/model_version_service.py）。
+对应 Service：
+ModelVersionService（backend/app/services/model_version_service.py）。
 状态机由 Service 按 MODEL_STATUS_TRANSITIONS 强制校验，此处不做枚举约束。
 """
 from typing import Any, Dict, List, Optional
@@ -26,12 +27,12 @@ class ModelVersionCompare(BaseModel):
 
 
 class ModelVersionCompleteTraining(BaseModel):
-    """训练成功回调（仅管理员）：TRAINING → DRAFT。"""
+    """训练成功回调（仅管理员）：TRAINING -> DRAFT。"""
 
     evaluation_metrics: Dict[str, Any] = Field(..., description="评估指标")
 
 
 class ModelVersionFailTraining(BaseModel):
-    """训练失败回调（仅管理员）：TRAINING → FAILED。"""
+    """训练失败回调（仅管理员）：TRAINING -> FAILED。"""
 
     error_message: Optional[str] = Field(None, description="失败原因")

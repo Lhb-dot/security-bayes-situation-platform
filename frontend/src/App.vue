@@ -8,22 +8,17 @@ import { useTrainingJobStore } from './stores/trainingJobStore';
 import { useBatchJobStore } from './stores/batchJobStore';
 import { onSeenIdsChange } from './utils/jobSeen';
 
-// 路由实例
 const router = useRouter();
 const route = useRoute();
 
-// ===================== 当前登录用户（与路由守卫同源：Pinia userStore） =====================
+// 当前登录用户（与路由守卫同源：Pinia userStore）
 // 登录/登出统一走 userStore，避免页面复制认证状态
 const userStore = useUserStore();
 const currentUser = computed(() => userStore.currentUser);
 const isSuperAdmin = computed(() => userStore.isSuperAdmin);
 
-// ===================== 恢复后台任务（报告 / 训练 / 批量研判） =====================
 // 这三类任务在前端都是「进程内」状态，刷新就没了（详见各自的 store）。
-// 会话恢复或登录成功时各拉一次本账号的任务列表，把还在跑的接回来继续轮询 ——
-// 这样任务完成时不论用户停在哪个页面都能弹通知，刷新过也不会丢。
 // 放在 App 层而不是各自的页面：离开那个页面同样应该收到完成通知。
-//
 // 登出时也要清（下面 else 分支）：store 是全局单例，不清的话上一个账号的任务会留在
 // 数组里，下一个账号登录后被当成「本账号未读」挂进顶栏铃铛面板。resumePending 自己
 // 也会先 reset 一次，这里只是让「登出后到下次登录前」这段空窗也是干净的。
@@ -46,28 +41,21 @@ watch(
   { immediate: true },
 );
 
-// ===================== 顶栏任务铃铛 =====================
 // 三类后台任务（报告 / 训练 / 批量研判）的状态都在各自的 store 里，这里只做汇总展示，
-// 不另存一份状态。四种形态：空闲（整块不渲染）→ 有在途（铃铛点亮）→ 有完成未查看
 // （叠数字徽章）→ 两者都有。「已完成未查看」用 id 集合差判定，见 utils/jobSeen。
 type BellTaskKind = 'generate' | 'export' | 'training' | 'batch';
 
 interface BellTask {
-  /** 全局唯一键（同时用来回推是哪一类任务） */
   key: string;
   kind: BellTaskKind;
   title: string;
   running: boolean;
   failed: boolean;
-  /** 属于「已完成未查看」：行首亮点 + 计入徽章 */
   unread: boolean;
-  /** 已用秒数（在途任务有效） */
   elapsed: number;
-  /** 进度补充，如 12/50 */
+  // 进度补充，如 12/50
   progress: string;
-  /** 点击跳转的路由 */
   to: string;
-  /** 排序用 */
   startedAt: number;
 }
 
@@ -78,7 +66,6 @@ const KIND_LABEL: Record<BellTaskKind, string> = {
   batch: '批量研判',
 };
 
-/** 已完成未查看的全局键集合（徽章数字 + 行首亮点） */
 const unseenKeys = computed(
   () =>
     new Set<string>([
@@ -175,27 +162,13 @@ const finishedTasks = computed<BellTask[]>(() => {
 
 const hasRunning = computed(() => runningTasks.value.length > 0);
 const unseenCount = computed(() => unseenKeys.value.size);
-/** 徽章文案：超过 99 条折叠成「99+」，避免三位数撑破圆形徽章 */
+// 徽章文案：超过 99 条折叠成「99+」，避免三位数撑破圆形徽章
 const unseenBadge = computed(() => (unseenCount.value > 99 ? '99+' : String(unseenCount.value)));
 
-/**
- * 面板里有没有行。**不再用「有没有未读」门控面板** —— 悬停总要展开，
- * 一条任务都没有时展开看到的是一行「暂无任务」。
- */
 const hasTasks = computed(() => runningTasks.value.length > 0 || finishedTasks.value.length > 0);
 
-/**
- * 面板展开完全交给 CSS `:hover` —— 鼠标一离开铃铛（含面板）就收起，不留延迟。
- *
- * 斜向移动会「先离开铃铛的横向范围、再落到面板上」，中间那一小段本来会丢 hover；
- * 用 `.topbar-bell::before` 补一块不可见的走廊（见 scoped 样式里的说明），
- * 所以不需要靠收起延迟来兜。
- */
+// 面板展开完全交给 CSS `:hover`，鼠标一离开铃铛（含面板）就收起，不留延迟。
 
-/**
- * 点某一行：**只有点击才算「看过」** —— 把这一条标为已读，然后跳到对应页面。
- * 面板停留不改变已读状态：停在上面看几秒不算看过，得点进去。
- */
 const openTask = (task: BellTask) => {
   const id = task.key.slice(task.key.indexOf(':') + 1);
   if (task.key.startsWith('report:')) reportJobStore.markAllSeen([id]);
@@ -204,7 +177,7 @@ const openTask = (task: BellTask) => {
   router.push(task.to);
 };
 
-/** 已用时长：秒 → 「12 秒 / 3 分 05 秒 / 1 小时 02 分」 */
+// 已用时长：秒 → 「12 秒 / 3 分 05 秒 / 1 小时 02 分」
 const formatElapsed = (seconds: number): string => {
   const total = Math.max(0, Math.floor(seconds));
   if (total < 60) return `${total} 秒`;
@@ -213,14 +186,13 @@ const formatElapsed = (seconds: number): string => {
   return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
 };
 
-// 已读集合存在 localStorage，storage 事件只在**别的**标签页触发 —— 正好用来同步：
-// 一个标签页看过之后，另一个标签页的徽章跟着清掉。
+// 已读集合存在 localStorage，storage 事件只在别的标签页触发，正好用来同步：
 let stopSeenSync: (() => void) | null = null;
-/** 终态任务过期扫描间隔（1 分钟） */
+// 终态任务过期扫描间隔（1 分钟）
 const TASK_EXPIRY_SWEEP_MS = 60_000;
 /**
- * 终态任务保留 24h。空闲时轮询已经停了，面板数据没有别的刷新时机 ——
- * 到点的行得靠这个低频定时器自己消失。三个 store 只在**真的有行被丢掉**时
+ * 终态任务保留 24h。空闲时轮询已经停了，面板数据没有别的刷新时机，
+ * 到点的行得靠这个低频定时器自己消失。三个 store 只在真的有行被丢掉时
  * 才替换数组引用，所以扫一遍不会引起多余渲染。
  */
 let expiryTimer: number | null = null;
@@ -241,7 +213,6 @@ onBeforeUnmount(() => {
   if (expiryTimer !== null) window.clearInterval(expiryTimer);
 });
 
-/** 当前角色中文名 */
 const roleLabel = computed(() => {
   const role = userStore.currentUser?.role;
   if (role === 'SUPER_ADMIN') return '系统管理员';
@@ -249,7 +220,6 @@ const roleLabel = computed(() => {
   return '场景用户';
 });
 
-/** 场景编码 → 中文名（顶栏展示用；未收录的原样显示） */
 const SCENARIO_NAME: Record<string, string> = {
   network_security: '网络安全',
   power_system: '电力系统',
@@ -257,7 +227,6 @@ const SCENARIO_NAME: Record<string, string> = {
   flightdeck_operation: '舰面调度态势',
 };
 
-/** 当前用户场景名（管理员/用户，显示在头像上方；系统管理员不显示） */
 const myScenarioName = computed(() => {
   if (isSuperAdmin.value) return '';
   const id = userStore.currentUser?.scenario_code;
@@ -270,24 +239,15 @@ const handleLogout = async () => {
   router.push('/login');
 };
 
-// ===================== 路由跳转方法（全部改为标准router.push）=====================
-/**
- * 顶部导航：跳转AI模型训练研判页面（无参数，手动训练数据集）
- */
+// 顶部导航：跳转AI模型训练研判页面（无参数，手动训练数据集）
 const goAiTrainPage = () => {
   router.push({ path: '/risk' });
 };
 
-/**
- * 跳转全局总览
- */
 const goOverview = () => {
   router.push({ path: '/overview' });
 };
 
-/**
- * 跳转场景首页：系统管理员 → 平台首页；管理员/用户 → 自己场景详情页
- */
 const goScenarioCenter = () => {
   if (isSuperAdmin.value) {
     router.push({ path: '/overview' });
@@ -297,52 +257,31 @@ const goScenarioCenter = () => {
   router.push(bound ? { path: `/scenarios/${bound}/dashboard` } : { path: '/scenarios' });
 };
 
-/**
- * 跳转用户管理（系统管理员管管理员/用户；管理员管自己用户）
- */
 const goUsers = () => {
   router.push({ path: '/users' });
 };
 
-/**
- * 跳转数据集中心
- */
 const goDatasetCenter = () => {
   router.push({ path: '/datasets' });
 };
 
-/**
- * 跳转模型中心
- */
 const goModelCenter = () => {
   router.push({ path: '/models' });
 };
 
-/**
- * 跳转风险研判
- */
 const goRiskInference = () => {
   router.push({ path: '/inference' });
 };
 
 
-/**
- * 跳转报告中心
- */
 const goReportCenter = () => {
   router.push({ path: '/reports' });
 };
 
-/**
- * 跳转系统设置
- */
 const goSettings = () => {
   router.push({ path: '/settings' });
 };
 
-/**
- * 跳转推理记录
- */
 const goInferenceRecords = () => {
   router.push({ path: '/inference-records' });
 };
@@ -352,41 +291,30 @@ const goAlertsList = () => {
 };
 
 // 说明：顶部 bar 只保留品牌名「AI Security Operations Center」+ 当前场景，
-// 不再渲染页面大标题——bar 下方的各页面自带标题/说明，避免重复。
 // 浏览器标签页标题全站统一为品牌名，由 index.html 的 <title> 静态提供，不随路由变化。
 
 // 落地页跳转不在这里做：路由 '/' 的函数式 redirect 已覆盖（它复用 guards.ts 的 roleLanding）。
-// 此前这里另有一份 onMounted 跳转，它在 vue-router 首次导航 resolve 之前执行，
-// 此时 route.path 仍是 '/'，于是把用户请求的深链（如 #/reports）顶成角色落地页 —— 已移除。
+// 此时 route.path 仍是 '/'，于是把用户请求的深链（如 #/reports）顶成角色落地页，已移除。
 
-// ===================== 路由判断快捷变量（template用） =====================
+// 路由判断快捷变量（template用）
 const isLoginPage = computed(() => route.path === '/login');
 const isRiskPage = computed(() => route.path === '/risk');
-// 平台总览使用完整驾驶舱布局与内置导航，避免重复渲染全站顶栏。
 const isAdminOverview = computed(() => route.path === '/overview' && isSuperAdmin.value);
-// 管理员场景首页自带全屏导航；普通场景用户仍使用原工作台和全站顶栏。
 const isScenarioScreen = computed(() => route.name === '场景大屏' && userStore.isManagement);
-// 内容区渲染不再维护「新页面白名单」：模板用 v-else 兜住所有非 /risk 路由。
-// 原先的白名单漏掉一条就会白屏（/situation 就这么烂了两年），且新增路由必须记得补。
 
-// ===================== 顶部导航（三级角色驱动渲染） =====================
-// 需求 6.5.2 末段：前端隐藏仅为体验，真正的鉴权在后端。
+// 前端隐藏仅为体验，真正的鉴权在后端。
 interface NavItem {
   path: string;
-  /** 普通角色（场景管理员/场景用户）的显示文案 */
   label: string;
-  /** 系统管理员的显示文案（缺省沿用 label） */
+  // 系统管理员的显示文案（缺省沿用 label）
   superAdminLabel?: string;
-  /** 点击动作：复用原导航跳转函数，保持既有行为 */
   action: () => void;
-  /** 激活态判定：与显示文案一样按角色区分（原先散在 isXxxPage 与 isNavActive 两处） */
   isActive: () => boolean;
 }
 
-/** 是否正停在某个路径上（精确匹配，与原 isXxxPage 判断一致） */
+// 是否正停在某个路径上（精确匹配，与原 isXxxPage 判断一致）
 const atPath = (path: string): boolean => route.path === path;
 
-// 导航项不再各自声明 roles：可见性统一按路径查 router/access.ts 的 PAGE_ROLES，
 // 与路由守卫 meta.roles 同源（单一来源，避免「导航隐藏但手敲地址能进」的漂移）。
 const navItems: NavItem[] = [
   // 场景用户/管理员的"首页"就是场景大屏（/scenarios/{场景}/dashboard）
@@ -408,13 +336,13 @@ const navItems: NavItem[] = [
   { path: '/settings', label: '设置', superAdminLabel: '系统设置', action: goSettings, isActive: () => atPath('/settings') },
 ];
 
-/** 按当前角色过滤可见导航项（角色准入查 router/access.ts，唯一来源） */
+// 按当前角色过滤可见导航项（角色准入查 router/access.ts，唯一来源）
 const visibleNavItems = computed(() => {
   const role = userStore.currentUser?.role;
   return navItems.filter((item) => role && !(role === 'SUPER_ADMIN' && item.path === '/scenarios') && rolesForPath(item.path).includes(role));
 });
 
-/** 导航显示文案：系统管理员用 superAdminLabel（缺省沿用 label） */
+// 导航显示文案：系统管理员用 superAdminLabel（缺省沿用 label）
 const navLabel = (item: NavItem): string =>
   isSuperAdmin.value ? (item.superAdminLabel ?? item.label) : item.label;
 </script>
@@ -443,8 +371,7 @@ const navLabel = (item: NavItem): string =>
           </button>
         </nav>
         <div class="topbar-right">
-          <!-- 后台任务铃铛：常驻。空闲时是灰色静态图标、悬停不出面板；
-               有在途任务点亮，有完成未查看叠数字 -->
+          <!-- 后台任务铃铛 -->
           <div
             class="topbar-bell"
             :class="{ 'is-live': hasRunning }"
@@ -531,7 +458,6 @@ const navLabel = (item: NavItem): string =>
       <router-view />
     </div>
 
-    <!-- 其余页面（含 404 兜底）统一渲染，不再依赖白名单 -->
     <div v-else class="new-page-wrap">
       <router-view />
     </div>
@@ -558,12 +484,10 @@ const navLabel = (item: NavItem): string =>
   gap: 16px;
 }
 
-/* 标题行不再有大标题，eyebrow 底部外边距归零，避免行间空隙过大 */
 .topbar__heading .eyebrow {
   margin-bottom: 0;
 }
 
-/* 当前场景大字（标题行最右） */
 .topbar__heading-scenario {
   flex-shrink: 0;
   color: #9ad6ff;
@@ -572,7 +496,6 @@ const navLabel = (item: NavItem): string =>
   white-space: nowrap;
 }
 
-/* ===================== 顶栏右侧：任务铃铛 + 用户区 ===================== */
 /* 两者必须包在同一个容器里：.topbar__actions 是 space-between，单独塞第 3 个孩子会
    漂到导航与用户区中间的空档正中（1920 下离头像 300+px）。 */
 .topbar-right {
@@ -582,9 +505,8 @@ const navLabel = (item: NavItem): string =>
   flex-shrink: 0;
 }
 
-/* ===================== 任务铃铛 ===================== */
 /* 悬停桥接（纵向）：padding-bottom 把按钮下方 12px 并入触发区，margin-bottom 抵消占位
-   （按钮仍在垂直居中的位置），面板 top:100% 正好贴住那块内边距 ——
+   （按钮仍在垂直居中的位置），面板 top:100% 正好贴住那块内边距。
    鼠标从铃铛笔直往下滑进面板，中间不断。面板是子元素，:hover 覆盖整棵子树。 */
 .topbar-bell {
   position: relative;
@@ -592,14 +514,9 @@ const navLabel = (item: NavItem): string =>
   margin-bottom: -12px;
 }
 
-/* 悬停桥接（横向）：面板 320px 宽、右对齐在铃铛下方，而铃铛只有 36px 宽 ——
-   鼠标斜着往下走时，会先离开铃铛的横向范围、再落到面板上，中间那一小段本来会丢
-   hover。这块不可见的走廊盖住「按钮整个高度 + 下方 12px 内边距」，于是
-   「按钮 → 走廊 → 面板」连成一片，斜向路径不会断，也就不需要靠「收起延迟」兜底
-   （离开即收起，实测 Δ≈0.4ms）。
-   走廊横向会压到导航，所以给 .nav-tabs 加了正 z-index 让它始终在走廊之上 ——
-   既不会被挡掉点击，也不会出现「走廊留住 hover → 面板不关 → 走廊一直可见」的死锁。
-   visibility 同样只在悬停时才可见，未展开时完全不参与命中测试。 */
+/* 悬停桥接（横向）：面板 320px 宽、右对齐在铃铛下方，铃铛只有 36px 宽。
+   这块不可见的走廊盖住「按钮整个高度 + 下方 12px」，让「按钮 → 走廊 → 面板」连成一片。
+   斜向移动不会丢 hover，也就不需要收起延迟。走廊横向会压到导航，故给 .nav-tabs 加正 z-index。 */
 .topbar-bell::before {
   content: '';
   position: absolute;
@@ -628,7 +545,6 @@ const navLabel = (item: NavItem): string =>
   transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
-/* 有在途任务：点亮 */
 .topbar-bell.is-live .topbar-bell__btn {
   color: #7dc9ff;
   border-color: rgba(125, 201, 255, 0.45);
@@ -689,7 +605,7 @@ const navLabel = (item: NavItem): string =>
   z-index: 30;
 }
 
-/* 淡入放在「显示」这条规则上、隐藏那条不写 transition —— 这样离开时是**瞬时**收起
+/* 淡入放在「显示」这条规则上、隐藏那条不写 transition，这样离开时是瞬时收起
    （transition 取的是目标状态的声明值，隐藏态没写就是 none），只有出现时有个淡入。 */
 .topbar-bell:hover .topbar-bell__panel {
   opacity: 1;
@@ -791,7 +707,6 @@ const navLabel = (item: NavItem): string =>
   color: #ff7b72;
 }
 
-/* ===================== 用户区：仅头像，悬停弹出姓名/角色/退出 ===================== */
 .topbar__user {
   position: relative;
   display: flex;

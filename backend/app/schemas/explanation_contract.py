@@ -1,8 +1,7 @@
-"""Versioned contract for model explanations.
+"""模型解释的版本化契约。
 
-The contract is deliberately independent from Weka, SQLAlchemy and the AI
-client. Prediction facts are copied into an explanation after prediction and
-are never used to calculate the prediction itself.
+这一层刻意不依赖 Weka、SQLAlchemy 和 AI 客户端。
+预测事实是在预测算完之后才抄进来的，绝不反过来参与预测本身的计算。
 """
 from __future__ import annotations
 
@@ -13,25 +12,25 @@ from typing import Any
 
 EXPLANATION_CONTRACT_VERSION = "1.0"
 
-#: 全部解释受众，按可见度从低到高：普通用户 → 场景管理员 → 超级管理员。
+# 全部解释受众，按可见度从低到高：普通用户 -> 场景管理员 -> 超级管理员。
 EXPLANATION_ROLES = ("SCENARIO_USER", "SCENARIO_ADMIN", "SUPER_ADMIN")
-#: 可见算法内部明细（algorithm_details / model_quality / input_snapshot）的受众，
-#: 由 EXPLANATION_ROLES 派生，避免同一集合出现第二份字面量。
-#: （services/constants.py 里另有一份基于角色常量的 ADMIN_ROLES，值相同。）
+# 可见算法内部明细（algorithm_details / model_quality / input_snapshot）的受众，
+# 由 EXPLANATION_ROLES 派生，避免同一集合出现第二份字面量。
+# （services/constants.py 里另有一份基于角色常量的 ADMIN_ROLES，值相同。）
 ADMIN_ROLES = EXPLANATION_ROLES[1:]
 ALGORITHM_CODES = (
     "A2WNB", "MAWNB", "EMAWNB", "CAVWNB", "PMWNB", "DIWNB",
     "KFDB", "FLNB", "FTAWNB",
 )
 
-#: 解释流的 SSE 事件词表（权威定义）。前端逐字对应
-#: ``frontend/src/api/inferenceRecordApi.ts`` 的 event 分支。
-#: 正常序列：start → reasoning* → delta* → done；error **不是终态**，
-#: 只表示「已降级/失败」通知 —— 一次流是否成功、正文出自谁，一律由 done 决定。
+# 解释流的 SSE 事件词表（权威定义）。前端逐字对应
+# `frontend/src/api/inferenceRecordApi.ts` 的 event 分支。
+# 正常序列：start -> reasoning* -> delta* -> done；error 不是终态，
+# 只表示「已降级/失败」通知 —— 一次流是否成功、正文出自谁，一律由 done 决定。
 EXPLANATION_EVENTS = ("start", "reasoning", "delta", "error", "done")
-#: done 事件 ``source`` 的取值域：ai = 大模型正文，fallback = 平台规则模板。
+# done 事件 `source` 的取值域：ai = 大模型正文，fallback = 平台规则模板。
 EXPLANATION_SOURCES = ("ai", "fallback")
-#: 普通用户可见的 top_features 条数上限。
+# 普通用户可见的 top_features 条数上限。
 PUBLIC_TOP_FEATURE_LIMIT = 3
 
 PUBLIC_FIELDS = (
@@ -55,12 +54,12 @@ ADMIN_FIELDS = PUBLIC_FIELDS + (
 
 
 def unavailable(reason: str) -> dict[str, Any]:
-    """Represent an unavailable structured value consistently."""
+    """统一表示一个取不到的字段。"""
     return {"available": False, "reason": str(reason)}
 
 
 def availability(is_available: bool, reason: str | None = None) -> dict[str, Any]:
-    """Return the fixed shape used by every availability marker."""
+    """返回各处可用性标记共用的固定结构。"""
     return {
         "available": bool(is_available),
         "reason": None if is_available else str(reason or "数据不可用"),
@@ -76,7 +75,7 @@ def finite_number(value: Any) -> float | None:
 
 
 def prediction_snapshot(result: dict[str, Any] | None) -> dict[str, Any]:
-    """Extract only prediction facts for before/after regression comparison."""
+    """只抽预测相关事实，用于改动前后的回归比对。"""
     source = result or {}
     distribution = source.get("class_distribution")
     normalized_distribution = []
@@ -104,7 +103,7 @@ def _dict(value: Any) -> dict[str, Any]:
 
 
 def algorithm_specific_template(algorithm_code: str) -> dict[str, Any]:
-    """Return the fixed shape for one algorithm's read-only details."""
+    """给出某个算法只读明细的固定结构。"""
     code = str(algorithm_code or "").upper()
     templates = {
         "A2WNB": {
@@ -146,7 +145,7 @@ def algorithm_specific_template(algorithm_code: str) -> dict[str, Any]:
 
 
 def merge_algorithm_specific(algorithm_code: str, value: Any) -> dict[str, Any]:
-    """Merge actual read-only data into its fixed algorithm template."""
+    """把真实只读数据填进对应的算法模板。"""
     template = algorithm_specific_template(algorithm_code)
     if isinstance(value, dict):
         template.update(deepcopy(value))
@@ -183,7 +182,7 @@ def _normalize_model_quality(value: Any) -> dict[str, Any]:
 def _normalize_algorithm_details(value: Any) -> dict[str, Any]:
     """固定 algorithm_details 的形状，并把 specific 合进算法模板。
 
-    注意：``value`` 是 dict 时**就地**补字段（调用方传入的是 deepcopy 出来的副本）。
+    注意：`value` 是 dict 时就地补字段（调用方传入的是 deepcopy 出来的副本）。
     """
     details = _dict(value)
     algorithm_code = str(details.get("algorithm_code", "")).upper()
@@ -211,7 +210,7 @@ def _normalize_algorithm_details(value: Any) -> dict[str, Any]:
 
 
 def normalize_calculation_method(algorithm_code: str | None, method: Any) -> Any:
-    """Use current algorithm names in calculation notes, including saved records."""
+    """计算说明用当前算法名，存档记录同样按新名展示。"""
     if not isinstance(method, str):
         return method
     replacements = {
@@ -229,7 +228,7 @@ def normalize_calculation_method(algorithm_code: str | None, method: Any) -> Any
 
 
 def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
-    """Fill and type-normalize the v1 envelope without changing model facts."""
+    """补齐并按类型规整 v1 信封，不动模型事实。"""
     data = deepcopy(explanation or {})
     data["contract_version"] = EXPLANATION_CONTRACT_VERSION
     data["prediction"] = str(data.get("prediction", data.get("prediction_label", ""))).strip()
@@ -267,7 +266,7 @@ def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
     )
     data["input_snapshot"] = _dict(data.get("input_snapshot"))
 
-    # Keep legacy prediction fields when present, while making their types stable.
+    # 老版本留下的 prediction 字段若存在就保留，但把类型固定住。
     if "prediction_label" in data:
         data["prediction_label"] = str(data["prediction_label"]).strip()
     if "probability" in data:
@@ -278,7 +277,7 @@ def normalize_explanation(explanation: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def explanation_for_role(explanation: dict[str, Any] | None, role: str | None) -> dict[str, Any]:
-    """Apply the three-level explanation visibility policy."""
+    """按三级可见性策略裁剪解释内容。"""
     data = normalize_explanation(explanation)
     if role in ADMIN_ROLES:
         return data
@@ -301,7 +300,7 @@ def explanation_for_role(explanation: dict[str, Any] | None, role: str | None) -
 
 
 def validate_explanation_contract(explanation: dict[str, Any]) -> list[str]:
-    """Return contract violations; intended for tests and boundary checks."""
+    """返回契约违规项，给测试和边界检查用。"""
     errors = []
     if not isinstance(explanation, dict):
         return ["explanation must be an object"]

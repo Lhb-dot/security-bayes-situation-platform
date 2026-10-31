@@ -2,17 +2,17 @@
 
 把「迭代类型」与「是否新建版本快照」解耦：
 
-- **迭代**：每一次数据/结构/元数据变更都算一次迭代，落一条 dataset_revision 记录；
-- **版本**：迭代的产物，由本模块的纯函数 ``resolve_iteration_policy`` 按
-  ``change_type x 是否已被模型引用`` 决定 —— 原地更新当前版本行，或新开一个版本快照。
+- 迭代：每一次数据/结构/元数据变更都算一次迭代，落一条 dataset_revision 记录；
+- 版本：迭代的产物，由本模块的纯函数 `resolve_iteration_policy` 按
+  `change_type x 是否已被模型引用` 决定 —— 原地更新当前版本行，或新开一个版本快照。
 
 这样「修改字段」与「追加数据条数」不需要两套逻辑：操作类型只是入参之一，
 真正决定分叉的是「是否破坏结构兼容」与「是否已被引用」。
 
 设计原则：
-1. 破坏结构兼容的迭代（字段/标签变更）**必须**留版本快照，即使当前未被引用，
+1. 破坏结构兼容的迭代（字段/标签变更）必须留版本快照，即使当前未被引用，
    否则旧模型/训练记录会指向一个字段已变的文件。
-2. 兼容迭代（追加/修正样本）在**已被引用**时必须新开版本，冻结旧文件供历史追溯；
+2. 兼容迭代（追加/修正样本）在已被引用时必须新开版本，冻结旧文件供历史追溯；
    未被引用时原地更新即可，避免版本号与文件副本无谓膨胀。
 3. 纯元数据迭代（改名/可见性）不触碰数据文件，永远原地更新。
 """
@@ -32,7 +32,7 @@ CHANGE_TYPE_SCHEMA_CHANGE = "schema_change"  # 字段结构变更（破坏兼容
 CHANGE_TYPE_LABEL_CHANGE = "label_change"    # 标签字段变更（破坏兼容）
 CHANGE_TYPE_METADATA = "metadata"            # 名称等元数据（不碰文件；可见性由上传者角色固定，不可改）
 
-#: 全部合法迭代类型
+# 全部合法迭代类型
 CHANGE_TYPES = (
     CHANGE_TYPE_CREATE,
     CHANGE_TYPE_APPEND_ROWS,
@@ -44,12 +44,12 @@ CHANGE_TYPES = (
     CHANGE_TYPE_METADATA,
 )
 
-#: 会改变字段结构、导致旧模型不可直接复用的迭代类型
+# 会改变字段结构、导致旧模型不可直接复用的迭代类型
 BREAKING_CHANGE_TYPES = frozenset(
     {CHANGE_TYPE_SCHEMA_CHANGE, CHANGE_TYPE_LABEL_CHANGE}
 )
 
-#: 迭代类型的中文展示名（后端日志 / 前端标签共用口径）
+# 迭代类型的中文展示名（后端日志 / 前端标签共用口径）
 CHANGE_TYPE_LABELS = {
     CHANGE_TYPE_CREATE: "初次登记",
     CHANGE_TYPE_APPEND_ROWS: "追加样本",
@@ -61,7 +61,7 @@ CHANGE_TYPE_LABELS = {
     CHANGE_TYPE_METADATA: "元数据变更",
 }
 
-#: 产物模式
+# 产物模式
 MODE_IN_PLACE = "in_place"        # 原地更新当前版本行（不新增版本）
 MODE_NEW_VERSION = "new_version"  # 新开一个版本快照
 
@@ -89,13 +89,13 @@ def resolve_iteration_policy(
     """决定一次迭代的产物：原地更新还是新建版本。
 
     Args:
-        change_type: 迭代类型，取值见 ``CHANGE_TYPES``。
+        change_type: 迭代类型，取值见 `CHANGE_TYPES`。
         referenced: 目标数据集版本是否已被模型版本引用。
-        schema_unchanged: 仅对 ``replace_file`` 有意义 —— 替换后字段结构是否与
+        schema_unchanged: 仅对 `replace_file` 有意义 —— 替换后字段结构是否与
             当前版本完全一致。一致则视为兼容迭代，否则按破坏性处理。
 
     Raises:
-        ValueError: change_type 不在 ``CHANGE_TYPES`` 内。
+        ValueError: change_type 不在 `CHANGE_TYPES` 内。
     """
     if change_type not in CHANGE_TYPES:
         raise ValueError(f"未知的数据集迭代类型: {change_type}")

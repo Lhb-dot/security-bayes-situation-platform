@@ -1,24 +1,7 @@
 <script setup lang="ts">
 /**
- * ProfileGeological —— 地质风险 · 场景管理员首页（管理端）。
- * 字段口径见 docs/场景管理员首页审查/实施契约.md §7 / §8.4。
- *
- * 视角：**管理端看资源与流程，不是执行端看任务**。与场景用户的「我的工作台」
- * （WorkspaceGeological）的区别：
- *   用户侧 ＝ 我手上的活：待处置告警、因子贡献排行、坡度档位排行、最近告警明细；
- *   管理侧 ＝ 这个场景健康吗：数据集各自扮演什么角色、地形因子覆盖是否完整、
- *             哪些数据在建模、哪些数据白躺着、流程积压与人员配置。
- *   因此这里**不**放因子贡献/坡度档位/灾害类型分布这类研判辅助图，也**不**渲染
- *   `recent_events`（那是执行端的派活清单）。
- *
- * 统一骨架（四场景一致，顺序不可变）：
- *   S1 场景资产总览 KPI ×4 → D1 ★数据集角色分工矩阵 → D2 ★地形因子跨数据集覆盖矩阵
- *   → S2 数据集资产明细 → S3 建模覆盖 → S4 场景运行态水位 → S5 场景成员与权限
- *
- * 数据来源两段，作用域不同：
- *   数据资产 /profile —— 数据集全量统计，不受运行态影响（roles / factor_coverage / modeling）。
- *   运行态 /workspace + 成员 /users —— 场景管理员拿到的是整个场景（self_only=false）；
- *   接口失败静默降级，不影响数据资产部分。
+ * 地质风险 · 场景管理员首页。看资源与流程：数据集角色、地形因子覆盖、
+ * 建模情况、积压与人。执行端的因子贡献与坡度排行不在此页。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import {
@@ -40,20 +23,10 @@ import { fmtDate, fmtInt, fmtPercent } from '@/components/dashboard/dashFormat';
 
 const props = defineProps<{ data: GeologicalProfile }>();
 
-/* ------------------------------------------------------------------ */
-/* 运行态与成员：并行请求 + 各自静默降级                                 */
-/* ------------------------------------------------------------------ */
 
 const runtime = ref<GeologicalWorkspace | null>(null);
-/** 场景成员；null = 未取到（与「确实 0 人」区分开，避免误报 0） */
 const members = ref<UserAccount[] | null>(null);
 
-/**
- * 两个接口并行、各自静默降级：任一失败只影响它自己那块，不阻塞数据资产部分。
- * 模型数不再单独请求 modelVersionApi —— 后端画像已直接下发 `modeling`
- * （按 dataset 聚合的 published/draft/total），前端不再按 dataset_logical_id 自行归集，
- * 避免两套口径。
- */
 const loadAll = async () => {
   const scenarioId = props.data.scenario_id;
   const [runtimeResult, memberResult] = await Promise.allSettled([
@@ -76,28 +49,16 @@ onMounted(loadAll);
 
 const summary = computed(() => runtime.value?.summary ?? null);
 
-/* ------------------------------------------------------------------ */
-/* 画像字段契约：roles / factor_coverage / modeling 均为必填且恒下发      */
-/* ------------------------------------------------------------------ */
 
 /**
- * `GeologicalProfile` 把 `roles` / `factor_coverage` / `modeling` 声明为**必填数组**，后端
+ * `GeologicalProfile` 把 `roles` / `factor_coverage` / `modeling` 声明为必填数组，后端
  * `get_profile` 也在每条代码路径上无条件下发（无数据集时给 `[]`），因此这里不做
- * `?? []` / `Array.isArray` 兜底 —— 那些分支恒不可达，只会让「未建模数」「数据白躺」
+ * `?? []` / `Array.isArray` 兜底，那些分支恒不可达，只会让「未建模数」「数据白躺」
  * 多出一套永远为假的真假口径。
- *
- * 唯一保留的判据是「数据白躺」，S1 的未建模数据集数与 S3 的白躺名单共用它。
  */
 const isWhiteLying = (item: { total: number }) => item.total === 0;
 
-/* ------------------------------------------------------------------ */
-/* S1 场景资产总览 KPI ×4                                              */
-/* ------------------------------------------------------------------ */
 
-/**
- * 第 4 个 KPI 是地质特色：未建模数据集数。
- * 「有数据但没有任何模型版本」＝ 数据白躺，是管理端最该追的资产闲置问题。
- */
 const unmodeledCount = computed(() => props.data.modeling.filter(isWhiteLying).length);
 
 const overviewKpis = computed(() => [
@@ -124,11 +85,7 @@ const overviewKpis = computed(() => [
   },
 ]);
 
-/* ------------------------------------------------------------------ */
-/* 枚举映射                                                         */
-/* ------------------------------------------------------------------ */
 
-/** 标签类型中文映射：纯描述性，不参与正类判定 */
 const LABEL_KIND_TEXT: Record<string, string> = {
   binary: '二分类',
   multiclass: '多分类',
@@ -137,7 +94,6 @@ const LABEL_KIND_TEXT: Record<string, string> = {
 };
 const labelKindText = (kind: string) => LABEL_KIND_TEXT[kind] ?? '未知';
 
-/** 可见性中文映射 */
 const VISIBILITY_TEXT: Record<string, string> = {
   platform: '平台',
   company: '公司',
@@ -146,29 +102,9 @@ const VISIBILITY_TEXT: Record<string, string> = {
 const visibilityText = (value: string | undefined) =>
   value ? (VISIBILITY_TEXT[value] ?? value) : '—';
 
-/* ------------------------------------------------------------------ */
-/* D1 ★ 数据集角色分工矩阵                                              */
-/* ------------------------------------------------------------------ */
 
-/** 「不该入模」的角色：编目表是全球事件背景库、基线集是负样本采样法的参照物，
- *  两者未建模是设计使然，不计入「数据白躺」告警。 */
 const UNTRAINABLE_ROLES = new Set(['全球编目表', '随机基线集']);
 
-/**
- * 管理端的第一问：这些数据集各干什么活？
- * 角色（因子表/风险标签表/致灾因子表/全球编目表/随机基线集）由后端显式登记表映射，
- * 前端不做任何推断。
- *
- * 本表**只讲职责**（角色 / 标签 / 建模与研判状态），不复述样本量、字段数、风险占比 ——
- * 那些是「资产属性」，统一在 S2 资产明细里出现一次。同一粒度的信息全页只展示一次。
- *
- * 「建模与研判状态」把原先分开的两列（参与训练 / 产生风险事件）压成一个结论：
- * 两列各自是二值，并排放时读者要自己做四象限判断，而页面不给判据；更关键的是
- * 「未建模」在编目表、基线集上属于**设计使然**，在因子表 / 标签表上才是**数据白躺** ——
- * 一律标黄会把真正的告警稀释掉。合并后每个数据集只给一个结论，结论里已含「该不该建」。
- *
- * 三类问题必须留在表里被看见，而不是像旧版那样用 is_risk_label 过滤掉整行。
- */
 const roleColumns: DashColumn[] = [
   { key: 'name', label: '数据集', width: 220 },
   { key: 'role', label: '角色', width: 110 },
@@ -200,15 +136,7 @@ const roleRows = computed<Array<Record<string, unknown>>>(() =>
   }),
 );
 
-/* ------------------------------------------------------------------ */
-/* D2 ★ 地形因子跨数据集覆盖矩阵                                        */
-/* ------------------------------------------------------------------ */
 
-/**
- * 管理端的第二问：地形因子到底被哪些数据集覆盖？
- * 覆盖数 = 该因子有字段定义的数据集数量；分箱一致性 = 同一因子在不同数据集里的
- * 取值定义（ARFF 分箱区间）是否一致 —— 不一致意味着跨数据集统计口径不可直接合并。
- */
 const factorColumns: DashColumn[] = [
   { key: 'factor', label: '因子', width: 200 },
   { key: 'datasets', label: '覆盖数据集' },
@@ -216,11 +144,6 @@ const factorColumns: DashColumn[] = [
   { key: 'binning', label: '分箱一致性', width: 110 },
 ];
 
-/**
- * 分箱一致性只在**多源**时才有意义：只有一份数据含该因子时，「一致」是恒真命题
- * （后端把单源定义为 `consistent_binning = true`），显示「一致」会让读者以为比对过了。
- * 单源一律显示「单源无从比较」，把「这个因子只有一个来源」直接说出来。
- */
 const factorRows = computed<Array<Record<string, unknown>>>(() =>
   props.data.factor_coverage.map((item) => ({
     factor: item.factor,
@@ -235,20 +158,7 @@ const factorRows = computed<Array<Record<string, unknown>>>(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S2 数据集资产明细                                                    */
-/* ------------------------------------------------------------------ */
 
-/**
- * 管理端的资产视角：每份数据**本身**什么样（体量 / 字段数 / 可见性 / 版本）。
- *
- * 与 D1 的分工：D1 讲「职责」（角色、标签口径、建模状态），S2 讲「资产属性」。
- * 标签字段归 D1、模型数归 S3，这里都不再出现 —— 同一粒度的信息全页只展示一次。
- *
- * 遍历**全部** datasets，不做任何过滤：未登记风险口径的行必须留在表里
- * （旧版用 is_risk_label 把它过滤掉，结果管理端看不到「谁没登记」）。
- * 该状态现在由 D1 的「建模与研判状态」列统一表达，不再在此处重复标注。
- */
 const datasetColumns: DashColumn[] = [
   { key: 'name', label: '数据集名', width: 220 },
   { key: 'record_count', label: '样本量', numeric: true, align: 'right' },
@@ -270,11 +180,7 @@ const datasetRows = computed<Array<Record<string, unknown>>>(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S3 建模覆盖                                                          */
-/* ------------------------------------------------------------------ */
 
-/** S3 的单一基底：每数据集一行，柱状图与版本合计都从它派生 */
 const modelingRows = computed(() =>
   props.data.modeling.map((item) => ({
     name: item.logical_id,
@@ -284,12 +190,10 @@ const modelingRows = computed(() =>
   })),
 );
 
-/** 每个数据集一根柱 = 模型版本总数；为 0 即「数据白躺」 */
 const modelingBars = computed(() =>
   modelingRows.value.map((row) => ({ value: row.name, count: row.total })),
 );
 
-/** 已发布 / 草稿合计（逐数据集的模型数由本块柱状图给出，不再在 S2 重复一列） */
 const modelTotals = computed(() =>
   modelingRows.value.reduce(
     (acc, row) => ({ published: acc.published + row.published, draft: acc.draft + row.draft }),
@@ -297,17 +201,12 @@ const modelTotals = computed(() =>
   ),
 );
 
-/* ------------------------------------------------------------------ */
-/* S4 场景运行态水位                                                    */
-/* ------------------------------------------------------------------ */
 
-/** 近 10 天活动量 = activity_trend 各天 total 求和；运行态未取到时为 null（KPI 显示「—」） */
 const activityTotal = computed(() => {
   const points = runtime.value?.activity_trend;
   return points ? points.reduce((sum, point) => sum + point.total, 0) : null;
 });
 
-/** 运行态 KPI：积压 / 处置率 / 近 10 天活动量 */
 const runtimeKpis = computed(() => {
   const item = summary.value;
   return [
@@ -322,12 +221,11 @@ const runtimeKpis = computed(() => {
   ];
 });
 
-/** 处置漏斗：待处置 → 处理中 → 已处置 */
 const funnelItems = computed(() =>
   (summary.value?.status_funnel ?? []).map((item) => ({ label: item.label, count: item.count })),
 );
 
-/** 近 10 天活动趋势：推理量 / 其中判定为风险的量（x 轴取 MM-DD，复用 dashFormat.fmtDate） */
+// 近 10 天活动趋势：推理量 / 其中判定为风险的量（x 轴取 MM-DD，复用 dashFormat.fmtDate）
 const trendPoints = computed(() =>
   (runtime.value?.activity_trend ?? []).map((item) => ({
     label: fmtDate(item.date),
@@ -336,11 +234,7 @@ const trendPoints = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* S5 场景成员与权限                                                    */
-/* ------------------------------------------------------------------ */
 
-/** 场景成员：按账号角色分组计数，范围限本场景 */
 const memberRows = computed(() => {
   if (members.value === null) return [];
   const list = members.value;
@@ -363,7 +257,7 @@ const memberRows = computed(() => {
   <!-- S1 场景资产总览 -->
   <DashKpis :items="overviewKpis" />
 
-  <!-- D1 ★ 数据集角色分工矩阵 -->
+  <!-- D1 数据集角色分工矩阵 -->
   <DashCard
     title="数据集角色分工矩阵"
     source="按数据集逐行对比 · 角色由显式登记表映射 · 状态列综合「是否入模」「是否登记风险口径」「角色是否可训练」三条判据"
@@ -371,7 +265,7 @@ const memberRows = computed(() => {
     <DashTable :columns="roleColumns" :rows="roleRows" row-key="logical_id" dense />
   </DashCard>
 
-  <!-- D2 ★ 地形因子跨数据集覆盖矩阵 -->
+  <!-- D2 地形因子跨数据集覆盖矩阵 -->
   <DashCard
     title="地形因子跨数据集覆盖矩阵"
     source="按因子逐行对比 · 覆盖数为含该因子字段的数据集数量 · 分箱不一致表示跨数据集口径不可直接合并"

@@ -1,4 +1,4 @@
-"""replace legacy model OFFLINE status with DISABLED"""
+"""模型状态用 DISABLED 取代旧的 OFFLINE"""
 from alembic import op
 import sqlalchemy as sa
 

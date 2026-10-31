@@ -4,18 +4,19 @@ Revision ID: 20260808_000001
 Revises: a3b5c7d9e1f2
 Create Date: 2026-08-08 00:00:01.000000
 
-需求 6.6.3：训练参数由算法注册的 param_schema 动态渲染。
-Seed 迁移 d6adba5112b8 中 5 个算法的 param_schema 为 []、display_name 为占位文案，
-本迁移把前端算法注册表（mockApi algorithmRegistry）中对应的参数定义与名称落到数据库：
+需求 6.6.3：训练参数由算法注册的 param_schema 动态渲染。Seed 迁移 d6adba5112b8
+中 5 个算法的 param_schema 为 []、display_name 为占位文案，
+本迁移把前端算法注册表（mockApi algorithmRegistry）
+中对应的参数定义与名称落到数据库：A2WNB / MAWNB / EMAWNB / DIWNB
+各自公开训练参数（离散化方式、分箱数量、平滑系数 + 专属参数）；PMWNB 是 Java
+实现（weka PMWNB），不暴露超参数，param_schema 保持 []，
+训练时使用服务内置默认参数（见 training_executor.execute_pmwnb_training）。
 
-- A2WNB / MAWNB / EMAWNB / DIWNB：各自公开训练参数（离散化方式、分箱数量、平滑系数 + 专属参数）
-- PMWNB：Java 实现（weka PMWNB）不暴露超参数，param_schema 保持 []，
-  训练时使用服务内置默认参数（见 training_executor.execute_pmwnb_training）。
-
-param_schema 条目结构兼容 app.utils.common.validate_params_schema：
-    {name, type(int|float|bool|enum|str), required, default, min, max, enum_values}
-并附加前端渲染所需的扩展键（label / step / options / description），校验逻辑忽略多余键。
-使用原生 SQL + CAST(... AS jsonb)，保证 online / offline（--sql）两种模式均可执行。
+param_schema 条目结构兼容 app.utils.common.validate_params_schema：{name,
+type(int|float|bool|enum|str), required, default, min, max, enum_values}，
+并附加前端渲染所需的扩展键（label / step / options / description），
+校验逻辑忽略多余键。使用原生 SQL + CAST(... AS jsonb)，保证 online /
+offline（--sql）两种模式均可执行。
 """
 import json
 from typing import Sequence, Union

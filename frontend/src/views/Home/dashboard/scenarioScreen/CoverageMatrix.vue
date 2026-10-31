@@ -1,15 +1,3 @@
-<script setup lang="ts">
-import { computed } from 'vue';
-import type { GeologicalProfile, NetworkProfile, ScenarioProfile } from '@/api/dashboardApi';
-const props = defineProps<{ data: ScenarioProfile }>();
-const rows = computed(() => props.data.scenario_key === 'network'
-  ? (props.data as NetworkProfile).dimension_coverage.map(i => ({ label: i.dimension, datasets: i.datasets }))
-  : (props.data as GeologicalProfile).factor_coverage.map(i => ({ label: i.factor, datasets: i.datasets })));
-const sources = computed(() => props.data.datasets.slice(0, 6));
-const sourceLabels: Record<string, string> = { kdd_train_20: 'KDD', nf_unsw_nb15: 'NF-UNSW', dis_raw_data: '原始因子', dis_landslides: '滑坡标签', dis_causative_factors: '致灾因子', dis_global_catalog: '全球编目', dis_guaruja_random: '随机基线' };
-const factorLabels: Record<string, string> = { Slope: '坡度 Slope', TWI: '湿度指数 TWI', Elevation: '高程 Elevation', Relief: '地形起伏 Relief', SPI: '水流强度 SPI', Dis2roads: '距道路距离', Dis2fault: '距断层距离', Dis2river: '距河流距离' };
-const geological = computed(() => props.data.scenario_key === 'geological');
-</script>
 <template>
   <div class="sp-coverage-block" :role="geological ? 'region' : undefined" :aria-label="geological ? '可横向滚动查看全部地形因子覆盖' : undefined" :tabindex="geological ? 0 : undefined">
     <div v-if="!sources.length || !rows.length" class="sp-empty"><span>—</span>暂无字段覆盖数据</div>
@@ -28,3 +16,15 @@ const geological = computed(() => props.data.scenario_key === 'geological');
     <div class="sp-coverage-legend"><span><i></i>字段已覆盖</span><span><b>—</b>无该字段</span><small>{{ data.scenario_key === 'network' ? '展示前 6 个数据源的字段覆盖' : '覆盖表示存在同名因子字段，不代表分箱口径相同' }}</small><small v-if="geological" class="sp-coverage-scroll-hint">左右滑动查看全部因子 →</small></div>
   </div>
 </template>
+<script setup lang="ts">
+import { computed } from 'vue';
+import type { GeologicalProfile, NetworkProfile, ScenarioProfile } from '@/api/dashboardApi';
+const props = defineProps<{ data: ScenarioProfile }>();
+const rows = computed(() => props.data.scenario_key === 'network'
+  ? (props.data as NetworkProfile).dimension_coverage.map(i => ({ label: i.dimension, datasets: i.datasets }))
+  : (props.data as GeologicalProfile).factor_coverage.map(i => ({ label: i.factor, datasets: i.datasets })));
+const sources = computed(() => props.data.datasets.slice(0, 6));
+const sourceLabels: Record<string, string> = { kdd_train_20: 'KDD', nf_unsw_nb15: 'NF-UNSW', dis_raw_data: '原始因子', dis_landslides: '滑坡标签', dis_causative_factors: '致灾因子', dis_global_catalog: '全球编目', dis_guaruja_random: '随机基线' };
+const factorLabels: Record<string, string> = { Slope: '坡度 Slope', TWI: '湿度指数 TWI', Elevation: '高程 Elevation', Relief: '地形起伏 Relief', SPI: '水流强度 SPI', Dis2roads: '距道路距离', Dis2fault: '距断层距离', Dis2river: '距河流距离' };
+const geological = computed(() => props.data.scenario_key === 'geological');
+</script>

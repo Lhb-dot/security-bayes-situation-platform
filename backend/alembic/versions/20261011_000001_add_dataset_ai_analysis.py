@@ -2,7 +2,8 @@
 
 数据集「AI 解析」产物按数据集缓存：打开弹窗先读这里，只有用户主动点击
 「解析 / 重新解析」才重新调用 AI。与 model_version.ai_evaluation 同构，
-整块 JSONB 读改写，结构：{"latest": {markdown, source, generated_at, facts_snapshot, ...}}。
+整块 JSONB 读改写，结构：{"latest": {markdown, source, generated_at,
+facts_snapshot, ...}}。
 
 历史数据为 NULL，读取方按空对象处理，无需回填。
 """

@@ -28,9 +28,9 @@ logger = logging.getLogger("app.services")
 
 T = TypeVar("T")
 
-#: 编程错误（而非业务/数据库错误）：这类异常只可能来自代码缺陷，必须能在日志里一眼区分。
-#: 注意：这里仍然返回 code=500 的 ResponseModel（对外表现不变），但日志会打上
-#: "Service 编程错误" 标记 + 完整堆栈，便于把「真实 bug」从「基础设施抖动」里挑出来。
+# 编程错误（而非业务/数据库错误）：这类异常只可能来自代码缺陷，必须能在日志里一眼区分。
+# 注意：这里仍然返回 code=500 的 ResponseModel（对外表现不变），但日志会打上
+# "Service 编程错误" 标记 + 完整堆栈，便于把「真实 bug」从「基础设施抖动」里挑出来。
 _PROGRAMMING_ERRORS = (TypeError, ValueError, KeyError, AttributeError, IndexError)
 
 
@@ -44,19 +44,19 @@ class ServiceError(Exception):
 
 
 def service_call(method: Callable[..., T]) -> Callable[..., T]:
-    """统一异常处理装饰器：ServiceError → 对应 code；SQLAlchemyError / 编程错误 / 未知异常 → 500。
+    """统一异常处理装饰器：ServiceError 转对应 code；SQLAlchemyError / 编程错误
+/ 未知异常一律 500。
 
-    四条分支的差别只在**日志分类**，对外响应一律是 ResponseModel（业务码 + message）：
+    四条分支的差别只在日志分类，对外响应一律是 ResponseModel（业务码 +
+    message）：ServiceError 是业务异常，code 由抛出处决定（400 / 403 / 404）；
+    SQLAlchemyError 是数据库错误，日志标记「数据库操作失败」；
+    编程错误（TypeError / ValueError / KeyError / AttributeError / IndexError）
+    标记「Service 编程错误」—— 这类异常只可能来自代码缺陷（口径写错、None
+    访问、字段名笔误），单独分支让它们不再淹没在「未预期异常」里；其它
+    Exception 标记「Service 未预期异常」。
 
-    - ``ServiceError``：业务异常，code 由抛出处决定（400 / 403 / 404）；
-    - ``SQLAlchemyError``：数据库错误，日志标记「数据库操作失败」；
-    - 编程错误（TypeError / ValueError / KeyError / AttributeError / IndexError）：
-      日志标记「Service 编程错误」。这类异常只可能来自代码缺陷（口径写错、None 访问、
-      字段名笔误），单独分支让它们不再淹没在「未预期异常」里；
-    - 其它 ``Exception``：日志标记「Service 未预期异常」。
-
-    所有异常路径一律 rollback：否则 flush 后未提交的变更会残留在本次请求的 session 中，
-    被同一 session 上的后续操作意外提交。
+    所有异常路径一律 rollback：否则 flush 后未提交的变更会残留在本次请求的
+    session 中，被同一 session 上的后续操作意外提交。
     """
 
     @wraps(method)

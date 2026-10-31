@@ -1,4 +1,4 @@
-"""add encrypted per-user OpenAI-compatible settings"""
+"""新增按用户加密存储的 OpenAI 兼容配置"""
 import sqlalchemy as sa
 from alembic import op
 

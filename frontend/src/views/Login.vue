@@ -1,8 +1,49 @@
+<template>
+  <div class="login-page">
+    <div class="login-backdrop"></div>
+    <div class="login-card">
+      <div class="login-card__head">
+        <h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1>
+      </div>
+
+      <form class="login-form" @submit.prevent="handleLogin">
+        <div class="login-field">
+          <label class="login-field__label">用户名</label>
+          <input
+            v-model.trim="username"
+            class="login-field__input"
+            type="text"
+            placeholder="请输入用户名"
+            autocomplete="username"
+          />
+        </div>
+        <div class="login-field">
+          <label class="login-field__label">密码</label>
+          <input
+            v-model="password"
+            class="login-field__input"
+            type="password"
+            placeholder="请输入密码"
+            autocomplete="current-password"
+          />
+        </div>
+        <p v-if="errorMsg" class="login-error">{{ errorMsg }}</p>
+        <button class="login-btn" type="submit" :disabled="loading">
+          <span v-if="loading" class="login-btn__spinner"></span>
+          {{ loading ? '正在登录...' : '登 录' }}
+        </button>
+      </form>
+
+    </div>
+
+    <!-- 开发阶段快捷登录面板（独立组件） -->
+    <QuickLoginPanel />
+  </div>
+</template>
 <script setup lang="ts">
 /**
  * Login - 用户登录页
- *
- * 需求 6.2（P0）：管理员和场景用户必须登录后使用系统；未登录用户不得访问业务页面和接口。
+ * 管理员和场景用户必须登录后使用系统；未登录用户不得访问业务页面和接口。
  */
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -51,51 +92,6 @@ const handleLogin = async () => {
 };
 
 </script>
-
-<template>
-  <div class="login-page">
-    <div class="login-backdrop"></div>
-    <div class="login-card">
-      <div class="login-card__head">
-        <h1>基于贝叶斯网络的复杂系统智能态势感知平台</h1>
-      </div>
-
-      <form class="login-form" @submit.prevent="handleLogin">
-        <div class="login-field">
-          <label class="login-field__label">用户名</label>
-          <input
-            v-model.trim="username"
-            class="login-field__input"
-            type="text"
-            placeholder="请输入用户名"
-            autocomplete="username"
-          />
-        </div>
-        <div class="login-field">
-          <label class="login-field__label">密码</label>
-          <input
-            v-model="password"
-            class="login-field__input"
-            type="password"
-            placeholder="请输入密码"
-            autocomplete="current-password"
-          />
-        </div>
-        <p v-if="errorMsg" class="login-error">{{ errorMsg }}</p>
-        <button class="login-btn" type="submit" :disabled="loading">
-          <span v-if="loading" class="login-btn__spinner"></span>
-          {{ loading ? '正在登录...' : '登 录' }}
-        </button>
-      </form>
-
-    </div>
-
-    <!-- 开发阶段快捷登录面板（独立组件）：删掉这一行 + 上面的 import 即可整块移除。
-         面板自身绝对定位在右侧，不参与布局，登录卡始终是原来的居中位置。 -->
-    <QuickLoginPanel />
-  </div>
-</template>
-
 <style scoped>
 .login-page {
   position: fixed;

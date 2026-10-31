@@ -4,7 +4,7 @@
 
 - 语义从「唯一默认」变为「推荐使用」，同一（scenario_id, dataset_id）
   允许同时推荐多个模型，因此删除部分唯一索引 uk_mv_default。
-- 列 is_default → is_recommended，存量数据原样保留（原默认即推荐）。
+- 列 is_default -> is_recommended，存量数据原样保留（原默认即推荐）。
 """
 
 import sqlalchemy as sa

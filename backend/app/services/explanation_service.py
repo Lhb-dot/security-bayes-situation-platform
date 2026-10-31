@@ -1,8 +1,7 @@
-"""Unified model facts, scenario context, and OpenAI-compatible wording.
+"""模型事实、场景上下文与 OpenAI 兼容措辞的统一入口。
 
-This module deliberately keeps model decisions outside the LLM. The LLM receives
-the already-calculated facts and can only express them in Markdown. The rule
-fallback is always available so explanation generation cannot block inference.
+模型判断刻意留在 LLM 之外：LLM 拿到的是已经算好的事实，只能把这些事实用
+Markdown 表达出来。规则兜底始终可用，所以解释生成不会把推理卡住。
 """
 from __future__ import annotations
 
@@ -55,8 +54,8 @@ def _env_int(name: str, default: int, minimum: int) -> int:
 
 
 AI_REQUEST_TIMEOUT_SECONDS = _env_float("AI_EXPLANATION_TIMEOUT_SECONDS", 60.0, 5.0)
-# Some OpenAI-compatible gateways need several seconds to warm up a model.
-# Keep connectivity checks strict, but allow a normal remote first response.
+# 部分 OpenAI 兼容网关首次请求要好几秒才把模型热起来，
+# 所以连通性检查仍然严格，但给正常远程首包留出时间。
 AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 30.0, 3.0)
 # 默认不下发 max_tokens，由服务端按模型自身上限决定，即不设人为上限。
 # 推理型模型（如 deepseek-v4.1-flash）的思维链与正文共享同一个输出预算，
@@ -64,20 +63,20 @@ AI_CONNECTIVITY_TIMEOUT_SECONDS = _env_float("AI_CONNECTIVITY_TIMEOUT_SECONDS", 
 # 个别网关强制要求该字段时，用 AI_EXPLANATION_MAX_TOKENS 显式给一个正值。
 AI_MAX_OUTPUT_TOKENS = _env_int("AI_EXPLANATION_MAX_TOKENS", 0, 0)
 
-#: 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
+# 提示词版本，随产物一起落库，便于回溯「这段评价是用哪版提示词生成的」。
 EXPLANATION_PROMPT_VERSION = "1.0"
 
-#: done 事件的 source 取值域（权威定义见 schemas/explanation_contract.EXPLANATION_SOURCES）。
+# done 事件的 source 取值域（权威定义见 schemas/explanation_contract.EXPLANATION_SOURCES）。
 SOURCE_AI, SOURCE_FALLBACK = EXPLANATION_SOURCES
 
-#: 喂给 AI 的 top_features 条数上限。
+# 喂给 AI 的 top_features 条数上限。
 TOP_FEATURE_LIMIT = 10
-#: 风险概率缺失时用于估置信度的中性取值。
+# 风险概率缺失时用于估置信度的中性取值。
 DEFAULT_RISK_THRESHOLD = 0.5
-#: 置信度分档阈值：|风险概率 − 风险阈值| 越大越可信。
+# 置信度分档阈值：|风险概率 − 风险阈值| 越大越可信。
 CONFIDENCE_HIGH_GAP = 0.25
 CONFIDENCE_MEDIUM_GAP = 0.1
-#: SSE 正文切片大小（字符数）。
+# SSE 正文切片大小（字符数）。
 STREAM_CHUNK_SIZE = 24
 
 _EXPLANATION_SYSTEM_BASE = (
@@ -88,8 +87,8 @@ _EXPLANATION_SYSTEM_BASE = (
     "风险规避建议只能引用 recommended_actions；统计关联不得写成确定因果。"
 )
 
-#: 普通用户版追加约束。事实本身已按受众裁剪（algorithm_details / model_quality
-#: 不会下发），这里再约束措辞，避免模型用「模型内部权重显示」这类表述凭空指代。
+# 普通用户版追加约束。事实本身已按受众裁剪（algorithm_details / model_quality
+# 不会下发），这里再约束措辞，避免模型用「模型内部权重显示」这类表述凭空指代。
 _EXPLANATION_SYSTEM_USER_SUFFIX = (
     "面向场景普通用户：不得提及算法内部实现细节（视图权重、子模型明细、"
     "特征加权条件概率、交叉验证指标），不得引用原始输入快照。"
@@ -216,10 +215,11 @@ def _top_features(
 ) -> list[dict[str, Any]]:
     """挑一路特征解释并归一化。
 
-    优先级：算法原生的 top_features → 算法原生的 feature_evidence → 平台算的
+    优先级：算法原生的 top_features -> 算法原生的 feature_evidence -> 平台算的
     feature_attribution。后者是单特征屏蔽敏感性，模型高置信时概率饱和
     （实测 P = 1 − 2e-9），屏蔽任一特征只改变约 1e-7，Java 侧 round(…,4) 后整列塌成 0。
-    这种「非空但全 0」的列表没有信息量，必须继续往后找，否则喂给 AI 的是一列 0。
+    这种「非空但全 0」的列表没有信息量，必须继续往后找，否则喂给 AI 的是一列
+    0。
     """
     for key in ("top_features", "feature_evidence", "feature_attribution"):
         source = result.get(key)
@@ -243,10 +243,10 @@ def _resolve_risk_probability(
 ) -> float | None:
     """取风险类概率。
 
-    优先用 Java 显式给出的 ``risk_probability``；缺失时只在「预测为风险类」的
-    前提下退回 ``probability`` / ``class_distribution`` 里该类的概率 —— 预测为
+    优先用 Java 显式给出的 `risk_probability`；缺失时只在「预测为风险类」的
+    前提下退回 `probability` / `class_distribution` 里该类的概率 —— 预测为
     正常类时不能把 normal 的概率当成风险概率。历史口径以 class_distribution
-    为准，所以它最后覆盖 ``probability``。
+    为准，所以它最后覆盖 `probability`。
     """
     probability = finite_number(result.get("risk_probability"))
     if probability is not None:
@@ -316,7 +316,7 @@ def build_unified_explanation(
     model_metrics: dict[str, Any] | None = None,
     risk_threshold: float = DEFAULT_RISK_THRESHOLD,
 ) -> dict[str, Any]:
-    """Normalize Java output without changing the model's prediction."""
+    """规整 Java 的输出，不动模型给出的预测。"""
     result = model_result or {}
     prediction = str(result.get("prediction_label", "")).strip()
     class_distribution = result.get("class_distribution") or []
@@ -404,9 +404,10 @@ def build_unified_explanation(
 def fallback_markdown(explanation: dict[str, Any]) -> str:
     """规则模板正文（AI 不可用时的兜底，必须永远能出结果）。
 
-    注意入参可能**未经契约归一化**：没有 inference_record_id 时，facts 直接来自
+    注意入参可能未经契约归一化：没有 inference_record_id 时，facts 直接来自
     请求体的 model_result。所以每个字段都要先判型再取值 —— 这里抛异常会让 SSE
-    流在没有 done 事件的情况下中断，前端会永远停在「正在生成」且拿不到兜底正文。
+    流在没有 done 事件的情况下中断，前端会永远停在「正在生成」
+    且拿不到兜底正文。
     """
     probability = finite_number(explanation.get("risk_probability"))
     probability_text = "信息不足" if probability is None else f"{probability * 100:.1f}%"
@@ -534,7 +535,7 @@ class AISettingService(ServiceBase):
 
     @service_call
     def test_connection(self, current_user) -> dict:
-        """Test the saved provider without returning a key or model response."""
+        """试连已保存的供应商，不回传 key，也不回传模型内容。"""
         self.require_login(current_user)
         setting = self.db.get(UserAISetting, current_user.id)
         if setting is None or not setting.enabled:
@@ -586,10 +587,10 @@ class AISettingService(ServiceBase):
 def _openai_stream(
     setting: UserAISetting, messages: list[dict[str, str]]
 ) -> Iterable[tuple[str, str]]:
-    """逐块产出 ``("reasoning" | "content", 文本)``。
+    """逐块产出 `("reasoning" | "content", 文本)`。
 
-    推理型模型把思维链放在 ``delta.reasoning_content``。思维链只用来让用户看到
-    「确实在生成」，必须与正文分开返回 —— 调用方只把 ``content`` 落库。
+    推理型模型把思维链放在 `delta.reasoning_content`。思维链只用来让用户看到
+    「确实在生成」，必须与正文分开返回 —— 调用方只把 `content` 落库。
     """
     key = _fernet().decrypt(setting.api_key_encrypted.encode("utf-8")).decode("utf-8")
     client = OpenAI(api_key=key, base_url=setting.base_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
@@ -625,7 +626,7 @@ def _openai_stream(
 
 
 def _classify_ai_error(exc: Exception) -> tuple[str, str]:
-    """Map provider failures to stable, non-sensitive API messages."""
+    """把供应商侧的失败归成稳定、不含敏感信息的接口文案。"""
     if isinstance(exc, AIOutputTruncated):
         return "output_truncated", "AI 输出未写完，请重试"
     if isinstance(exc, openai.APITimeoutError):
@@ -654,7 +655,7 @@ def build_prompt(
 
 
 def build_explanation_facts(explanation: dict[str, Any]) -> dict[str, Any]:
-    """Flatten the request envelope into the immutable facts sent to the AI."""
+    """把请求信封摊平成发给 AI 的不可变事实。"""
     return {
         **(explanation.get("model_result") or {}),
         "scenario": explanation.get("scenario") or {},
@@ -674,9 +675,9 @@ def _fallback_events(facts: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any
 def stream_explanation(
     db, current_user, explanation: dict[str, Any]
 ) -> Iterable[tuple[str, dict[str, Any]]]:
-    """产出 SSE 事件序列：start → (reasoning | delta)* → done。
+    """产出 SSE 事件序列：start -> (reasoning | delta)* -> done。
 
-    终态一律是 done，``source`` ∈ {ai, fallback}（见 EXPLANATION_SOURCES）。
+    终态一律是 done，`source` ∈ {ai, fallback}（见 EXPLANATION_SOURCES）。
     error 只表示「AI 未配置或失败，已降级」，后面一定还会跟规则模板正文和
     done —— 客户端不能把 error 当成流结束，否则永远等不到兜底正文。
     """

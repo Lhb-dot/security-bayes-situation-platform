@@ -1,6 +1,7 @@
 """用户 Service（AppUser，含 Role 角色常量）。
 
-对应需求文档章节：6.2（用户登录 / 角色鉴权 / 普通用户账号管理 P0）、6.5.1（角色定义）、
+对应需求文档章节：6.2（用户登录 / 角色鉴权 / 普通用户账号管理 P0）
+、6.5.1（角色定义）、
 6.5.2（权限矩阵）、5.2（数据范围隔离：用户被禁用后历史数据保留）。
 
 模型：app.models.app_user.AppUser（role 字段即角色，无独立 Role 表）。
@@ -84,7 +85,8 @@ class UserService(ServiceBase):
         """用户列表（管理级角色）。
 
         账号可见范围由集中式策略 :meth:`Authz.scope_users` 决定：
-        SUPER_ADMIN 只见 SCENARIO_ADMIN；SCENARIO_ADMIN 只见本场景 SCENARIO_USER。
+        SUPER_ADMIN 只见 SCENARIO_ADMIN；SCENARIO_ADMIN 只见本场景
+        SCENARIO_USER。
         """
         self.require_scenario_admin(current_user)
         filters = []
@@ -205,7 +207,8 @@ class UserService(ServiceBase):
         """分配/修改用户绑定场景（管理级角色）。
 
         可管理对象由集中式策略 :meth:`Authz.can_manage_user` 决定：
-        SUPER_ADMIN 只能改 SCENARIO_ADMIN；SCENARIO_ADMIN 只能改本场景 SCENARIO_USER。
+        SUPER_ADMIN 只能改 SCENARIO_ADMIN；SCENARIO_ADMIN
+        只能改本场景 SCENARIO_USER。
         """
         self.require_scenario_admin(current_user)
         user = self._get(user_id)
@@ -259,7 +262,7 @@ class UserService(ServiceBase):
         now = datetime.now(timezone.utc)
         user.password_hash = hash_password(new_password)
         user.updated_at = now
-        # Password changes invalidate every previously issued session for this account.
+        # 改密后该账号此前签发的所有会话一并作废。
         from app.models.auth_session import AuthSession
         self.db.execute(
             update(AuthSession)

@@ -1,17 +1,16 @@
 """推理记录 Service（InferenceRecord）—— 单条样本推理 + 风险事件生成触发。
 
-对应需求文档章节：3.1（固定字段校验）、6.7.3（仅 PUBLISHED 模型可推理）、
-5.2/5.3（风险事件生成）、6.8（本人推理记录数据隔离）。
+对应需求文档章节：3.1（固定字段校验）、6.7.3（仅 PUBLISHED 模型可推理）、5.2 /
+5.3（风险事件生成）、6.8（本人推理记录数据隔离）。模型见
+app.models.inference_record.InferenceRecord。
 
-模型：app.models.inference_record.InferenceRecord。
-
-关键业务规则：
-1. 推理只接收输入特征，不要求用户填写分类标签（需求 3.1.3）。
-2. 仅 PUBLISHED 模型可执行新推理（需求 6.7.3.3 / 6.7.5.6）。
-3. 输入校验：固定字段必须齐全（缺失/重名/类型不匹配禁止推理）、枚举字段按值域校验（需求 3.1.2/3.1.5）。
-4. 推理完成后：若预测标签属于该数据集的正类（风险类，需求 6.4.1 显式映射）→ 生成 RiskEvent；
-   正常结果只保存推理记录（需求 4.x）。
-5. 普通用户只能查询本人推理记录；管理员可查询全部（需求 6.8.1/6.8.3）。
+关键业务规则：推理只接收输入特征，不要求用户填写分类标签（3.1.3）；仅
+PUBLISHED 模型可执行新推理（6.7.3.3 / 6.7.5.6）；
+输入校验要求固定字段齐全（缺失 / 重名 / 类型不匹配禁止推理），
+枚举字段按值域校验（3.1.2 / 3.1.5）；
+推理完成后若预测标签属于该数据集的正类（风险类，6.4.1 显式映射）就生成
+RiskEvent，正常结果只保存推理记录（需求 4.x）；普通用户只能查询本人推理记录，
+管理员可查询全部（6.8.1 / 6.8.3）。
 """
 import csv
 import io
@@ -54,7 +53,7 @@ from app.utils.common import (
 
 logger = get_logger("inference_record")
 
-#: fields_schema 里表示数值的 type 取值（与 dataset_file_reader 的约定一致）
+# fields_schema 里表示数值的 type 取值（与 dataset_file_reader 的约定一致）
 _NUMERIC_TYPES = {"numeric", "real", "float", "double", "integer", "int"}
 
 def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
@@ -80,9 +79,9 @@ def _coerce_value(value: Any, field_type: Optional[str]) -> Any:
 def _explanation_artifact_for(explain_data: dict[str, Any] | None, role: str | None) -> dict:
     """取该受众那一格的 AI 研判产物。
 
-    改造前的结构是单格（``ai_explanation`` 顶层直接带 markdown），没有受众键。
+    改造前的结构是单格（`ai_explanation` 顶层直接带 markdown），没有受众键。
     这种老内容对两种受众都可见 —— 升级后历史评价不会突然消失，等各自重新生成
-    时再自然收敛到分受众结构（见 ``_explanation_artifacts``）。
+    时再自然收敛到分受众结构（见 `_explanation_artifacts`）。
     """
     artifact = (explain_data or {}).get("ai_explanation")
     if not isinstance(artifact, dict):
@@ -93,7 +92,7 @@ def _explanation_artifact_for(explain_data: dict[str, Any] | None, role: str | N
 
 
 def _explanation_artifacts(explain_data: dict[str, Any] | None) -> dict[str, dict]:
-    """把 ``ai_explanation`` 归一成 ``{受众: 产物}``，供写入前展开老结构。"""
+    """把 `ai_explanation` 归一成 `{受众: 产物}`，供写入前展开老结构。"""
     artifact = (explain_data or {}).get("ai_explanation")
     if not isinstance(artifact, dict):
         return {}
@@ -128,15 +127,16 @@ class InferenceRecordService(ServiceBase):
     ) -> dict:
         """序列化推理记录，并补全展示字段（场景/数据集/算法/风险类型/关联风险事件）。
 
-        ``risk_level`` 按**查看者**的阈值重算（落库值是创建者视角，见 risk_view）。
-        仅对确实判为风险的记录（``risk_score`` 非空）重算，未判风险的记录保持 None，
+        `risk_level` 按查看者的阈值重算（落库值是创建者视角，见 risk_view）。
+        仅对确实判为风险的记录（`risk_score` 非空）重算，
+        未判风险的记录保持 None，
         不能把「无风险」写成 LOW。
 
-        ``thresholds`` 可由调用方预先加载后传入，避免列表逐条查询造成 N+1。
+        `thresholds` 可由调用方预先加载后传入，避免列表逐条查询造成 N+1。
 
-        ``include_explain=False`` 用于列表：``explain_data`` 与 ``generated_explanation``
+        `include_explain=False` 用于列表：`explain_data` 与 `generated_explanation`
         实测合计占单条体积的九成以上（20 条约 415KB），而列表页两个都不读 ——
-        「查看解释」弹窗走 ``GET /inference-records/{id}/explain`` 单独取。
+        「查看解释」弹窗走 `GET /inference-records/{id}/explain` 单独取。
         详情与预测返回保持下发。
         """
         data = row_to_dict(record)
@@ -186,8 +186,8 @@ class InferenceRecordService(ServiceBase):
         else:
             data.pop("generated_explanation", None)
             data.pop("explain_data", None)
-        # Model evaluation is a saved model artifact, independent of this
-        # sample's explanation. Reuse it here without calling the AI service.
+        # 模型评价是落在模型上的产物，与这条样本的解释无关，
+        # 直接复用即可，不必再调一次 AI 服务。
         role = getattr(current_user, "role", None)
         if model is not None and (
             role in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
@@ -216,13 +216,11 @@ class InferenceRecordService(ServiceBase):
 
     @staticmethod
     def _saved_explanation_for_role(record: InferenceRecord, role: str | None) -> dict:
-        """Expose the persisted wording artifact for the caller's audience.
+        """按调用方所属受众取出已存的措辞产物。
 
-        Each audience owns its own slot, so an administrator's wording is no
-        longer overwritten when a scenario user regenerates the same record.
-        The exact facts sent to the AI remain manager-only because they may
-        contain raw input features and algorithm internals; the prediction
-        itself is always read from the server record.
+        每个受众各占一格，场景用户重新生成同一条记录时，不会再覆盖管理员那份。
+        发给 AI 的原始事实仍只对管理侧开放，
+        因为里面可能含原始输入特征和算法内部细节；预测本身永远从服务端记录读。
         """
         artifact = _explanation_artifact_for(record.explain_data, role)
         if not artifact.get("markdown"):
@@ -297,8 +295,8 @@ class InferenceRecordService(ServiceBase):
         if probability is not None and not (0 <= probability <= 1):
             raise ServiceError(500, "预测服务返回的概率超出 [0,1]")
 
-        # Keep the probability of the explicitly mapped risk class even when
-        # argmax predicts the normal class; this is the public risk metric.
+        # 即使 argmax 判的是正常类，也要保留显式映射的那个风险类的概率 ——
+        # 这才是对外展示的风险指标。
         class_distribution = result.get("class_distribution") or []
         risk_probability = next(
             (
@@ -388,7 +386,7 @@ class InferenceRecordService(ServiceBase):
 
         generated_event = None
         if is_risk:
-            # 需求 5.3：风险类结果 → 生成对应 risk_type 的 RiskEvent
+            # 需求 5.3：风险类结果 -> 生成对应 risk_type 的 RiskEvent
             #（risk_score 缺失时 create_from_inference 会抛 400，整个推理被拒绝）
             generated_event = self._risk_event_service.create_from_inference(
                 current_user=current_user,
@@ -420,10 +418,10 @@ class InferenceRecordService(ServiceBase):
     ):
         """批量执行推理：逐条走单条链路（校验 / 预测 / 落库 / 风险事件）。
 
-        - **与单条行为完全一致**：判为风险类的样本照常生成 RiskEvent，
+        - 与单条行为完全一致：判为风险类的样本照常生成 RiskEvent，
           这样告警中心、态势大屏与看板都能看到这批结果，不会出现
           「研判出来了但别处没有」的断链。
-        - **单条失败不影响整批**：失败样本只记录 error 文案，继续跑后面的。
+        - 单条失败不影响整批：失败样本只记录 error 文案，继续跑后面的。
         - 返回汇总（total / succeeded / failed / risk_count）与逐条明细。
         """
         model, dataset = self._resolve_target(current_user, model_version_id)
@@ -522,8 +520,10 @@ class InferenceRecordService(ServiceBase):
     ) -> List[Dict[str, Any]]:
         """校验推理目标并读取数据集 offset..offset+limit 条样本。
 
-        同步（create_batch_from_dataset）与异步（submit_batch_from_dataset）共用，
-        样本读取走 ``read_sample_rows``（与数据预览同一口径），ARFF / CSV 都支持。
+        同步（create_batch_from_dataset）
+        与异步（submit_batch_from_dataset）共用，
+        样本读取走 `read_sample_rows`（与数据预览同一口径），ARFF / CSV
+        都支持。
         """
         _, dataset = self._resolve_target(current_user, model_version_id)
 
@@ -563,7 +563,7 @@ class InferenceRecordService(ServiceBase):
         file_bytes: bytes,
         limit: int = 200,
     ):
-        """解析上传的 CSV 并批量研判（解析规则见 ``_parse_csv_samples``）。"""
+        """解析上传的 CSV 并批量研判（解析规则见 `_parse_csv_samples`）。"""
         _, dataset = self._resolve_target(current_user, model_version_id)
 
         samples = self._parse_csv_samples(dataset, filename, file_bytes, limit)
@@ -582,7 +582,8 @@ class InferenceRecordService(ServiceBase):
     ) -> List[Dict[str, Any]]:
         """把上传的 CSV 解析为样本列表（最多 limit 条）。
 
-        列名必须覆盖数据集全部输入特征（顺序任意，多余列忽略，标签列可有可无）。
+        列名必须覆盖数据集全部输入特征（顺序任意，多余列忽略，标签列可有可无）
+        。
         列名对不上时直接给出缺哪几列，不把解析细节抛给用户。
         """
         if not str(filename).lower().endswith(".csv"):
@@ -634,7 +635,8 @@ class InferenceRecordService(ServiceBase):
     ) -> Dict[str, Any]:
         """后台执行一次批量研判（供 batch_inference_runner 调用），返回汇总。
 
-        不返回 ResponseModel、也不吞异常：调用方是后台线程，异常由它写进任务表。
+        不返回 ResponseModel、也不吞异常：调用方是后台线程，
+        异常由它写进任务表。
         """
         model, dataset = self._resolve_target(current_user, model_version_id)
         if not samples:
@@ -790,8 +792,8 @@ class InferenceRecordService(ServiceBase):
     def get_explanation_source(self, current_user, record_id: int):
         """Return the authorized, server-side facts used by the explanation stream.
 
-        事实按受众裁剪（``explanation_for_role``）：普通用户拿不到
-        ``algorithm_details`` / ``model_quality`` / ``input_snapshot``，
+        事实按受众裁剪（`explanation_for_role`）：普通用户拿不到
+        `algorithm_details` / `model_quality` / `input_snapshot`，
         所以 AI 正文里也不会出现本应对普通用户隐藏的算法内部明细 ——
         正文与「查看解释」弹窗的口径保持一致。
         """
@@ -803,7 +805,7 @@ class InferenceRecordService(ServiceBase):
         model = self.db.get(ModelVersion, record.model_version_id)
         scenario_code = model.scenario.code if model and model.scenario else None
         scenario = get_scenario_config(scenario_code)
-        # A previous wording result is an output artifact, never an input fact.
+        # 上一次的措辞结果是产出物，绝不能当成输入事实。
         model_result = explanation_for_role(
             record.explain_data, getattr(current_user, "role", None)
         )
@@ -832,7 +834,8 @@ class InferenceRecordService(ServiceBase):
         """Persist generated Markdown into the caller's audience slot.
 
         产物按受众分格：管理员生成的完整版不会被场景用户重新生成时覆盖，
-        反之亦然。老的单格结构在写入时展开成两份（见 ``_explanation_artifacts``）。
+        反之亦然。老的单格结构在写入时展开成两份（见
+        `_explanation_artifacts`）。
         """
         from app.services.explanation_service import EXPLANATION_PROMPT_VERSION
 
@@ -888,7 +891,8 @@ class InferenceRecordService(ServiceBase):
     def delete(self, current_user, record_id: int):
         """删除推理记录（有权限看到的人都能删，2026-10 定稿）。
 
-        已生成风险事件的推理记录禁止删除（风险事件依赖推理记录外键且需保持可追溯，
+        已生成风险事件的推理记录禁止删除（风险事件依赖推理记录外键且需保持可追
+        溯，
         需求 5.2 访问控制第 4 条）。
         """
         record = self._get(record_id)

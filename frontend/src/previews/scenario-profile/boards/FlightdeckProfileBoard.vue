@@ -1,15 +1,68 @@
+<template>
+  <CockpitKpis :items="assetKpis" />
+
+  <div class="pf-board">
+    <!-- 数据集资产 -->
+    <CockpitPanel index="01" title="数据集资产" hint="本场景唯一数据源" align="top" foot="单数据集场景：资产口径逐项铺开，标签口径与登记状态在此一次说清">
+      <CockpitRows :rows="datasetRows" :columns="2" />
+    </CockpitPanel>
+
+    <!-- 编码形态与分组治理表 -->
+    <CockpitPanel
+      index="02"
+      title="编码形态与分组治理表"
+      hint="按文件内容指纹分组"
+      align="top"
+      foot="内容分组相同的行即内容完全相同的重复注册文件；正类不一致说明同组内至少有一份数据的标签口径有问题"
+    >
+      <CockpitMatrix :columns="familyColumns" :rows="familyRows" row-key="logical_id" />
+    </CockpitPanel>
+
+    <!-- 建模覆盖 -->
+    <CockpitPanel
+      index="03"
+      title="建模覆盖"
+      hint="每数据集模型版本数"
+      align="top"
+      :foot="idleNames.length ? `数据白躺 ${idleNames.length} 份：${idleNames.join('、')}` : '全部数据集均已有模型版本'"
+    >
+      <CockpitKpis size="sm" :columns="3" :items="modelKpis" />
+      <CockpitBars :items="modelingBars" :label-width="86" :value-width="56" />
+    </CockpitPanel>
+
+    <!-- 场景运行态势 -->
+    <CockpitPanel index="04" title="场景运行态势" :hint="runtimeHint" align="top" foot="运行态为全场景口径（含所有用户），与数据资产的全量统计相互独立">
+      <CockpitKpis size="sm" :columns="3" :items="runtimeKpis" />
+      <template v-if="runtime">
+        <CockpitStack :items="statusItems" />
+        <CockpitTrend :points="trendPoints" name="推理" name2="判为风险" unit=" 次" />
+      </template>
+      <p v-else class="pf-empty">运行态数据未取到</p>
+    </CockpitPanel>
+
+    <!-- 重复内容冗余度与去重收益 -->
+    <CockpitPanel
+      index="05"
+      title="重复内容冗余度与去重收益"
+      hint="去重前 / 去重后"
+      align="top"
+      :foot="groupNames ? `内容分组：${groupNames}` : '暂无内容分组'"
+    >
+      <CockpitColumns :items="dedupColumns" unit=" 条" />
+      <CockpitRows :rows="dedupRows" :columns="2" />
+    </CockpitPanel>
+
+    <!-- 可见性与场景成员 -->
+    <CockpitPanel index="06" title="数据集可见性与场景成员" hint="范围限本场景" align="top" foot="成员按账号角色分组计数；可见性为数据集注册时的共享范围">
+      <CockpitDonut :items="visibilityItems" center-label="数据集" :percent="false" suffix=" 个" />
+      <p v-if="members === null" class="pf-empty">成员数据未取到</p>
+      <CockpitRows v-else :rows="memberRows" :columns="2" />
+    </CockpitPanel>
+  </div>
+</template>
 <script setup lang="ts">
 /**
- * FlightdeckProfileBoard —— 舰面调度态势 · 场景管理员首页看板（纯展示）。
- * 取数在 sections/ProfileFlightdeck.vue（/profile 由父组件传入，/workspace 与 /users 本页另取）。
- *
- * 视角：**管理端看数据资产与治理，不是执行端看飞行态势**。与场景用户「我的工作台」的分工：
- *   用户侧 ＝ 我手上的活（双机方向角雷达、最小间距分布、最近告警）；
- *   管理侧 ＝ 这批数据能不能用（是否存在内容重复的文件、正类口径一致吗、哪份数据白躺没人建模）。
- * 因此本页不渲染任何研判图（间距曲线、方向角雷达、接近率、碰撞对比、总航程等）。
- *
- * 可空口径：`modeling` / `redundancy` / `caliber_registered` 是契约必填字段，后端无条件下发，
- * 故不做「旧后端未上线」的兜底分支；需要降级的是另一个请求的运行态 runtime 与成员 members。
+ * 舰面调度态势 · 场景管理员首页看板，纯展示。取数在 sections/ProfileFlightdeck.vue。
  */
 import { computed } from 'vue';
 import type { FlightdeckProfile, WorkspaceBase } from '@/api/dashboardApi';
@@ -31,19 +84,14 @@ import { labelKindText, percentText, visibilityText } from '../profileTokens';
 
 const props = defineProps<{
   data: FlightdeckProfile;
-  /** 运行态（/workspace）；本看板只读 summary / activity_trend 这两个四场景同构字段 */
   runtime: WorkspaceBase | null;
   members: UserAccount[] | null;
   memberTotal?: number | null;
 }>();
 
-/* ------------------------------------------------------------------ */
-/* 口径常量                                                            */
-/* ------------------------------------------------------------------ */
 
 const MEMBER_PAGE_SIZE = 200;
 
-/** 编码形态中文映射（numeric / interval / paired / unknown） */
 const ENCODING_TEXT: Record<string, string> = {
   numeric: '数值连续',
   interval: '离散区间',
@@ -51,15 +99,8 @@ const ENCODING_TEXT: Record<string, string> = {
   unknown: '未知',
 };
 
-/* ------------------------------------------------------------------ */
-/* S1 场景资产总览 KPI ×4                                              */
-/* ------------------------------------------------------------------ */
+// S1 场景资产总览 KPI ×4
 
-/**
- * 冗余度直接取画像顶层 `redundancy`（后端按 1 - 有效分组数 / 文件数 算好下发）。
- * 前端不再按 dataset_file_count / dataset_count 现算一遍：那是同一个公式的第二份实现，
- * 只会在两边口径漂移时给出两个数。
- */
 const assetKpis = computed<CockpitKpi[]>(() => {
   const stat = props.data.redundancy;
   return [
@@ -96,9 +137,6 @@ const assetKpis = computed<CockpitKpi[]>(() => {
   ];
 });
 
-/* ------------------------------------------------------------------ */
-/* 01 数据集资产                                                        */
-/* ------------------------------------------------------------------ */
 
 const datasetRows = computed<CockpitRow[]>(() => {
   const list = props.data.datasets;
@@ -122,14 +160,12 @@ const datasetRows = computed<CockpitRow[]>(() => {
   ];
 });
 
-/* ------------------------------------------------------------------ */
-/* 02 ★ 编码形态与分组治理表                                            */
-/* ------------------------------------------------------------------ */
+// 编码形态与分组治理表
 
 /**
  * 内容分组 → 可读组名。后端 `source_group` 是内容指纹（"{size}-{sha1前16位}"），
  * 直接上屏读者看不懂；这里按 groups[] 顺序编号并带上成员数：
- * 「内容分组」列取到相同值的行，就是内容完全相同的重复注册文件 —— 这正是本表要传达的信息。
+ * 「内容分组」列取到相同值的行，就是内容完全相同的重复注册文件，这正是本表要传达的信息。
  * `groups[].group_id` 与 `groups[].fingerprint` 是同一个值，故只需登记一个键。
  */
 const groupLabels = computed(() => {
@@ -148,7 +184,6 @@ const familyColumns: CockpitColumn[] = [
   { key: 'collision_consistent', label: '正类一致性' },
 ];
 
-/** 正类一致性：与分组代表的正类数相同才算一致，不一致标红（管理告警） */
 const familyRows = computed(() =>
   props.data.encoding_family.map((row) => ({
     logical_id: row.logical_id,
@@ -162,9 +197,7 @@ const familyRows = computed(() =>
   })),
 );
 
-/* ------------------------------------------------------------------ */
-/* 03 建模覆盖                                                          */
-/* ------------------------------------------------------------------ */
+// 建模覆盖
 
 const modelStats = computed(() => {
   const map = new Map<string, { published: number; total: number }>();
@@ -197,9 +230,7 @@ const modelKpis = computed<CockpitKpi[]>(() => [
   { label: '数据白躺', value: idleNames.value.length, unit: '份', tone: 'warning' },
 ]);
 
-/* ------------------------------------------------------------------ */
-/* 04 场景运行态势                                                      */
-/* ------------------------------------------------------------------ */
+// 场景运行态势
 
 const summary = computed(() => props.runtime?.summary ?? null);
 
@@ -229,16 +260,13 @@ const trendPoints = computed(() =>
   (props.runtime?.activity_trend ?? []).map((item) => ({ label: item.date.slice(5), value: item.total, value2: item.risk })),
 );
 
-/* ------------------------------------------------------------------ */
-/* 05 ★ 重复内容冗余度与去重收益                                        */
-/* ------------------------------------------------------------------ */
+// 重复内容冗余度与去重收益
 
 const redundancy = computed(() => props.data.redundancy);
 
-/** 被去重吸收掉的数据集数 = 文件数 - 有效数据集数（多出来的都是重复入模风险） */
 const absorbedCount = computed(() => Math.max(redundancy.value.file_count - redundancy.value.effective_group_count, 0));
 
-/** 去重前后样本量对比（两柱）；冗余率本身已是 S1 第 4 个 KPI，此处不重复 */
+// 去重前后样本量对比（两柱）；冗余率本身已是 S1 第 4 个 KPI，此处不重复
 const dedupColumns = computed(() => [
   { label: '去重前样本', value: redundancy.value.raw_samples, tone: 'danger' as const },
   { label: '去重后样本', value: redundancy.value.deduped_samples, tone: 'success' as const },
@@ -251,14 +279,11 @@ const dedupRows = computed<CockpitRow[]>(() => [
   { label: '重复内容冗余率', value: fmtPercent(redundancy.value.redundancy_rate) },
 ]);
 
-/** 每个内容分组的成员数据集名（进脚注：条形图放不下长标签，但「哪几份文件重复」必须能查到） */
 const groupNames = computed(() =>
   props.data.groups.map((group, index) => `G${index + 1}=${group.datasets.join(' / ')}`).join('；'),
 );
 
-/* ------------------------------------------------------------------ */
-/* 06 可见性与场景成员                                                  */
-/* ------------------------------------------------------------------ */
+// 可见性与场景成员
 
 const visibilityItems = computed(() => {
   const map = new Map<string, number>();
@@ -292,66 +317,3 @@ const runtimeHint = computed(() =>
     : '运行态未取到',
 );
 </script>
-
-<template>
-  <CockpitKpis :items="assetKpis" />
-
-  <div class="pf-board">
-    <!-- 01 数据集资产 -->
-    <CockpitPanel index="01" title="数据集资产" hint="本场景唯一数据源" align="top" foot="单数据集场景：资产口径逐项铺开，标签口径与登记状态在此一次说清">
-      <CockpitRows :rows="datasetRows" :columns="2" />
-    </CockpitPanel>
-
-    <!-- 02 ★ 编码形态与分组治理表 -->
-    <CockpitPanel
-      index="02"
-      title="编码形态与分组治理表"
-      hint="按文件内容指纹分组"
-      align="top"
-      foot="内容分组相同的行即内容完全相同的重复注册文件；正类不一致说明同组内至少有一份数据的标签口径有问题"
-    >
-      <CockpitMatrix :columns="familyColumns" :rows="familyRows" row-key="logical_id" />
-    </CockpitPanel>
-
-    <!-- 03 建模覆盖 -->
-    <CockpitPanel
-      index="03"
-      title="建模覆盖"
-      hint="每数据集模型版本数"
-      align="top"
-      :foot="idleNames.length ? `数据白躺 ${idleNames.length} 份：${idleNames.join('、')}` : '全部数据集均已有模型版本'"
-    >
-      <CockpitKpis size="sm" :columns="3" :items="modelKpis" />
-      <CockpitBars :items="modelingBars" :label-width="86" :value-width="56" />
-    </CockpitPanel>
-
-    <!-- 04 场景运行态势 -->
-    <CockpitPanel index="04" title="场景运行态势" :hint="runtimeHint" align="top" foot="运行态为全场景口径（含所有用户），与数据资产的全量统计相互独立">
-      <CockpitKpis size="sm" :columns="3" :items="runtimeKpis" />
-      <template v-if="runtime">
-        <CockpitStack :items="statusItems" />
-        <CockpitTrend :points="trendPoints" name="推理" name2="判为风险" unit=" 次" />
-      </template>
-      <p v-else class="pf-empty">运行态数据未取到</p>
-    </CockpitPanel>
-
-    <!-- 05 ★ 重复内容冗余度与去重收益 -->
-    <CockpitPanel
-      index="05"
-      title="重复内容冗余度与去重收益"
-      hint="去重前 / 去重后"
-      align="top"
-      :foot="groupNames ? `内容分组：${groupNames}` : '暂无内容分组'"
-    >
-      <CockpitColumns :items="dedupColumns" unit=" 条" />
-      <CockpitRows :rows="dedupRows" :columns="2" />
-    </CockpitPanel>
-
-    <!-- 06 可见性与场景成员 -->
-    <CockpitPanel index="06" title="数据集可见性与场景成员" hint="范围限本场景" align="top" foot="成员按账号角色分组计数；可见性为数据集注册时的共享范围">
-      <CockpitDonut :items="visibilityItems" center-label="数据集" :percent="false" suffix=" 个" />
-      <p v-if="members === null" class="pf-empty">成员数据未取到</p>
-      <CockpitRows v-else :rows="memberRows" :columns="2" />
-    </CockpitPanel>
-  </div>
-</template>

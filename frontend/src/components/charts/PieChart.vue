@@ -1,7 +1,9 @@
+<template>
+  <EChartBase :option="option" :height="height" />
+</template>
 <script setup lang="ts">
 /**
- * PieChart.vue — 饼图/环形图薄封装（Task 008）
- *
+ * 饼图/环形图薄封装
  * 职责边界：仅 props → option 转换，不含业务判断。
  */
 import { computed } from 'vue';
@@ -11,9 +13,7 @@ import type { ChartOption } from './chartTypes';
 
 const props = withDefaults(
   defineProps<{
-    /** 饼图数据（label/value/color） */
     items: TypeDistribution[];
-    /** 环形图（中空） */
     donut?: boolean;
     title?: string;
     height?: string;
@@ -45,7 +45,3 @@ const option = computed<ChartOption>(() => ({
   ],
 }));
 </script>
-
-<template>
-  <EChartBase :option="option" :height="height" />
-</template>

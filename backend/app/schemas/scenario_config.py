@@ -1,8 +1,7 @@
-"""Validation helpers for scenario explanation dictionaries.
+"""场景解释字典的校验工具。
 
-The validator is intentionally pure so it can run in unit tests and deployment
-checks without requiring a database. It validates configured fields rather than
-guessing metadata for fields that have not been registered yet.
+校验器刻意做成纯函数，单测和部署检查都能直接跑，不必连数据库。
+它只校验已配置的字段，不会给还没登记的字段凭空猜元数据。
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ REQUIRED_FEATURE_FIELDS = (
 
 
 def validate_scenario_config(code: str, config: Any) -> list[str]:
-    """Return human-readable configuration errors for one scenario."""
+    """返回单个场景的配置错误，人话可读。"""
     errors: list[str] = []
     if not isinstance(config, dict):
         return [f"{code}: 配置必须是 JSON 对象"]
@@ -73,7 +72,7 @@ def validate_scenario_config(code: str, config: Any) -> list[str]:
 
 
 def validate_scenario_configs(configs: Any) -> list[str]:
-    """Validate every scenario in a configuration mapping."""
+    """把一份配置里的每个场景都校验一遍。"""
     if not isinstance(configs, dict):
         return ["场景配置根节点必须是 JSON 对象"]
     errors: list[str] = []

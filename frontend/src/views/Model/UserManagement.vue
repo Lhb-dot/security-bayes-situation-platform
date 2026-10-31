@@ -1,306 +1,3 @@
-<script setup lang="ts">
-/**
- * UserManagement - 用户管理（真实后端接口）
- *
- * - 登录态 / 列表 / 创建 / 重置密码 / 启停：全部走 /api/v1
- *   （本人改密已统一到设置页，此处只保留「重置他人密码」）
- * - SUPER_ADMIN：可看全部用户与场景管理员，可创建 SCENARIO_ADMIN / SCENARIO_USER 并绑定场景
- * - SCENARIO_ADMIN：仅管理本场景用户，只能创建 SCENARIO_USER
- */
-import { computed, onMounted, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
-import { keepScroll } from '@/utils/scrollAnchor';
-import { useUserStore } from '@/stores/userStore';
-import type { UserAccount, UserRole } from '@/types/security';
-import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
-import type { UserListParams } from '@/api/userApi';
-
-const userStore = useUserStore();
-
-const currentUser = computed(() => userStore.currentUser);
-const users = computed(() => userStore.users);
-const loading = computed(() => userStore.loading);
-const keyword = ref('');
-const filterRole = ref<'' | UserRole>('');
-const filterStatus = ref<'' | 'ENABLED' | 'DISABLED'>('');
-const filterScenarioId = ref<number | ''>('');
-
-const PAGE_SIZE = 10;
-const currentPage = ref(1);
-const usersTotal = computed(() => userStore.usersTotal);
-const totalPages = computed(() => Math.max(1, Math.ceil(usersTotal.value / PAGE_SIZE)));
-
-/** 页数多时收成 `1 2 … 末` */
-const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
-  const total = totalPages.value;
-  const cur = currentPage.value;
-  const nums =
-    total <= 7
-      ? Array.from({ length: total }, (_, i) => i + 1)
-      : [...new Set([1, total, cur - 1, cur, cur + 1])]
-          .filter((p) => p >= 1 && p <= total)
-          .sort((a, b) => a - b);
-  const out: Array<{ gap: boolean; value: number }> = [];
-  let prev = 0;
-  for (const p of nums) {
-    if (prev && p - prev > 1) out.push({ gap: true, value: 0 });
-    out.push({ gap: false, value: p });
-    prev = p;
-  }
-  return out;
-});
-
-const scenarioOptions = ref<ApiScenario[]>([]);
-const scenarioNameByCode = ref<Record<string, string>>({});
-
-/** 管理级角色判断统一取自 userStore，不在页面内重复角色字符串 */
-const isSuperAdmin = computed(() => userStore.isSuperAdmin);
-const isManagement = computed(() => userStore.isManagement);
-
-const roleLabel = (role: UserRole) => {
-  if (role === 'SUPER_ADMIN') return '系统管理员';
-  if (role === 'SCENARIO_ADMIN') return '场景管理员';
-  return '场景用户';
-};
-
-/** 徽标配色：与「设置 → 账号与安全」保持一致（系统管理员=琥珀黄） */
-const roleBadge = (role: UserRole) => {
-  if (role === 'SUPER_ADMIN') return 'role-badge--super';
-  if (role === 'SCENARIO_USER') return 'role-badge--user';
-  return 'role-badge--admin';
-};
-
-/**
- * 绑定场景显示名。只认后端下发的 `scenario_code`（`UserService._safe` 保证「有场景必有 code」），
- * 不再用 `scenario_id` 反查名字 —— 一个字段两名是本页的老问题（见方案 §1.7 G1）。
- * code 不在已加载的场景表里就原样显示，取不到 code 才是 —。
- */
-const scenarioLabel = (user: UserAccount) => {
-  if (!user.scenario_code) return '—';
-  return scenarioNameByCode.value[user.scenario_code] ?? user.scenario_code;
-};
-
-const loadScenarios = async () => {
-  const options = await getScenarioList();
-  scenarioOptions.value = options;
-  scenarioNameByCode.value = Object.fromEntries(options.map((item) => [item.code, item.name]));
-};
-
-/** 当前筛选条件 —— 增删改后重拉列表也要带上，否则下拉还显示着筛选值、列表却跳回全量 */
-const currentListParams = (): UserListParams => ({
-  page: currentPage.value,
-  page_size: PAGE_SIZE,
-  keyword: keyword.value.trim() || undefined,
-  role: filterRole.value || undefined,
-  status: filterStatus.value || undefined,
-  scenario_id: filterScenarioId.value === '' ? undefined : Number(filterScenarioId.value),
-});
-
-const loadUsers = async () => {
-  await userStore.fetchUsers(currentListParams());
-  // 增删改（尤其是禁用/删除后带筛选条件重拉）会让总数变小：当前页超出末页时回落到末页重拉，
-  // 否则会出现「第 2 / 1 页 + 空表」的假空列表。
-  if (currentPage.value > totalPages.value) {
-    currentPage.value = totalPages.value;
-    await userStore.fetchUsers(currentListParams());
-  }
-};
-
-const tableWrapRef = ref<HTMLElement | null>(null);
-
-/** 筛选条件变化 → 回到第 1 页；顺带清掉还压在防抖里的搜索 */
-const applyFilter = async () => {
-  if (keywordTimer) {
-    clearTimeout(keywordTimer);
-    keywordTimer = null;
-  }
-  currentPage.value = 1;
-  await loadUsers();
-};
-
-/** 搜索框实时响应：连续输入合并成一次请求 */
-let keywordTimer: ReturnType<typeof setTimeout> | null = null;
-watch(keyword, () => {
-  if (keywordTimer) clearTimeout(keywordTimer);
-  keywordTimer = setTimeout(() => {
-    keywordTimer = null;
-    void applyFilter();
-  }, 300);
-});
-
-const goPage = async (p: number) => {
-  if (p < 1 || p > totalPages.value || p === currentPage.value) return;
-  currentPage.value = p;
-  // 包一层滚动锚定：换页后视口停在原处（见 utils/scrollAnchor.ts）
-  await keepScroll(() => loadUsers(), tableWrapRef.value);
-};
-
-// ========== 创建用户 ==========
-const createOpen = ref(false);
-const createSubmitting = ref(false);
-const createForm = ref<{
-  username: string;
-  password: string;
-  role: UserRole;
-  scenario_id: number | null;
-}>({
-  username: '',
-  password: '',
-  role: 'SCENARIO_USER',
-  scenario_id: null,
-});
-
-const openCreate = () => {
-  const defaultRole: UserRole = isSuperAdmin.value ? 'SCENARIO_ADMIN' : 'SCENARIO_USER';
-  const defaultScenarioId = isSuperAdmin.value
-    ? scenarioOptions.value[0]?.id ?? null
-    : currentUser.value?.scenario_id ?? null;
-  createForm.value = {
-    username: '',
-    password: '',
-    role: defaultRole,
-    scenario_id: defaultScenarioId,
-  };
-  createOpen.value = true;
-};
-
-const submitCreate = async () => {
-  if (!createForm.value.username.trim()) {
-    ElMessage.warning('请输入用户名');
-    return;
-  }
-  if (!createForm.value.password || createForm.value.password.length < 6) {
-    ElMessage.warning('初始密码至少 6 位');
-    return;
-  }
-  if (createForm.value.scenario_id == null) {
-    ElMessage.warning('请选择绑定场景');
-    return;
-  }
-  createSubmitting.value = true;
-  try {
-    await userStore.createUser(
-      {
-        username: createForm.value.username.trim(),
-        password: createForm.value.password,
-        role: createForm.value.role,
-        scenario_id: Number(createForm.value.scenario_id),
-      },
-      currentListParams(),
-    );
-    ElMessage.success('用户创建成功');
-    createOpen.value = false;
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '创建失败');
-  } finally {
-    createSubmitting.value = false;
-  }
-};
-
-// ========== 查看 ==========
-// 数据本页行数据已有，不再调后端（原 GET /users/{id} 无人调用，已随本页一起删掉）
-const viewTarget = ref<UserAccount | null>(null);
-const viewOpen = ref(false);
-
-const openView = (user: UserAccount) => {
-  viewTarget.value = user;
-  viewOpen.value = true;
-};
-
-// ========== 重置密码 ==========
-const resetTarget = ref<UserAccount | null>(null);
-const resetPwd = ref('');
-const resetSubmitting = ref(false);
-
-const openReset = (user: UserAccount) => {
-  resetTarget.value = user;
-  resetPwd.value = '';
-};
-
-const submitReset = async () => {
-  if (!resetTarget.value) return;
-  if (!resetPwd.value || resetPwd.value.length < 6) {
-    ElMessage.warning('新密码至少 6 位');
-    return;
-  }
-  resetSubmitting.value = true;
-  try {
-    await userStore.resetUserPassword(resetTarget.value.user_id, resetPwd.value);
-    ElMessage.success(`已重置 ${resetTarget.value.username} 的密码`);
-    resetTarget.value = null;
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '重置失败');
-  } finally {
-    resetSubmitting.value = false;
-  }
-};
-
-// ========== 启用 / 禁用 ==========
-const toggleStatus = async (user: UserAccount) => {
-  if (user.id === currentUser.value?.id) {
-    ElMessage.warning('不能禁用当前登录用户');
-    return;
-  }
-  const next = user.status === 'active' ? 'disabled' : 'active';
-  try {
-    await userStore.setUserStatus(user.user_id, next, currentListParams());
-    ElMessage.success(next === 'active' ? '用户已启用' : '用户已禁用');
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '操作失败');
-  }
-};
-
-// ========== 修改绑定场景（仅系统管理员） ==========
-const bindTarget = ref<UserAccount | null>(null);
-const bindScenarioId = ref<number | null>(null);
-const bindSubmitting = ref(false);
-
-const openBind = (user: UserAccount) => {
-  if (user.role === 'SUPER_ADMIN') {
-    ElMessage.warning('系统管理员不绑定场景');
-    return;
-  }
-  bindTarget.value = user;
-  bindScenarioId.value = user.scenario_id;
-};
-
-const submitBind = async () => {
-  if (!bindTarget.value || bindScenarioId.value == null) {
-    ElMessage.warning('请选择绑定场景');
-    return;
-  }
-  bindSubmitting.value = true;
-  try {
-    await userStore.updateUserScenario(
-      bindTarget.value.user_id,
-      Number(bindScenarioId.value),
-      currentListParams(),
-    );
-    ElMessage.success('场景绑定已更新');
-    bindTarget.value = null;
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '绑定失败');
-  } finally {
-    bindSubmitting.value = false;
-  }
-};
-
-onMounted(async () => {
-  try {
-    await loadScenarios();
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '场景列表加载失败');
-  }
-  if (isManagement.value) {
-    try {
-      await loadUsers();
-    } catch (err) {
-      ElMessage.error(err instanceof Error ? err.message : '用户列表加载失败');
-    }
-  }
-});
-</script>
-
 <template>
   <div class="users-page">
     <div class="users-page__header">
@@ -352,9 +49,7 @@ onMounted(async () => {
       <div ref="tableWrapRef" class="users-table-wrap">
         <div v-if="loading" class="pane-loading"><div class="loader"></div></div>
         <table v-if="users.length" class="users-table">
-          <!-- 列宽合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed，
-               空表和满表共用同一套列宽 —— 否则加载时按表头分、数据到了按内容重排，
-               整张表会「从宽变窄」跳一下。 -->
+          <!-- 列宽合计 100%（见下方 .col-* 规则）。配合 table-layout: fixed -->
           <colgroup>
             <col class="col-id" />
             <col class="col-name" />
@@ -498,8 +193,7 @@ onMounted(async () => {
             placeholder="初始密码"
           />
         </div>
-        <!-- 场景管理员只能建本场景的场景用户：角色与绑定场景都是固定的，
-             整块隐藏而不是渲染成禁用态（方案 E-U7） -->
+        <!-- 场景管理员只能建本场景的场景用户 -->
         <div v-if="isSuperAdmin" class="pwd-form__field">
           <label class="pwd-form__label">角色</label>
           <select v-model="createForm.role" class="pwd-form__input">
@@ -635,7 +329,300 @@ onMounted(async () => {
     </div>
   </div>
 </template>
+<script setup lang="ts">
+// 用户管理。登录态、列表、创建、重置密码、启停都走 /api/v1；本人改密在设置页，
+// 这里只管"重置他人密码"。
+// SUPER_ADMIN 能看全部用户和场景管理员，可建 SCENARIO_ADMIN / SCENARIO_USER 并绑场景；
+// SCENARIO_ADMIN 只管本场景用户，也只能建 SCENARIO_USER。
+import { computed, onMounted, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { keepScroll } from '@/utils/scrollAnchor';
+import { useUserStore } from '@/stores/userStore';
+import type { UserAccount, UserRole } from '@/types/security';
+import { getScenarioList, type ApiScenario } from '@/api/scenarioApi';
+import type { UserListParams } from '@/api/userApi';
 
+const userStore = useUserStore();
+
+const currentUser = computed(() => userStore.currentUser);
+const users = computed(() => userStore.users);
+const loading = computed(() => userStore.loading);
+const keyword = ref('');
+const filterRole = ref<'' | UserRole>('');
+const filterStatus = ref<'' | 'ENABLED' | 'DISABLED'>('');
+const filterScenarioId = ref<number | ''>('');
+
+const PAGE_SIZE = 10;
+const currentPage = ref(1);
+const usersTotal = computed(() => userStore.usersTotal);
+const totalPages = computed(() => Math.max(1, Math.ceil(usersTotal.value / PAGE_SIZE)));
+
+// 页数多时收成 `1 2 … 末`
+const pageItems = computed<Array<{ gap: boolean; value: number }>>(() => {
+  const total = totalPages.value;
+  const cur = currentPage.value;
+  const nums =
+    total <= 7
+      ? Array.from({ length: total }, (_, i) => i + 1)
+      : [...new Set([1, total, cur - 1, cur, cur + 1])]
+          .filter((p) => p >= 1 && p <= total)
+          .sort((a, b) => a - b);
+  const out: Array<{ gap: boolean; value: number }> = [];
+  let prev = 0;
+  for (const p of nums) {
+    if (prev && p - prev > 1) out.push({ gap: true, value: 0 });
+    out.push({ gap: false, value: p });
+    prev = p;
+  }
+  return out;
+});
+
+const scenarioOptions = ref<ApiScenario[]>([]);
+const scenarioNameByCode = ref<Record<string, string>>({});
+
+// 管理级角色判断统一取自 userStore，不在页面内重复角色字符串
+const isSuperAdmin = computed(() => userStore.isSuperAdmin);
+const isManagement = computed(() => userStore.isManagement);
+
+const roleLabel = (role: UserRole) => {
+  if (role === 'SUPER_ADMIN') return '系统管理员';
+  if (role === 'SCENARIO_ADMIN') return '场景管理员';
+  return '场景用户';
+};
+
+// 徽标配色：与"设置 -> 账号与安全"保持一致（系统管理员=琥珀黄）
+const roleBadge = (role: UserRole) => {
+  if (role === 'SUPER_ADMIN') return 'role-badge--super';
+  if (role === 'SCENARIO_USER') return 'role-badge--user';
+  return 'role-badge--admin';
+};
+
+// 绑定场景的显示名。只认后端下发的 scenario_code，有场景就一定有 code；
+// code 不在已加载的场景表里就原样显示，取不到 code 才显示 —。
+const scenarioLabel = (user: UserAccount) => {
+  if (!user.scenario_code) return '—';
+  return scenarioNameByCode.value[user.scenario_code] ?? user.scenario_code;
+};
+
+const loadScenarios = async () => {
+  const options = await getScenarioList();
+  scenarioOptions.value = options;
+  scenarioNameByCode.value = Object.fromEntries(options.map((item) => [item.code, item.name]));
+};
+
+// 当前筛选条件，增删改后重拉列表也要带上，否则下拉还显示着筛选值、列表却跳回全量
+const currentListParams = (): UserListParams => ({
+  page: currentPage.value,
+  page_size: PAGE_SIZE,
+  keyword: keyword.value.trim() || undefined,
+  role: filterRole.value || undefined,
+  status: filterStatus.value || undefined,
+  scenario_id: filterScenarioId.value === '' ? undefined : Number(filterScenarioId.value),
+});
+
+const loadUsers = async () => {
+  await userStore.fetchUsers(currentListParams());
+  // 增删改（尤其是禁用/删除后带筛选条件重拉）会让总数变小：当前页超出末页时回落到末页重拉，
+  // 否则会出现"第 2 / 1 页 + 空表"的假空列表。
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = totalPages.value;
+    await userStore.fetchUsers(currentListParams());
+  }
+};
+
+const tableWrapRef = ref<HTMLElement | null>(null);
+
+// 筛选条件变化 -> 回到第 1 页；顺带清掉还压在防抖里的搜索
+const applyFilter = async () => {
+  if (keywordTimer) {
+    clearTimeout(keywordTimer);
+    keywordTimer = null;
+  }
+  currentPage.value = 1;
+  await loadUsers();
+};
+
+// 搜索框实时响应：连续输入合并成一次请求
+let keywordTimer: ReturnType<typeof setTimeout> | null = null;
+watch(keyword, () => {
+  if (keywordTimer) clearTimeout(keywordTimer);
+  keywordTimer = setTimeout(() => {
+    keywordTimer = null;
+    void applyFilter();
+  }, 300);
+});
+
+const goPage = async (p: number) => {
+  if (p < 1 || p > totalPages.value || p === currentPage.value) return;
+  currentPage.value = p;
+  // 包一层滚动锚定：换页后视口停在原处（见 utils/scrollAnchor.ts）
+  await keepScroll(() => loadUsers(), tableWrapRef.value);
+};
+
+// 创建用户
+const createOpen = ref(false);
+const createSubmitting = ref(false);
+const createForm = ref<{
+  username: string;
+  password: string;
+  role: UserRole;
+  scenario_id: number | null;
+}>({
+  username: '',
+  password: '',
+  role: 'SCENARIO_USER',
+  scenario_id: null,
+});
+
+const openCreate = () => {
+  const defaultRole: UserRole = isSuperAdmin.value ? 'SCENARIO_ADMIN' : 'SCENARIO_USER';
+  const defaultScenarioId = isSuperAdmin.value
+    ? scenarioOptions.value[0]?.id ?? null
+    : currentUser.value?.scenario_id ?? null;
+  createForm.value = {
+    username: '',
+    password: '',
+    role: defaultRole,
+    scenario_id: defaultScenarioId,
+  };
+  createOpen.value = true;
+};
+
+const submitCreate = async () => {
+  if (!createForm.value.username.trim()) {
+    ElMessage.warning('请输入用户名');
+    return;
+  }
+  if (!createForm.value.password || createForm.value.password.length < 6) {
+    ElMessage.warning('初始密码至少 6 位');
+    return;
+  }
+  if (createForm.value.scenario_id == null) {
+    ElMessage.warning('请选择绑定场景');
+    return;
+  }
+  createSubmitting.value = true;
+  try {
+    await userStore.createUser(
+      {
+        username: createForm.value.username.trim(),
+        password: createForm.value.password,
+        role: createForm.value.role,
+        scenario_id: Number(createForm.value.scenario_id),
+      },
+      currentListParams(),
+    );
+    ElMessage.success('用户创建成功');
+    createOpen.value = false;
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '创建失败');
+  } finally {
+    createSubmitting.value = false;
+  }
+};
+
+// 查看：直接吃本页行数据，不单独请求详情接口
+const viewTarget = ref<UserAccount | null>(null);
+const viewOpen = ref(false);
+
+const openView = (user: UserAccount) => {
+  viewTarget.value = user;
+  viewOpen.value = true;
+};
+
+// 重置密码
+const resetTarget = ref<UserAccount | null>(null);
+const resetPwd = ref('');
+const resetSubmitting = ref(false);
+
+const openReset = (user: UserAccount) => {
+  resetTarget.value = user;
+  resetPwd.value = '';
+};
+
+const submitReset = async () => {
+  if (!resetTarget.value) return;
+  if (!resetPwd.value || resetPwd.value.length < 6) {
+    ElMessage.warning('新密码至少 6 位');
+    return;
+  }
+  resetSubmitting.value = true;
+  try {
+    await userStore.resetUserPassword(resetTarget.value.user_id, resetPwd.value);
+    ElMessage.success(`已重置 ${resetTarget.value.username} 的密码`);
+    resetTarget.value = null;
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '重置失败');
+  } finally {
+    resetSubmitting.value = false;
+  }
+};
+
+// 启用禁用
+const toggleStatus = async (user: UserAccount) => {
+  if (user.id === currentUser.value?.id) {
+    ElMessage.warning('不能禁用当前登录用户');
+    return;
+  }
+  const next = user.status === 'active' ? 'disabled' : 'active';
+  try {
+    await userStore.setUserStatus(user.user_id, next, currentListParams());
+    ElMessage.success(next === 'active' ? '用户已启用' : '用户已禁用');
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '操作失败');
+  }
+};
+
+// 修改绑定场景（只有系统管理员能动）
+const bindTarget = ref<UserAccount | null>(null);
+const bindScenarioId = ref<number | null>(null);
+const bindSubmitting = ref(false);
+
+const openBind = (user: UserAccount) => {
+  if (user.role === 'SUPER_ADMIN') {
+    ElMessage.warning('系统管理员不绑定场景');
+    return;
+  }
+  bindTarget.value = user;
+  bindScenarioId.value = user.scenario_id;
+};
+
+const submitBind = async () => {
+  if (!bindTarget.value || bindScenarioId.value == null) {
+    ElMessage.warning('请选择绑定场景');
+    return;
+  }
+  bindSubmitting.value = true;
+  try {
+    await userStore.updateUserScenario(
+      bindTarget.value.user_id,
+      Number(bindScenarioId.value),
+      currentListParams(),
+    );
+    ElMessage.success('场景绑定已更新');
+    bindTarget.value = null;
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '绑定失败');
+  } finally {
+    bindSubmitting.value = false;
+  }
+};
+
+onMounted(async () => {
+  try {
+    await loadScenarios();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '场景列表加载失败');
+  }
+  if (isManagement.value) {
+    try {
+      await loadUsers();
+    } catch (err) {
+      ElMessage.error(err instanceof Error ? err.message : '用户列表加载失败');
+    }
+  }
+});
+</script>
 <style scoped>
 .users-page {
   position: relative;
@@ -711,15 +698,15 @@ onMounted(async () => {
   font-size: 0.88rem;
 }
 
-/* 列宽按「有数据时」的观感定（合计 100%），空表和满表共用一套 */
+/* 列宽按"有数据时"的观感定（合计 100%），空表和满表共用一套 */
 .col-id { width: 8%; }
 .col-name { width: 12%; }
 .col-role { width: 13%; }
 .col-status { width: 8%; }
 .col-scenario { width: 13%; }
 .col-created { width: 16%; }
-/* 操作列按「按钮最宽的那一行」定：查看 + 重置密码 + 绑定场景 + 禁用 = 12 中文字
-   （0.8rem ≈ 12.8px/字）+ 4×(12px 内边距×2 + 1px 边框×2) + 3×8px 间距 ≈ 282px */
+/* 操作列按按钮最宽的一行定：查看 + 重置密码 + 绑定场景 + 禁用 = 12 个中文字，*/
+/* 约 12.8px/字，加上内边距、边框和间距后取 30%。 */
 .col-ops { width: 30%; }
 
 .users-table th {
@@ -1012,11 +999,9 @@ select.pwd-form__input option {
   border-top: 1px solid rgba(125, 201, 255, 0.1);
 }
 </style>
-
 <style>
-/* 创建用户弹窗 append-to-body 后挂到 body，scoped 样式不生效；
-   且 style.css 的 .el-button 暗色覆盖与 Element Plus 同权重、EP 在后，实际不生效
-   （实测渲染成白底 / EP 默认蓝），故此处用 !important 兜住。 */
+/* 创建用户弹窗 append-to-body 后挂到 body，scoped 样式不生效； */
+/* style.css 的 .el-button 暗色覆盖与 EP 同权重且 EP 在后，也不生效，用 !important 兜住。 */
 .users-create-dialog .el-button {
   background: rgba(91, 166, 255, 0.1) !important;
   border-color: rgba(125, 201, 255, 0.35) !important;

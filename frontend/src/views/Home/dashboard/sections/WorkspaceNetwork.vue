@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * WorkspaceNetwork —— 网络安全 · 我的工作台（场景用户首页）。
+ * WorkspaceNetwork，网络安全 · 我的工作台（场景用户首页）。
  * 字段口径见 docs/首页字段口径说明.md。
  * 口径：范围严格限定「当前登录用户本人」（后端按 created_by_user_id 强制过滤）。
  */

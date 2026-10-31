@@ -1,4 +1,4 @@
-"""Application bootstrap for the security situation platform."""
+"""安全态势平台的后端启动入口。"""
 
 import logging
 import os
@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-# Support both ``python app/main.py`` and ``python -m app.main`` from backend/.
+# 兼容从 backend/ 目录直接跑 `python app/main.py` 和 `python -m app.main` 两种启动方式。
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.v1 import api_router
@@ -27,17 +27,16 @@ SITE_ROOT = DIST_ROOT if (DIST_ROOT / "index.html").exists() else WEB_ROOT
 
 
 class SPAStaticFiles(StaticFiles):
-    """Static files plus an SPA fallback for client-side routes.
+    """静态文件服务，外加一层 SPA 回退。
 
-    ``StaticFiles(html=True)`` only serves ``index.html`` for *directory*
-    requests (``/``). A deep link such as ``/reports`` is neither a file nor a
-    directory, so it 404s — which is why the frontend historically ran in hash
-    mode. Now that vue-router uses history mode, the shell must answer those
-    paths and let the router resolve them.
+    StaticFiles(html=True) 只在请求目录（/）时返回 index.html；像 /reports
+    这种深链既不是文件也不是目录，直接 404——前端早年就是因为这个才用 hash
+    模式。vue-router 改成 history 模式之后，这些路径得由这里返回外壳，
+    交给前端路由自己解析。
 
-    Two exclusions keep genuine 404s intact:
-    * ``/api/`` — an unknown endpoint must stay a JSON 404, never become HTML.
-    * last path segment containing ``.`` — a missing asset must stay 404.
+    两个例外保证真正的 404 不被吞掉：
+    - /api/ 开头的路径：未知接口必须继续返回 JSON 404，不能变成 HTML。
+    - 末段带 . 的路径：缺失的静态资源仍然 404。
     """
 
     def __init__(self, *, api_prefixes: tuple[str, ...] = ("/api/",), **kwargs: object) -> None:
@@ -48,8 +47,8 @@ class SPAStaticFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            # Starlette's HTTPException, not FastAPI's — the latter subclasses it,
-            # so catching the FastAPI one here would never fire.
+            # 这里要的是 Starlette 的 HTTPException，不是 FastAPI 的 —— 后者是它的子类，
+            # 只捕 FastAPI 那个的话，这里永远不会命中。
             if exc.status_code != 404:
                 raise
             if scope.get("path", "").startswith(self._api_prefixes):
@@ -60,9 +59,9 @@ class SPAStaticFiles(StaticFiles):
 
 
 def _warm_dataset_caches_async() -> None:
-    """Warm ARFF caches after startup without delaying the first response."""
-    # 测试进程不预热：``running_under_test_runner()`` 覆盖 ``python -m unittest``
-    # （``"pytest" in sys.modules`` 覆盖不到它），与其余 5 个 runner 的判定口径一致。
+    """启动后在后台预热 ARFF 缓存，不拖慢第一个请求。"""
+    # 测试进程不预热：`running_under_test_runner()` 覆盖 `python -m unittest`
+    # （`"pytest" in sys.modules` 覆盖不到它），与其余 5 个 runner 的判定口径一致。
     from app.utils.common import running_under_test_runner
 
     if (
@@ -96,42 +95,42 @@ def _warm_dataset_caches_async() -> None:
 
 
 def _start_report_scheduler() -> None:
-    """Start the background scheduler that refreshes due scheduled reports."""
+    """拉起定时报告的后台调度线程。"""
     from app.services.report_scheduler import start
 
     start()
 
 
 def _start_training_runner() -> None:
-    """Start the background runner that executes submitted training jobs."""
+    """拉起训练任务的后台执行线程。"""
     from app.services.training_runner import start
 
     start()
 
 
 def _start_batch_inference_runner() -> None:
-    """Start the background runner that executes submitted batch inference jobs."""
+    """拉起批量推理任务的后台执行线程。"""
     from app.services.batch_inference_runner import start
 
     start()
 
 
 def _start_export_job_runner() -> None:
-    """Start the background runner that renders submitted report export jobs."""
+    """拉起报告导出任务的后台执行线程。"""
     from app.services.export_job_service import start
 
     start()
 
 
 def _start_report_generate_runner() -> None:
-    """Start the background runner that generates submitted reports."""
+    """拉起报告生成任务的后台执行线程。"""
     from app.services.report_generate_runner import start
 
     start()
 
 
 def create_app() -> FastAPI:
-    """Create the HTTP application and register routes in one place."""
+    """建 HTTP 应用，路由统一在这里注册。"""
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,

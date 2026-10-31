@@ -385,9 +385,9 @@ class BuildExportContractTests(unittest.TestCase):
 
 
 class ChartExportTests(unittest.TestCase):
-    """导出文件里要带上界面上那些图（report_data → SVG）。"""
+    """导出文件里要带上界面上那些图（report_data -> SVG）。"""
 
-    #: 模板 CSS 里也有 `.chart-block`，所以断言只认带 class= 的那个
+    # 模板 CSS 里也有 `.chart-block`，所以断言只认带 class= 的那个
     MARKER = 'class="chart-block"'
 
     CONTENT = "\n".join(

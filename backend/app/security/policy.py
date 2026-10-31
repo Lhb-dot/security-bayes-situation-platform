@@ -1,39 +1,24 @@
 """集中式数据鉴权（authorization）策略。
 
-本模块是服务层**唯一**的数据可见性判定入口。服务不得再自行书写
-``if role == ...`` 的可见性分支，一律调用：
+本模块是服务层唯一的数据可见性判定入口。服务不得再自行书写 if role == ...
+的可见性分支，一律调用：列表 / 聚合用 authz.scope_datasets(stmt, user) 之类给
+SELECT 追加可见性条件；单条读写用 authz.can_view_dataset(user, ds) /
+require_view_dataset(...)；动作能力用 authz.can_train(user) /
+can_manage_dataset(user, ds)。
 
-- 列表 / 聚合：``authz.scope_datasets(stmt, user)`` 等，给 SELECT 追加可见性条件；
-- 单条读写：``authz.can_view_dataset(user, ds)`` / ``authz.require_view_dataset(...)``；
-- 动作能力：``authz.can_train(user)`` / ``can_manage_dataset(user, ds)`` 等。
+权限模型在 2026-10 定稿。三个角色：SUPER_ADMIN 是服务提供方，
+只看平台统计和自己的数据，看不到各公司具体数据；SCENARIO_ADMIN 是场景管理员，
+本场景内最高权限（用户 / 数据 / 模型 / 阈值），跨场景不可见；SCENARIO_USER
+是场景用户，只看自己 + 平台 / 公司共享的数据。
 
-权限模型（2026-10 定稿）
-------------------------
-角色
-    SUPER_ADMIN     服务提供方：只看平台统计 + 自己的数据，看不到各公司具体数据。
-    SCENARIO_ADMIN  场景管理员：本场景内最高权限（用户/数据/模型/阈值），跨场景不可见。
-    SCENARIO_USER   场景用户：只看自己 + 平台/公司共享的数据。
+数据集另外带一个数据级别（仅数据集携带，由上传者角色决定，创建后不可变）：
+platform 由超管上传，company 由场景管理员上传，personal 由场景用户上传。
+所以可见性要同时看角色和数据级别 —— 超管只看 platform，
+场景管理员看本场景全部（含 personal），场景用户看 platform + company + 本人
+personal。模型、推理记录、风险事件、处置记录、报告、态势快照、
+用户各有各的规则，都在下面的 scope_* / can_view_* 里逐项实现，改规则只改这里。
 
-数据级别（仅数据集携带；由上传者角色决定，创建后不可变）
-    platform  平台提供（SUPER_ADMIN 上传）
-    company   公司提供（SCENARIO_ADMIN 上传）
-    personal  个人提供（SCENARIO_USER 上传）
-
-可见性矩阵
-    ================ ================= ====================== =========================
-    资源              SUPER_ADMIN       SCENARIO_ADMIN         SCENARIO_USER
-    ================ ================= ====================== =========================
-    数据集            仅 platform       本场景全部（含 personal） 本场景 platform+company + 本人 personal
-    模型              仅本人训练         本场景（含超管已发布）     本场景已发布/推荐
-    推理记录           仅本人             本场景全部               仅本人
-    风险事件           仅本人             本场景全部               仅本人
-    处置记录           跟随事件           跟随事件                 跟随事件
-    报告              仅本人             仅本人                   仅本人
-    态势快照           全部（仅统计）      本场景                   无
-    用户              仅 SCENARIO_ADMIN  本场景 SCENARIO_USER      无
-    ================ ================= ====================== =========================
-
-新增受保护资源 = 在本模块加一个 ``scope_*`` / ``can_view_*``，服务层调用即可。
+新增受保护资源 = 在本模块加一个 scope_* / can_view_*，服务层调用即可。
 """
 from __future__ import annotations
 
@@ -91,7 +76,7 @@ def default_dataset_visibility(role: Optional[str]) -> str:
 def is_management(user: object | None) -> bool:
     """是否为「管理侧」受众（SUPER_ADMIN / SCENARIO_ADMIN）。
 
-    仅用于**内容分级**（同一份数据，管理侧看算法内部明细，场景用户看裁剪版），
+    仅用于内容分级（同一份数据，管理侧看算法内部明细，场景用户看裁剪版），
     与「能不能看到这条数据」是两回事 —— 可见性一律由本模块的 can_view_* 决定。
     """
     return role_of(user) in (ROLE_SUPER_ADMIN, ROLE_SCENARIO_ADMIN)
@@ -318,10 +303,10 @@ class Authz:
         return False
 
     def scope_event_stats(self, stmt, user):
-        """**统计口径**的事件范围（只用于聚合计数，绝不用于下发明细）。
+        """统计口径的事件范围（只用于聚合计数，绝不用于下发明细）。
 
         与 :meth:`scope_events` 的区别只在 SUPER_ADMIN：
-        - 统计：SUPER 看**平台全量**（系统统计信息，需求「系统管理员可以看到统计数据」）；
+        - 统计：SUPER 看平台全量（系统统计信息，需求「系统管理员可以看到统计数据」）；
         - 明细：SUPER 仅本人（不暴露各公司/用户的具体事故）。
         SCENARIO_ADMIN 仍限本场景，SCENARIO_USER 仍限本人。
         """

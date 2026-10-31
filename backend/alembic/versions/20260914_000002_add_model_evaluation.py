@@ -1,4 +1,4 @@
-"""add model-level attributes and role-scoped AI evaluations"""
+"""新增模型级属性与按角色分存的 AI 评价"""
 
 import sqlalchemy as sa
 from alembic import op

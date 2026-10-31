@@ -1,4 +1,4 @@
-"""add report title for persisted report center records"""
+"""报告中心落库记录增加标题"""
 
 import sqlalchemy as sa
 from alembic import op

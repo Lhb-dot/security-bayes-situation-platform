@@ -1,4 +1,4 @@
-"""restrict threshold precision to 2 decimal places"""
+"""阈值精度收到 2 位小数"""
 from alembic import context, op
 import sqlalchemy as sa
 

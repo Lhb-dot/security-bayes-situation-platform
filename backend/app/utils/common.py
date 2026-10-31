@@ -1,10 +1,11 @@
 """Service 层公共工具函数。
 
-对应需求文档章节：6.2（P0 功能）、6.4.4（结果一致性）、6.8（数据访问与态势统计）。
+对应需求文档章节：6.2（P0 功能）、6.4.4（结果一致性）、
+6.8（数据访问与态势统计）。
 
 提供：
 - paginate：SQLAlchemy 2.0 风格（select()）分页
-- row_to_dict：ORM 行转 JSON 友好 dict（DateTime → ISO 字符串）
+- row_to_dict：ORM 行转 JSON 友好 dict（DateTime -> ISO 字符串）
 - validate_required / validate_enum：字段校验辅助
 - hash_password / verify_password：标准库 PBKDF2 密码哈希（无新增依赖）
 - get_logger：统一日志记录器
@@ -33,20 +34,22 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def running_under_test_runner() -> bool:
-    """当前进程是否由测试框架启动（``python -m unittest`` / ``python -m pytest``）。
+    """当前进程是否由测试框架启动（`python -m unittest` / `python -m pytest`）。
 
-    后台守护线程（调度器 / 执行器）在测试里不该起来：它们会连数据库、可能改数据。
-    判定**不能**只看 ``sys.modules`` 里有没有 ``unittest`` —— ``sklearn`` 会把它
-    import 进来，生产环境同样命中，那样执行器会被静默关掉。所以认 ``__main__`` 的 spec。
+    后台守护线程（调度器 / 执行器）在测试里不该起来：
+    它们会连数据库、可能改数据。
+    判定不能只看 `sys.modules` 里有没有 `unittest` —— `sklearn` 会把它
+    import 进来，生产环境同样命中，那样执行器会被静默关掉。所以认
+    `__main__` 的 spec。
     """
     spec = getattr(sys.modules.get("__main__"), "__spec__", None)
     if getattr(spec, "name", None) in ("unittest.__main__", "pytest", "pytest.__main__"):
         return True
-    # pytest 以 console script（``pytest.exe``）启动时 ``__main__.__spec__`` 为 None、
-    # ``argv[0]`` 基名是 ``pytest.exe``，上面两条判定都会漏 ⇒ 5 个后台 runner 会真启动
-    # 并连真实数据库（``training_runner.reap_stale()`` 会把真实库超时的 TRAINING 行改成
+    # pytest 以 console script（`pytest.exe`）启动时 `__main__.__spec__` 为 None、
+    # `argv[0]` 基名是 `pytest.exe`，上面两条判定都会漏 ⇒ 5 个后台 runner 会真启动
+    # 并连真实数据库（`training_runner.reap_stale()` 会把真实库超时的 TRAINING 行改成
     # FAILED）。生产进程不 import pytest，故该兜底不影响线上行为。
-    # 与 ``main.py`` 中「是否测试环境」的口径保持一致。
+    # 与 `main.py` 中「是否测试环境」的口径保持一致。
     if "pytest" in sys.modules:
         return True
     # 直接执行 tests/test_xxx.py 时 __spec__ 为 None，按文件名兜底
@@ -103,8 +106,10 @@ def beijing_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     """当前北京时间字符串。
 
     ⚠️ 凡是「把 datetime 格式化成字符串下发给前端展示」的地方都必须走这里。
-    直接 `datetime.now(timezone.utc).strftime(...)` 会把 UTC 墙上时间当北京时间显示
-    —— 实测报告中心「生成时间」因此比真实时间早 8 小时（报告 id 3：显示 10:35，实际 18:35）。
+    直接 `datetime.now(timezone.utc).strftime(...)` 会把 UTC
+    墙上时间当北京时间显示
+    —— 实测报告中心「生成时间」因此比真实时间早 8 小时（报告 id 3：显示
+    10:35，实际 18:35）。
     """
     return to_beijing(datetime.now(timezone.utc)).strftime(fmt)
 
@@ -112,8 +117,8 @@ def beijing_now_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
 def row_to_dict(obj: Any, exclude: Sequence[str] = ()) -> dict[str, Any]:
     """把 ORM 行转换为 JSON 友好 dict。
 
-    - DateTime → YYYY-MM-DD HH:MM:SS（北京时间 UTC+8）
-    - Decimal → float（避免 JSON 序列化问题）
+    - DateTime -> YYYY-MM-DD HH:MM:SS（北京时间 UTC+8）
+    - Decimal -> float（避免 JSON 序列化问题）
     - JSONB / dict / list 原样保留
     - exclude 用于隐藏敏感字段（如 password_hash）
     """
@@ -215,16 +220,16 @@ def _unquote(text: str) -> str:
 def normalize_input_features(fields_schema: Any, input_features: Any) -> Any:
     """把枚举输入就地对齐成 fields_schema 里声明的写法，返回同一个 dict。
 
-    ARFF 离散化数据集的枚举值是 Weka 的带引号形式（``'(-inf-27.755]'``）——
+    ARFF 离散化数据集的枚举值是 Weka 的带引号形式（`'(-inf-27.755]'`）——
     Weka 训练与预测都按这个字符串匹配属性取值。但上传 CSV、手工输入、以及
-    旧版 seed 回填的数据集会给出**去掉引号**的形式（``(-inf-27.755]``）。
+    旧版 seed 回填的数据集会给出去掉引号的形式（`(-inf-27.755]`）。
     两者语义相同、字符串不等：直接比较会误报「不在枚举值域内」；就算放行，
-    Java 侧 ``Instance.setValue(i, String)`` 也会因 ``indexOfValue`` 匹配不上而
-    **静默置缺失**，预测结果无声失真。
+    Java 侧 `Instance.setValue(i, String)` 也会因 `indexOfValue` 匹配不上而
+    静默置缺失，预测结果无声失真。
 
     因此这里按「忽略最外层引号」匹配，命中后回写值域里的规范形式，
     校验、预测、落库统一用规范值。匹配不上的原样保留，交给
-    ``validate_input_features`` 报可读错误。
+    `validate_input_features` 报可读错误。
     """
     if not isinstance(input_features, dict):
         return input_features
@@ -275,18 +280,17 @@ def validate_input_features(fields_schema: list[dict], input_features: Any) -> s
 def validate_params_schema(
     param_schema: Any, params: Any, dataset_has_numeric: bool = True
 ) -> str | None:
-    """校验训练参数（需求 6.6.3：参数必须提供默认值，管理员修改须通过类型和范围校验）。
+    """校验训练参数（需求 6.6.3：参数必须提供默认值，
+管理员修改须通过类型和范围校验）。
 
-    参数项结构（与算法注册的 param_schema 对齐）：
-        {"name": str, "type": "int|float|bool|enum|str", "required": bool,
-         "default": Any, "min": Number, "max": Number, "enum_values": [...]}
-    - required 且缺失 → 报错；
-    - enum 按 enum_values 值域校验；
-    - int/float 做类型转换与 min/max 范围校验；
-    - bool 校验类型；str 仅做非空。
+    参数项结构与算法注册的 param_schema 对齐：{"name": str, "type":
+    "int|float|bool|enum|str", "required": bool, "default": Any, "min": Number,
+    "max": Number, "enum_values": [...]}。required 且缺失就报错；enum 按
+    enum_values 值域校验；int / float 做类型转换与 min / max 范围校验；bool
+    校验类型；str 仅做非空。
 
-    `dataset_has_numeric=False` 时，声明了 requires_numeric_features 的参数整项跳过 ——
-    它们对纯离散数据集不起作用，既不该必填，传了也不生效。
+    dataset_has_numeric=False 时，声明了 requires_numeric_features
+    的参数整项跳过 —— 它们对纯离散数据集不起作用，既不该必填，传了也不生效。
     """
     if not isinstance(params, dict):
         return "training_parameters 必须是 JSON 对象"
@@ -333,8 +337,10 @@ NUMERIC_FIELD_TYPES = frozenset({"numeric", "real", "float", "double", "int", "i
 def dataset_has_numeric_features(fields_schema: Any) -> bool:
     """数据集是否存在数值型输入特征。
 
-    原始研究算法按离散属性工作，平台用 Weka Discretize 把数值特征分箱后再喂给它们；
-    数据集若本身不含数值特征，分箱过滤器无从下手，相关的离散化参数不会产生任何效果。
+    原始研究算法按离散属性工作，平台用 Weka Discretize
+    把数值特征分箱后再喂给它们；
+    数据集若本身不含数值特征，分箱过滤器无从下手，
+    相关的离散化参数不会产生任何效果。
     """
     for field in fields_schema or []:
         if not isinstance(field, dict) or field.get("role") != "feature":
@@ -347,8 +353,10 @@ def dataset_has_numeric_features(fields_schema: Any) -> bool:
 def strip_inapplicable_params(param_schema: Any, params: Any, dataset_has_numeric: bool) -> Any:
     """剔除对当前数据集无作用的训练参数。
 
-    param_schema 中声明 `requires_numeric_features: true` 的参数只在数据集含数值特征
-    时才生效。剔除后既不会让填写者以为参数起了作用，模型记录的也是真实生效的参数集合。
+    param_schema 中声明 `requires_numeric_features: true`
+    的参数只在数据集含数值特征
+    时才生效。剔除后既不会让填写者以为参数起了作用，
+    模型记录的也是真实生效的参数集合。
     """
     if not isinstance(params, dict) or dataset_has_numeric:
         return params

@@ -1,8 +1,7 @@
-"""Lazy public exports for the service layer.
+"""服务层的惰性导出。
 
-Keeping imports lazy avoids loading every service when a module only needs one
-small shared helper such as ``risk_view``. The old package-level imports remain
-available through ``__getattr__`` for callers that use the public exports.
+保持惰性是为了避免只用到一个小工具（比如 risk_view）时把整个服务层都加载起来。
+老代码里那些包级导入仍可通过 __getattr__ 用。
 """
 
 from importlib import import_module

@@ -1,4 +1,4 @@
-"""restore DIWNB as a registered algorithm and clear PMWNB discretization params"""
+"""把 DIWNB 恢复成已注册算法，并清掉 PMWNB 离散化参数"""
 
 import json
 from datetime import datetime, timezone

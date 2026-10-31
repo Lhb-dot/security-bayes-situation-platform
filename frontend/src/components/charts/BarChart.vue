@@ -1,7 +1,6 @@
 <script setup lang="ts">
 /**
- * BarChart.vue — 柱状图薄封装（Task 008）
- *
+ * 柱状图薄封装
  * 职责边界：仅 props → option 转换 + 点击事件转发，不含业务判断。
  */
 import { computed } from 'vue';
@@ -12,20 +11,14 @@ import type { ECElementEvent } from 'echarts';
 
 const props = withDefaults(
   defineProps<{
-    /** 柱状数据（name 为类目，score 为数值） */
     data: RankingItem[];
-    /** 横向柱状图（类目在 Y 轴） */
     horizontal?: boolean;
     title?: string;
     height?: string;
     color?: string;
-    /** 多系列数据（与 data 类目对齐）；提供时渲染多系列柱状图 */
     series?: Array<{ name: string; data: number[] }>;
-    /** 多系列时的类目（缺省取 data 的 name） */
     categories?: string[];
-    /** 多系列堆叠（需求 7.3 数据集风险占比堆叠柱状图） */
     stacked?: boolean;
-    /** 多系列配色 */
     colors?: string[];
   }>(),
   {
@@ -38,7 +31,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  /** 柱点击（需求 7.1 端口预填 / 7.2 设备筛选 / 7.3 数据集联动） */
+  // 柱点击
   'bar-click': [name: string];
 }>();
 

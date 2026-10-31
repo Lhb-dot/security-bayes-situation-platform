@@ -1,4 +1,4 @@
-"""Login, session restoration, and logout endpoints."""
+"""登录、会话恢复、退出。"""
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
